@@ -13,3 +13,6 @@ mail/web-server/data/
 mail/.gradle/
 mail/build/
 mail/app/build/
+reelplayer/.gradle/
+reelplayer/build/
+reelplayer/app/build/

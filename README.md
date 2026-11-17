@@ -5,6 +5,7 @@ All my Android apps in one place. Each app lives in its own folder and has its o
 | App | Folder | Releases titled | APK file |
 |---|---|---|---|
 | Mail – multi-account email with notifications | [`mail/`](mail/) | `Mail 1.0.<n>` | `Mail-v1.0.<n>.apk` |
+| ReelPlayer – video player, downloader, YouTube | [`reelplayer/`](reelplayer/) | `ReelPlayer 1.<n>` | `ReelPlayer-v1.<n>.apk` |
 
 ## Install and update with Obtainium
 
@@ -17,7 +18,7 @@ This repository is private, so Obtainium needs a read-only access token once.
 2. **Give it to Obtainium**: Obtainium > Settings > *Source-specific* > GitHub > **Personal access token** > paste.
 3. **Add an app**: Obtainium > Add app
    - App source URL: `https://github.com/kashif55505/my-apps`
-   - Open the additional options and set **Filter release titles by regular expression** to the app's name, e.g. `^Mail ` (with the space). This keeps each app's updates separate, since all apps share this repository.
+   - Open the additional options and set **Filter release titles by regular expression** to the app's name, e.g. `^Mail ` or `^ReelPlayer ` (with the space). This keeps each app's updates separate, since all apps share this repository.
    - Add, then Install.
 
 Obtainium then checks for new releases and offers updates. Repeat step 3 for each app with its own title filter.

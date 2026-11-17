@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <group android:id="@+id/navMain" android:checkableBehavior="single">
+        <item android:id="@+id/navVideos" android:icon="@drawable/ic_folder" android:title="Videos" android:checked="true" />
+        <item android:id="@+id/navYoutube" android:icon="@drawable/ic_yt" android:title="YouTube" />
+        <item android:id="@+id/navDownloader" android:icon="@drawable/ic_download" android:title="Video Downloader" />
+        <item android:id="@+id/navDownloads" android:icon="@drawable/ic_film" android:title="Downloaded videos" />
+    </group>
+    <group android:id="@+id/navMore">
+        <item android:id="@+id/navUpdate" android:icon="@drawable/ic_refresh" android:title="Update downloader" />
+    </group>
+</menu>

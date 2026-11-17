@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Reel" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorOnPrimary">@color/accent_ink</item>
+        <item name="colorSecondary">@color/accent</item>
+        <item name="colorOnSecondary">@color/accent_ink</item>
+        <item name="android:colorBackground">@color/ink</item>
+        <item name="colorSurface">@color/panel</item>
+        <item name="colorOnSurface">@color/fg</item>
+        <item name="android:windowBackground">@color/ink</item>
+        <item name="android:statusBarColor">@color/panel</item>
+        <item name="android:navigationBarColor">@color/ink</item>
+        <!-- Selection bar (Select all / Share / Delete) replaces the toolbar -->
+        <item name="windowActionModeOverlay">true</item>
+        <item name="actionModeBackground">@color/panel2</item>
+    </style>
+
+    <style name="Theme.Reel.Player">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>
