@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TezDM</title>
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="win">
+  <div class="whead">
+    <img src="icon.png" alt="">
+    <div style="min-width:0">
+      <div class="t" id="fname">...</div>
+      <div class="s" id="url"></div>
+    </div>
+  </div>
+
+  <div id="running">
+    <div class="tabs"><span class="on">Download status</span></div>
+    <div class="panel" id="stbox">
+      <div class="kv">
+        <div>Status</div><div id="status">Connecting...</div>
+        <div>File size</div><div id="fsize">-</div>
+        <div>Downloaded</div><div id="dl">-</div>
+        <div>Transfer rate</div><div id="rate">-</div>
+        <div>Time left</div><div id="left">-</div>
+        <div>Resume capability</div><div id="resume">-</div>
+      </div>
+      <div class="bar big" id="bigbar"><i id="bigfill" style="width:0"></i></div>
+    </div>
+    <div id="details" style="padding:8px 14px 0">
+      <div style="color:var(--muted)">Start positions and download progress by connections</div>
+      <div class="segs" id="segs"></div>
+      <div class="ctable"><table>
+        <thead><tr><th style="width:44px">N.</th><th style="width:130px">Downloaded</th><th>Info</th></tr></thead>
+        <tbody id="conns"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <div id="complete" class="hidden">
+    <div class="done">
+      <div class="ic">✅</div>
+      <h2>Download complete</h2>
+      <div id="cname" style="font-weight:600"></div>
+      <div id="csize" style="color:var(--muted);margin:3px 0 8px"></div>
+      <div class="p" id="cpath"></div>
+    </div>
+  </div>
+
+  <div class="grow"></div>
+  <div class="wfoot" id="footRun">
+    <button class="btn" id="toggle">&lt;&lt; Hide details</button>
+    <span class="grow"></span>
+    <button class="btn primary" id="pause">Pause</button>
+    <button class="btn" id="cancel">Cancel</button>
+  </div>
+  <div class="wfoot hidden" id="footDone">
+    <button class="btn primary" id="open">Open</button>
+    <button class="btn" id="folder">Open folder</button>
+    <button class="btn" id="close">Close</button>
+  </div>
+<script src="common.js"></script>
+<script>
+  const $ = (s) => document.querySelector(s);
+  const id = new URLSearchParams(location.search).get("id");
+  let t = null, detailsOn = true, resized = false;
+
+  function statusLine(t) {
+    if (t.status === "downloading") {
+      if (t.kind === "video") return t.done ? "Downloading video..." : "Getting video info...";
+      return t.done ? "Receiving data..." : "Connecting...";
+    }
+    if (t.status === "paused") return "Paused";
+    if (t.status === "queued") return "Queued, waiting for its turn...";
+    if (t.status === "error") return "Error: " + t.error;
+    return t.status;
+  }
+
+  function render() {
+    const pct = t.progress;
+    document.title = (t.status === "completed" ? "Complete" : pct.toFixed(0) + "%") + " " + t.name;
+    $("#fname").textContent = t.name;
+    $("#url").textContent = t.url;
+
+    if (t.status === "completed") {
+      $("#running").classList.add("hidden"); $("#footRun").classList.add("hidden");
+      $("#complete").classList.remove("hidden"); $("#footDone").classList.remove("hidden");
+      $("#cname").textContent = t.name;
+      $("#csize").textContent = size(t.size);
+      $("#cpath").textContent = t.path || t.dir;
+      return;
+    }
+    const st = $("#status"); st.textContent = statusLine(t);
+    st.className = t.status === "error" ? "bad" : "";
+    $("#fsize").textContent = t.size > 0 ? size(t.size) : (t.kind === "video" ? "Calculating..." : "Unknown");
+    $("#dl").textContent = size(t.done) ? size(t.done) + (t.size > 0 ? ` ( ${pct.toFixed(2)} % )` : "") : "0 B";
+    $("#rate").textContent = t.running && t.speed ? size(t.speed) + "/sec" : "-";
+    $("#left").textContent = timeLeft(t) || "-";
+    $("#resume").textContent = t.kind === "video" ? "Yes" : (t.resumable ? "Yes" : (t.size === 0 ? "-" : "No"));
+    $("#bigfill").style.width = pct + "%";
+    $("#stbox").className = "panel st-" + t.status;
+    $("#pause").textContent = t.running || t.status === "queued" ? "Pause" : "Resume";
+
+    // connections
+    const segs = t.segs || [];
+    const total = t.size > 0 ? t.size : 0;
+    let sh = "", rows = "";
+    if (t.kind === "video") {
+      sh = `<i style="left:0;width:${pct}%"></i>`;
+      rows = `<tr><td>1</td><td>${size(t.done) || "0 B"}</td><td>${t.running ? `yt-dlp: ${t.conns || ""} connections` : "-"}</td></tr>`;
+    } else if (total) {
+      segs.forEach((s, i) => {
+        const l = s.s / total * 100, w = Math.max(0, (s.p - s.s) / total * 100);
+        sh += `<i style="left:${l}%;width:${w}%"></i>`;
+        if (i > 0) sh += `<b style="left:${l}%"></b>`;
+        const done = s.p > s.e;
+        const info = done ? "Complete" : (s.busy ? "Receiving data..." : (t.running ? "Waiting..." : "Stopped"));
+        rows += `<tr><td>${i + 1}</td><td>${size(Math.max(0, s.p - s.s)) || "0 B"}</td><td>${info}</td></tr>`;
+      });
+    }
+    $("#segs").innerHTML = sh;
+    $("#conns").innerHTML = rows || `<tr><td colspan="3" style="color:var(--muted)">${t.running ? "Connecting..." : "-"}</td></tr>`;
+  }
+
+  async function poll() {
+    try { t = await api("/api/task?id=" + id); render(); }
+    catch (e) { if (String(e.message).includes("not found")) window.close(); }
+  }
+  setInterval(poll, 500); poll();
+
+  $("#toggle").onclick = () => {
+    detailsOn = !detailsOn;
+    $("#details").classList.toggle("hidden", !detailsOn);
+    $("#toggle").innerHTML = detailsOn ? "&lt;&lt; Hide details" : "Show details &gt;&gt;";
+    try { window.resizeTo(window.outerWidth, detailsOn ? 580 : 400); } catch (e) {}
+  };
+  $("#pause").onclick = async () => {
+    const running = t && (t.running || t.status === "queued");
+    await api("/api/action", { ids: [id], action: running ? "pause" : "resume" }); poll();
+  };
+  $("#cancel").onclick = async () => {
+    if (t && t.running && !confirm("Stop this download? (You can resume it later from the list)")) return;
+    await api("/api/action", { ids: [id], action: "pause" }).catch(() => {});
+    window.close();
+  };
+  $("#open").onclick = async () => { await api("/api/action", { ids: [id], action: "open" }); window.close(); };
+  $("#folder").onclick = async () => { await api("/api/action", { ids: [id], action: "folder" }); window.close(); };
+  $("#close").onclick = () => window.close();
+  document.addEventListener("keydown", e => { if (e.key === "Escape") window.close(); });
+</script>
+</body>
+</html>

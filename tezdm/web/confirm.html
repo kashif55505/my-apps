@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Download File Info - TezDM</title>
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="win">
+  <div class="whead">
+    <img src="icon.png" alt="">
+    <div style="min-width:0">
+      <div class="t" id="title">Download File Info</div>
+      <div class="s" id="url"></div>
+    </div>
+  </div>
+  <div class="wbody">
+    <div id="videoBox" class="hidden">
+      <div class="vid"><img id="thumb" alt=""><div style="min-width:0"><div class="vt" id="vtitle"></div><div class="vm" id="vmeta"></div></div></div>
+      <label>Choose quality</label>
+      <div class="qlist" id="qlist"><div class="q"><span class="spin"></span>Loading available qualities...</div></div>
+    </div>
+    <label>Save As (file name)</label>
+    <input id="name" placeholder="(automatic)">
+    <label>Folder</label>
+    <div class="row"><input id="dir"><button class="btn" id="pick">...</button></div>
+  </div>
+  <div class="wfoot">
+    <button class="btn" id="later">Download Later</button>
+    <button class="btn primary" id="start">Start Download</button>
+    <button class="btn" id="cancel">Cancel</button>
+  </div>
+<script src="common.js"></script>
+<script>
+  const $ = (s) => document.querySelector(s);
+  const id = new URLSearchParams(location.search).get("id");
+  let kind = "file", format = "best", nameTouched = false;
+
+  function fmtDur(s) {
+    if (!s) return ""; s = Math.round(s);
+    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+    return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(x).padStart(2, "0");
+  }
+
+  async function loadFormats() {
+    try {
+      const info = await api("/api/formats?id=" + id);
+      $("#vtitle").textContent = info.title || "";
+      $("#vmeta").textContent = [info.uploader, fmtDur(info.duration)].filter(Boolean).join(" · ");
+      if (info.thumbnail) $("#thumb").src = info.thumbnail;
+      if (!nameTouched && info.title && !$("#name").value) $("#name").placeholder = info.title;
+      const q = $("#qlist"); q.innerHTML = "";
+      info.options.forEach((o, i) => {
+        const d = document.createElement("label");
+        d.className = "q" + (i === 0 ? " on" : "");
+        d.innerHTML = `<input type="radio" name="q" ${i === 0 ? "checked" : ""}><span class="ql">${esc(o.label)}</span>` +
+          `<span class="qn">${esc(o.note)}</span><span class="qs">${o.size ? "~" + size(o.size) : ""}</span>`;
+        d.onclick = () => { format = o.id; q.querySelectorAll(".q").forEach(x => x.classList.remove("on")); d.classList.add("on"); };
+        q.appendChild(d);
+      });
+      format = info.options[0].id;
+    } catch (e) {
+      $("#qlist").innerHTML = `<div class="q bad">Could not load qualities: ${esc(e.message)}<br>You can still click "Start Download" to get the best available quality.</div>`;
+    }
+  }
+
+  api("/api/pending?id=" + id).then(p => {
+    kind = p.kind;
+    $("#url").textContent = p.url;
+    $("#name").value = p.filename || "";
+    $("#dir").value = p.dir;
+    if (kind === "video") {
+      $("#title").textContent = "Video Download";
+      $("#videoBox").classList.remove("hidden");
+      loadFormats();
+    }
+  }).catch(() => window.close());
+
+  $("#name").addEventListener("input", () => nameTouched = true);
+  async function go(action) {
+    await api("/api/pending", { id, action, filename: $("#name").value.trim(), dir: $("#dir").value.trim(),
+                                format: kind === "video" ? format : "", kind }).catch(() => {});
+    window.close();
+  }
+  $("#start").onclick = () => go("start");
+  $("#later").onclick = () => go("later");
+  $("#cancel").onclick = () => go("cancel");
+  document.addEventListener("keydown", e => { if (e.key === "Enter") go("start"); if (e.key === "Escape") go("cancel"); });
+  $("#pick").onclick = async () => {
+    const r = await api("/api/pickfolder?initial=" + encodeURIComponent($("#dir").value));
+    if (r.path) $("#dir").value = r.path;
+  };
+  window.focus();
+</script>
+</body>
+</html>

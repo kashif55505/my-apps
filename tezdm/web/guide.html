@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Set up the Chrome Extension - TezDM</title>
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="style.css">
+<style>
+  body { background: #f0f3f7; user-select: auto; overflow: auto; }
+  header { background: var(--blue); color: #fff; padding: 16px 24px; }
+  header h1 { margin: 0; font-size: 20px; } header p { margin: 2px 0 0; opacity: .9; }
+  main { padding: 16px 22px; }
+  .step { background: #fff; border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; display: flex; gap: 14px;
+          box-shadow: 0 1px 3px rgba(0,0,0,.08); font-size: 14px; line-height: 1.6; }
+  .n { flex: 0 0 30px; height: 30px; border-radius: 50%; background: var(--blue); color: #fff; display: grid; place-items: center; font-weight: 700; }
+  code { background: #eef3fa; padding: 2px 7px; border-radius: 4px; font-size: 13px; word-break: break-all; }
+  kbd { background: #fff; border: 1px solid #c5cfdb; border-bottom-width: 2px; border-radius: 4px; padding: 0 6px; font-size: 12px; }
+  .done { text-align: center; padding: 14px; font-size: 15px; }
+  #status { font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🧩 Set up the Chrome Extension</h1>
+  <p>One-time setup. The Chrome Extensions page has already been opened for you.</p>
+</header>
+<main>
+  <div class="step"><div class="n">1</div><div>
+    Go to the Chrome <b>Extensions</b> page (it opened automatically). If it did not, type
+    <code style="white-space:nowrap;word-break:normal">chrome://extensions</code> in the address bar and press Enter.
+  </div></div>
+  <div class="step"><div class="n">2</div><div>
+    Turn <b>on</b> the <b>Developer mode</b> switch in the top-right corner of the page.
+  </div></div>
+  <div class="step"><div class="n">3</div><div>
+    Click <b>Load unpacked</b> on the left.
+  </div></div>
+  <div class="step"><div class="n">4</div><div>
+    A folder window opens. Click its address bar at the top, press <kbd>Ctrl</kbd> + <kbd>V</kbd>
+    (the path is already copied), press <kbd>Enter</kbd>, then click <b>Select Folder</b>.<br>
+    <small>Path: <code id="path">...</code> <button class="btn" id="copy">Copy again</button></small>
+  </div></div>
+  <div class="step"><div class="n">5</div><div>
+    Click the puzzle icon (🧩) in Chrome and pin 📌 <b>TezDM Integration</b>.
+  </div></div>
+  <div class="done">Status: <span id="status" class="bad">Waiting for the extension...</span></div>
+</main>
+<script>
+  const H = { "X-TezDM": "1" };
+  async function poll() {
+    try {
+      const s = await fetch("/api/state", { headers: H }).then(r => r.json());
+      document.getElementById("path").textContent = s.extPath;
+      const st = document.getElementById("status");
+      if (s.ext) { st.textContent = "✔ Extension installed! You can close this window."; st.className = "ok"; }
+    } catch (e) {}
+  }
+  setInterval(poll, 1500); poll();
+  document.getElementById("copy").onclick = async (e) => {
+    await fetch("/api/copy-ext-path", { method: "POST", headers: H });
+    e.target.textContent = "Copied ✓";
+  };
+</script>
+</body>
+</html>

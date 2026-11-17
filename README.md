@@ -1,11 +1,19 @@
 # My apps
 
-All my Android apps in one place. Each app lives in its own folder and has its own automatic build: every change to an app's folder builds a signed APK and publishes it under **Releases**, so the latest version can always be downloaded here or installed and updated with [Obtainium](https://github.com/ImranR98/Obtainium).
+All my apps in one place. Each app lives in its own folder and has its own automatic build: every change to an app's folder builds the app and publishes it under **Releases**, so the latest version can always be downloaded here. Android apps can also be installed and updated with [Obtainium](https://github.com/ImranR98/Obtainium).
 
 | App | Folder | Releases titled | APK file |
 |---|---|---|---|
 | Mail – multi-account email with notifications | [`mail/`](mail/) | `Mail 1.0.<n>` | `Mail-v1.0.<n>.apk` |
 | ReelPlayer – video player, downloader, YouTube | [`reelplayer/`](reelplayer/) | `ReelPlayer 1.<n>` | `ReelPlayer-v1.<n>.apk` |
+
+## Windows apps
+
+| App | Folder | Download the latest version |
+|---|---|---|
+| TezDM – fast download manager with a Chrome extension (multi-connection downloads, pause/resume, video downloads with quality selection) | [`tezdm/`](tezdm/) | [**TezDM_Setup.exe**](../../releases/download/tezdm-latest/TezDM_Setup.exe) · [release page](../../releases/tag/tezdm-latest) |
+
+The `tezdm-latest` release always holds the newest build with fixed file names, so the link above never changes. Each version is also kept as its own release (`TezDM 2.3.0`, ...). To publish a new TezDM version, change the number in `tezdm/VERSION` and push. Downloads need you to be signed in to GitHub, because the repository is private.
 
 ## Install and update with Obtainium
 
@@ -25,9 +33,13 @@ Obtainium then checks for new releases and offers updates. Repeat step 3 for eac
 
 ## Adding another app
 
+Android app:
+
 1. Put the Android project in a new folder, e.g. `notes/`.
 2. Copy `.github/workflows/mail.yml` to `notes.yml` and replace `mail`/`Mail` with `notes`/`Notes` (folder, paths, tag prefix, title, APK name, concurrency group).
 3. The signing secrets are shared, so nothing else is needed. In Obtainium use the filter `^Notes `.
+
+Windows app: copy `.github/workflows/tezdm.yml` instead and change the folder, build command, file names and tag prefix.
 
 ## Signing
 

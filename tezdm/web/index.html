@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TezDM - Fast Download Manager</title>
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <div class="menubar"><span class="brand">TezDM</span><span id="mTasks">Tasks</span><span id="mFile">File</span><span id="mDl">Downloads</span><span id="mHelp">Help</span></div>
+
+  <div class="toolbar">
+    <button class="tb" id="bAdd" title="Download a new link">
+      <svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="20" fill="#2a72cc"/><circle cx="24" cy="24" r="20" fill="none" stroke="#154f97" stroke-width="2"/><path d="M24 13v22M13 24h22" stroke="#fff" stroke-width="5" stroke-linecap="round"/></svg>
+      <span>Add URL</span></button>
+    <button class="tb" data-act="resume" title="Resume">
+      <svg viewBox="0 0 48 48"><path d="M8 24a16 16 0 1 0 32 0" fill="none" stroke="#9cb6d4" stroke-width="3"/><path d="M17 11l22 13-22 13z" fill="#23863a" stroke="#15602a" stroke-width="2" stroke-linejoin="round"/></svg>
+      <span>Resume</span></button>
+    <button class="tb" data-act="pause" title="Stop">
+      <svg viewBox="0 0 48 48"><rect x="11" y="11" width="26" height="26" rx="4" fill="#d9822b" stroke="#9c5a14" stroke-width="2"/></svg>
+      <span>Stop</span></button>
+    <button class="tb" data-act="pauseall" title="Stop all downloads">
+      <svg viewBox="0 0 48 48"><rect x="6" y="14" width="22" height="22" rx="3" fill="#e8a65c" stroke="#9c5a14" stroke-width="2"/><rect x="18" y="8" width="24" height="24" rx="3" fill="#d9822b" stroke="#9c5a14" stroke-width="2"/></svg>
+      <span>Stop All</span></button>
+    <button class="tb" data-act="resumeall" title="Start all downloads">
+      <svg viewBox="0 0 48 48"><path d="M6 10l18 14L6 38z" fill="#5cb36c" stroke="#15602a" stroke-width="2" stroke-linejoin="round"/><path d="M22 10l20 14-20 14z" fill="#23863a" stroke="#15602a" stroke-width="2" stroke-linejoin="round"/></svg>
+      <span>Start All</span></button>
+    <div class="tbsep"></div>
+    <button class="tb" data-act="delete" title="Remove from list">
+      <svg viewBox="0 0 48 48"><path d="M12 14h24l-2 26H14z" fill="#e05a4e" stroke="#9c2419" stroke-width="2" stroke-linejoin="round"/><rect x="9" y="9" width="30" height="5" rx="2" fill="#c42b1c"/><rect x="20" y="5" width="8" height="5" rx="1" fill="#c42b1c"/><path d="M20 20v14M28 20v14" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/></svg>
+      <span>Delete</span></button>
+    <button class="tb" id="bDelDone" title="Remove completed downloads from list">
+      <svg viewBox="0 0 48 48"><path d="M10 16h22l-2 24H12z" fill="#e88b82" stroke="#9c2419" stroke-width="2" stroke-linejoin="round"/><rect x="7" y="11" width="28" height="5" rx="2" fill="#c42b1c"/><circle cx="35" cy="33" r="10" fill="#23863a" stroke="#fff" stroke-width="2"/><path d="M30 33l4 4 6-7" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>Clear Done</span></button>
+    <div class="tbsep"></div>
+    <button class="tb" data-act="open" title="Open file">
+      <svg viewBox="0 0 48 48"><path d="M12 6h17l9 9v27H12z" fill="#fff" stroke="#5d6b7b" stroke-width="2" stroke-linejoin="round"/><path d="M29 6v9h9" fill="#dbe8f8" stroke="#5d6b7b" stroke-width="2" stroke-linejoin="round"/><path d="M20 22l10 6-10 6z" fill="#2a72cc"/></svg>
+      <span>Open</span></button>
+    <button class="tb" data-act="folder" title="Open folder">
+      <svg viewBox="0 0 48 48"><path d="M5 12h14l4 5h20v23H5z" fill="#f2c14e" stroke="#a37a12" stroke-width="2" stroke-linejoin="round"/><path d="M5 20h38v20H5z" fill="#f7d77e" stroke="#a37a12" stroke-width="2" stroke-linejoin="round"/></svg>
+      <span>Folder</span></button>
+    <div class="tbsep"></div>
+    <button class="tb" id="bSettings" title="Settings">
+      <svg viewBox="0 0 48 48"><path d="M24 4l4 5 6-2 1 6 6 2-2 6 5 4-5 4 2 6-6 2-1 6-6-2-4 5-4-5-6 2-1-6-6-2 2-6-5-4 5-4-2-6 6-2 1-6 6 2z" fill="#7d8ea3" stroke="#4a5868" stroke-width="2" stroke-linejoin="round"/><circle cx="24" cy="24" r="7" fill="#fff" stroke="#4a5868" stroke-width="2"/></svg>
+      <span>Options</span></button>
+    <button class="tb" id="bExt" title="Install the Chrome extension">
+      <svg viewBox="0 0 48 48"><path d="M8 14h9a5 5 0 1 1 10 0h9v9a5 5 0 1 1 0 10v9H27a5 5 0 1 0-10 0H8V33a5 5 0 1 0 0-10z" fill="#4caf50" stroke="#2e7d32" stroke-width="2" stroke-linejoin="round"/></svg>
+      <span>Extension</span></button>
+    <div class="grow"></div>
+    <button class="tb" id="bExit" title="Exit TezDM completely">
+      <svg viewBox="0 0 48 48"><path d="M15 13a15 15 0 1 0 18 0" fill="none" stroke="#c42b1c" stroke-width="4" stroke-linecap="round"/><path d="M24 6v18" stroke="#c42b1c" stroke-width="4" stroke-linecap="round"/></svg>
+      <span>Exit</span></button>
+  </div>
+
+  <div id="banner" class="banner hidden"></div>
+
+  <div class="body">
+    <div class="side" id="side"></div>
+    <div class="list" id="list">
+      <table>
+        <colgroup><col style="width:33%"><col style="width:11%"><col style="width:19%"><col style="width:11%"><col style="width:12%"><col style="width:14%"></colgroup>
+        <thead><tr><th>File Name</th><th>Size</th><th>Status</th><th>Time left</th><th>Transfer rate</th><th>Last Try</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div id="empty" class="empty hidden">
+        <h2>No downloads yet</h2>
+        <p>Download anything in Chrome, or click the <b>Download</b> button on any video.<br>
+        Or paste a link with <b>Add URL</b> above (YouTube links work too).</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="status">
+    <span id="sActive"></span><span id="sSpeed"></span><span id="sExt"></span><span id="sTools"></span>
+    <span class="grow"></span><span>Double-click: progress window · Right-click: more options</span>
+  </div>
+</div>
+
+<div id="menu" class="menu hidden">
+  <div data-act="open">Open</div>
+  <div data-act="folder">Open Folder</div>
+  <div data-act="progress">Progress window</div>
+  <hr>
+  <div data-act="resume">Resume</div>
+  <div data-act="pause">Stop</div>
+  <div data-act="redownload">Redownload</div>
+  <div data-m="copy">Copy URL</div>
+  <div data-m="error">Show error</div>
+  <hr>
+  <div data-act="delete">Delete</div>
+  <div data-act="deletefile">Delete with file</div>
+</div>
+
+<dialog id="dAdd">
+  <div class="dlgh">Add URL</div>
+  <div class="dlgb">
+    <label>Download link (URL)</label>
+    <input id="aUrl" placeholder="https://...">
+    <label>Type</label>
+    <select id="aKind">
+      <option value="auto">Detect automatically</option>
+      <option value="file">File (multi-connection)</option>
+      <option value="video">Video: choose quality (YouTube, Facebook, m3u8...)</option>
+    </select>
+    <div class="actions">
+      <button class="btn primary" id="aOk">OK</button>
+      <button class="btn" id="aCancel">Cancel</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="dSet">
+  <div class="dlgh">Options</div>
+  <div class="dlgb">
+    <label>Default download folder</label>
+    <div class="row"><input id="sDir"><button class="btn" id="sPick">...</button></div>
+    <label>Connections per file (1-32). More = faster</label>
+    <input id="sConn" type="number" min="1" max="32">
+    <label>Maximum simultaneous downloads</label>
+    <input id="sPar" type="number" min="1" max="10">
+    <label class="chk"><input type="checkbox" id="sConfirm"> Show the "Download File Info" window before each download</label>
+    <label class="chk"><input type="checkbox" id="sProg"> Show the progress window when a download starts</label>
+    <label class="chk"><input type="checkbox" id="sAuto"> Start TezDM when Windows starts</label>
+    <div class="actions">
+      <button class="btn primary" id="sSave">Save</button>
+      <button class="btn" id="sCancel">Cancel</button>
+    </div>
+  </div>
+</dialog>
+
+<script src="common.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,84 @@
+# TezDM: every push that changes tezdm/ builds the app and publishes it.
+#  - Release "tezdm-latest": always the newest build, with fixed file names
+#    (the download links in the main README never change)
+#  - Release "tezdm-vX.Y.Z": one per version, kept as history
+# To ship a new version: change tezdm/VERSION and push.
+name: TezDM
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tezdm/**"
+      - ".github/workflows/tezdm.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tezdm-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tezdm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tezdm/go.mod
+          cache: false
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y nsis gcc-mingw-w64-x86-64 zip
+
+      - name: Build exe and installer
+        run: ./build.sh
+
+      - name: Prepare files
+        id: v
+        run: |
+          V=$(tr -d ' \r\n' < VERSION)
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          (cd extension && zip -qr ../dist/TezDM_Chrome_Extension.zip .)
+          cp "dist/TezDM_Setup_$V.exe" dist/TezDM_Setup.exe
+
+      - name: Keep build files (Actions tab)
+        uses: actions/upload-artifact@v4
+        with:
+          name: TezDM-${{ steps.v.outputs.version }}
+          path: |
+            tezdm/dist/TezDM_Setup_*.exe
+            tezdm/dist/TezDM_Chrome_Extension.zip
+
+      - name: Publish releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${{ steps.v.outputs.version }}"
+          NOTES="Version $V - $(git log -1 --pretty=%s)"
+
+          # 1) Versioned release (history)
+          TAG="tezdm-v$V"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "dist/TezDM_Setup_$V.exe" dist/TezDM_Chrome_Extension.zip --clobber
+          else
+            gh release create "$TAG" "dist/TezDM_Setup_$V.exe" dist/TezDM_Chrome_Extension.zip \
+              --title "TezDM $V" --notes "$NOTES" --latest=false
+          fi
+
+          # 2) Moving "latest" release with fixed file names
+          git tag -f tezdm-latest
+          git push -f origin tezdm-latest
+          if gh release view tezdm-latest >/dev/null 2>&1; then
+            gh release edit tezdm-latest --title "TezDM (latest: $V)" --notes "$NOTES" --latest=false
+            gh release upload tezdm-latest dist/TezDM_Setup.exe dist/TezDM_Chrome_Extension.zip --clobber
+          else
+            gh release create tezdm-latest dist/TezDM_Setup.exe dist/TezDM_Chrome_Extension.zip \
+              --title "TezDM (latest: $V)" --notes "$NOTES" --latest=false
+          fi

@@ -16,3 +16,7 @@ mail/app/build/
 reelplayer/.gradle/
 reelplayer/build/
 reelplayer/app/build/
+tezdm/dist/
+tezdm/*.syso
+tezdm/winres/tezdm.rc
+tezdm/winres/tezdm.manifest
