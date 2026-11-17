@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f3a5f">
+<title>Mail</title>
+<link rel="stylesheet" href="style.css">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+
+<!-- Sign in -->
+<section id="login" class="login" hidden>
+  <form id="loginForm" class="login-card" autocomplete="on">
+    <div class="brand"><span class="logo">✉</span> Mail</div>
+    <p class="muted" id="loginIntro">Sign in with any email address: your own domain (cPanel), Gmail, Outlook, Zoho, Yahoo and more.</p>
+    <label>Email<input name="email" type="email" autocomplete="username" required placeholder="you@yourdomain.com"></label>
+    <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+    <details id="manual">
+      <summary>Manual settings (optional)</summary>
+      <div class="grid2">
+        <label>Incoming (IMAP) server<input name="imapHost" placeholder="mail.yourdomain.com"></label>
+        <label>Port<input name="imapPort" inputmode="numeric" placeholder="993"></label>
+        <label>Outgoing (SMTP) server<input name="smtpHost" placeholder="mail.yourdomain.com"></label>
+        <label>Port<input name="smtpPort" inputmode="numeric" placeholder="465"></label>
+      </div>
+      <label>Username (if different from your email)<input name="username" placeholder="Usually your full email"></label>
+    </details>
+    <button class="btn primary wide" type="submit"><span class="label">Sign in</span><span class="spinner"></span></button>
+    <p id="loginStatus" class="status"></p>
+    <button type="button" class="link-btn" id="cancelAdd" data-act="cancelAdd" hidden>← Back to inbox</button>
+  </form>
+</section>
+
+<!-- App -->
+<section id="app" class="app" hidden>
+  <aside id="sidebar" class="sidebar">
+    <div class="side-head">
+      <div class="brand"><span class="logo">✉</span> Mail</div>
+      <button class="icon-btn only-mobile" data-act="closeSide" aria-label="Close">✕</button>
+    </div>
+    <div class="side-label">Accounts</div>
+    <nav id="accounts" class="accounts"></nav>
+    <button class="link-btn" data-act="addAccount">+ Add account</button>
+    <button class="btn primary compose-btn" data-act="compose">✎ Compose</button>
+    <div class="side-label">Folders</div>
+    <nav id="folders" class="folders"></nav>
+    <button class="link-btn" data-act="newFolder">+ New folder</button>
+    <div class="account">
+      <div id="notifyState" class="muted small"></div>
+      <button class="btn ghost small" id="notifyBtn" data-act="enableNotify" hidden>🔔 Turn on notifications</button>
+      <button class="btn ghost small" data-act="logout">Sign out of all accounts</button>
+    </div>
+  </aside>
+  <div id="scrim" class="scrim" data-act="closeSide"></div>
+
+  <main class="list-pane" id="listPane">
+    <header class="topbar">
+      <button class="icon-btn only-mobile" data-act="openSide" aria-label="Menu">☰</button>
+      <div class="title-wrap"><h1 id="folderTitle">Inbox</h1><div id="curAccount" class="muted small"></div></div>
+      <button class="icon-btn" data-act="refresh" aria-label="Refresh" title="Refresh">⟳</button>
+    </header>
+    <form id="searchForm" class="search"><input id="searchInput" type="search" placeholder="Search mail"></form>
+    <div class="list-tools">
+      <label class="selall"><input type="checkbox" id="selectAll"> <span id="selectLabel">Select all</span></label>
+      <div id="bulkActions" class="bulk-actions" hidden>
+        <button class="btn ghost small" data-act="bulkRead">Read</button>
+        <button class="btn ghost small" data-act="bulkUnread">Unread</button>
+        <button class="btn ghost small" data-act="bulkMove">Move</button>
+        <button class="btn ghost small danger" data-act="bulkDelete">Delete</button>
+      </div>
+    </div>
+    <div id="ptr" class="ptr"><span class="ptr-arrow">↓</span><span class="spinner inline"></span></div>
+    <ul id="messages" class="messages"></ul>
+  </main>
+
+  <section class="read-pane" id="readPane">
+    <div class="empty" id="emptyRead">Select an email to read</div>
+    <article id="reader" hidden>
+      <header class="read-bar">
+        <button class="icon-btn" data-act="back" aria-label="Back">←</button>
+        <div class="spacer"></div>
+        <button class="icon-btn" data-act="reply" title="Reply">↩</button>
+        <button class="icon-btn" data-act="replyAll" title="Reply all">⇇</button>
+        <button class="icon-btn" data-act="forward" title="Forward">↪</button>
+        <button class="icon-btn" data-act="flag" title="Star" id="flagBtn">☆</button>
+        <button class="icon-btn" data-act="markUnread" title="Mark as unread">●</button>
+        <button class="icon-btn" data-act="moveOne" title="Move">⇥</button>
+        <button class="icon-btn danger" data-act="deleteOne" title="Delete">🗑</button>
+      </header>
+      <h2 id="rSubject"></h2>
+      <div class="r-meta">
+        <div class="avatar" id="rAvatar"></div>
+        <div class="r-who">
+          <div id="rFrom" class="r-from"></div>
+          <div id="rTo" class="muted small"></div>
+        </div>
+        <div id="rDate" class="muted small"></div>
+      </div>
+      <div id="rDraft" class="notice" hidden>This is a draft. <button class="link-btn" data-act="editDraft">Edit it</button></div>
+      <iframe id="rBody" class="r-body" sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin" title="Email"></iframe>
+      <div id="rAtts" class="atts"></div>
+    </article>
+  </section>
+</section>
+
+<!-- Compose -->
+<div id="compose" class="compose" hidden>
+  <form id="composeForm" class="compose-card">
+    <header class="compose-head">
+      <strong id="composeTitle">New message</strong>
+      <div class="spacer"></div>
+      <button type="button" class="icon-btn" data-act="closeCompose" aria-label="Close">✕</button>
+    </header>
+    <label class="row"><span>To</span><input name="to" autocomplete="email" multiple placeholder="name@example.com, ..."></label>
+    <div class="row cc-toggle"><button type="button" class="link-btn" data-act="showCc">Cc / Bcc</button></div>
+    <label class="row cc" hidden><span>Cc</span><input name="cc"></label>
+    <label class="row cc" hidden><span>Bcc</span><input name="bcc"></label>
+    <label class="row"><span>Subject</span><input name="subject"></label>
+    <div class="toolbar">
+      <button type="button" data-cmd="bold"><b>B</b></button>
+      <button type="button" data-cmd="italic"><i>I</i></button>
+      <button type="button" data-cmd="underline"><u>U</u></button>
+      <button type="button" data-cmd="insertUnorderedList">• List</button>
+      <button type="button" data-cmd="insertOrderedList">1. List</button>
+      <button type="button" data-cmd="createLink">Link</button>
+      <button type="button" data-cmd="removeFormat">Clear</button>
+    </div>
+    <div id="editor" class="editor" contenteditable="true"></div>
+    <div id="composeAtts" class="atts"></div>
+    <footer class="compose-foot">
+      <button class="btn primary" type="submit"><span class="label">Send</span><span class="spinner"></span></button>
+      <label class="btn ghost attach">📎 Attach<input type="file" id="fileInput" multiple hidden></label>
+      <button type="button" class="btn ghost" data-act="saveDraft">Save draft</button>
+      <span id="composeStatus" class="status"></span>
+    </footer>
+  </form>
+</div>
+
+<!-- Move dialog -->
+<dialog id="moveDialog" class="dialog">
+  <form method="dialog">
+    <strong>Move to folder</strong>
+    <div id="moveList" class="move-list"></div>
+    <button class="btn ghost" value="cancel">Cancel</button>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>

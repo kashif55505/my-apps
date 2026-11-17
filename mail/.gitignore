@@ -1,0 +1,12 @@
+.gradle/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+.kotlin/
+*.jks
+*.keystore
+signing/
+web-server/node_modules/
+web-server/data/
