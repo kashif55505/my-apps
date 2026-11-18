@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TezDM Integration",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Sends Chrome downloads to the TezDM app and adds a Download button to every video.",
   "permissions": [
     "downloads",

@@ -17,6 +17,9 @@
     .btn:hover { background: linear-gradient(#3d93ea, #2068c0); }
     .btn svg { width: 15px; height: 15px; }
     .btn .car { font-size: 9px; opacity: .85; margin-left: 2px; }
+    .btn .grip { width: 8px; height: 16px; margin-right: 2px; opacity: .7; cursor: grab;
+      background-image: radial-gradient(#fff 1.2px, transparent 1.3px); background-size: 4px 4px; }
+    .btn.dragging { cursor: grabbing; opacity: .9; box-shadow: 0 6px 18px rgba(0,0,0,.5); }
     .btn.err { background: #c42b1c; border-color: #8e1d12; }
     .menu { position: fixed; display: none; width: 330px; max-height: 380px; overflow: auto; background: #fff; color: #1b2430;
       border: 1px solid #9fb2c8; border-radius: 8px; box-shadow: 0 8px 30px rgba(0,0,0,.35); font-size: 13px; pointer-events: auto; }
@@ -35,9 +38,10 @@
       border-radius: 50%; animation: sp .8s linear infinite; vertical-align: -2px; margin-right: 7px; }
     @keyframes sp { to { transform: rotate(360deg); } }
   </style>
-  <div class="btn" id="btn"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 20h16" stroke="#fff" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span id="lbl">Download</span><span class="car">▼</span></div>
+  <div class="btn" id="btn" title="Click: choose quality · Drag: move this button · Double-click the dots: reset position"><span class="grip" id="grip"></span><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 20h16" stroke="#fff" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span id="lbl">Download</span><span class="car">▼</span></div>
   <div class="menu" id="menu"></div>`;
   const btn = root.getElementById("btn");
+  const grip = root.getElementById("grip");
   const lbl = root.getElementById("lbl");
   const menu = root.getElementById("menu");
 
@@ -53,24 +57,103 @@
 
   const inRect = (x, y, r, pad = 0) => x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad;
 
+  // The user can drag the button anywhere. Its position is remembered per website as an
+  // offset from the video's top-right corner, so it follows the video when the page scrolls.
+  const POS_KEY = "btnpos:" + location.hostname;
+  let offset = null;      // {dx, dy} or null = default (inside the video, top-right)
+  let dragging = false;
+  try {
+    chrome.storage.local.get(POS_KEY, (o) => { offset = (o && o[POS_KEY]) || null; if (current) place(); });
+    chrome.storage.onChanged.addListener((ch, area) => {
+      if (area === "local" && POS_KEY in ch) { offset = ch[POS_KEY].newValue || null; if (current) place(); }
+    });
+  } catch (e) {}
+
+  const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), Math.max(lo, hi));
+
   function place() {
     if (!current || !current.isConnected) return hide(true);
     const r = current.getBoundingClientRect();
     if (r.width < 160 || r.height < 90 || r.bottom < 0 || r.top > innerHeight) return hide(true);
     attach();
     btn.style.display = "flex";
-    const bw = btn.offsetWidth || 120;
-    const top = Math.max(6, r.top + 10);
-    const left = Math.min(innerWidth - bw - 6, Math.max(6, r.right - bw - 10));
-    btn.style.top = top + "px";
-    btn.style.left = left + "px";
+    const bw = btn.offsetWidth || 130, bh = btn.offsetHeight || 30;
+    let left, top;
+    if (!dragging) {
+      if (offset) { left = r.right + offset.dx; top = r.top + offset.dy; }
+      else { left = r.right - bw - 10; top = r.top + 10; }
+      left = clamp(left, 6, innerWidth - bw - 6);
+      top = clamp(top, 6, innerHeight - bh - 6);
+      btn.style.top = top + "px";
+      btn.style.left = left + "px";
+    } else {
+      left = parseFloat(btn.style.left); top = parseFloat(btn.style.top);
+    }
     if (menuOpen) {
       const mw = 330;
-      menu.style.top = (top + btn.offsetHeight + 4) + "px";
-      menu.style.left = Math.min(innerWidth - mw - 6, Math.max(6, left + bw - mw)) + "px";
-      menu.style.maxHeight = Math.max(160, innerHeight - top - btn.offsetHeight - 16) + "px";
+      const below = innerHeight - (top + bh) - 10, above = top - 10;
+      menu.style.left = clamp(left + bw - mw, 6, innerWidth - mw - 6) + "px";
+      if (below >= 220 || below >= above) {
+        menu.style.top = (top + bh + 4) + "px";
+        menu.style.bottom = "auto";
+        menu.style.maxHeight = Math.max(140, below) + "px";
+      } else { // button is low on the screen: open the menu upwards
+        menu.style.top = "auto";
+        menu.style.bottom = (innerHeight - top + 4) + "px";
+        menu.style.maxHeight = Math.max(140, above) + "px";
+      }
     }
   }
+
+  // ----- drag to move (press and move more than 4 px; a short press is a normal click) -----
+  let press = null, justDragged = false;
+  btn.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    press = { x: e.clientX, y: e.clientY, left: parseFloat(btn.style.left) || 0, top: parseFloat(btn.style.top) || 0, id: e.pointerId };
+    try { btn.setPointerCapture(e.pointerId); } catch (err) {}   // keep getting moves outside the button
+  }, true);
+  btn.addEventListener("pointermove", (e) => {
+    if (!press || e.pointerId !== press.id) return;
+    const dx = e.clientX - press.x, dy = e.clientY - press.y;
+    if (!dragging && Math.abs(dx) + Math.abs(dy) < 5) return;
+    if (!dragging) {
+      dragging = true;
+      btn.classList.add("dragging");
+      menuOpen = false; menu.style.display = "none";
+    }
+    const bw = btn.offsetWidth, bh = btn.offsetHeight;
+    btn.style.left = clamp(press.left + dx, 2, innerWidth - bw - 2) + "px";
+    btn.style.top = clamp(press.top + dy, 2, innerHeight - bh - 2) + "px";
+    clearTimeout(hideTimer); hideTimer = null;
+  }, true);
+  function endDrag(e) {
+    if (!press || (e && e.pointerId !== press.id)) return;
+    if (dragging) {
+      dragging = false;
+      justDragged = true;
+      setTimeout(() => { justDragged = false; }, 0);
+      btn.classList.remove("dragging");
+      if (current) {
+        const r = current.getBoundingClientRect();
+        offset = { dx: Math.round(parseFloat(btn.style.left) - r.right), dy: Math.round(parseFloat(btn.style.top) - r.top) };
+        try { chrome.storage.local.set({ [POS_KEY]: offset }); } catch (err) {}
+      }
+    }
+    try { btn.releasePointerCapture(press.id); } catch (err) {}
+    press = null;
+  }
+  btn.addEventListener("pointerup", endDrag, true);
+  btn.addEventListener("pointercancel", endDrag, true);
+  // double-click the dots: put the button back in its default place
+  // (pointer capture sends the double-click to the button, so check where it happened)
+  btn.addEventListener("dblclick", (e) => {
+    const g = grip.getBoundingClientRect();
+    if (e.clientX > g.right + 6) return;   // only the dots area, not the rest of the button
+    e.preventDefault(); e.stopPropagation();
+    offset = null;
+    try { chrome.storage.local.remove(POS_KEY); } catch (err) {}
+    place();
+  }, true);
 
   function hide(force) {
     if (menuOpen && !force) return;
@@ -101,7 +184,7 @@
       place();
       prefetch();
     } else if (!hideTimer && !menuOpen) {
-      hideTimer = setTimeout(() => { hideTimer = null; hide(); }, 1500);
+      hideTimer = setTimeout(() => { hideTimer = null; if (!dragging) hide(); }, 1500);
     }
   }, { passive: true, capture: true });
 
@@ -202,6 +285,7 @@
 
   btn.addEventListener("click", (e) => {
     e.preventDefault(); e.stopPropagation();
+    if (justDragged || dragging) return;
     if (menuOpen) { menuOpen = false; menu.style.display = "none"; reqId++; return; }
     if (lastData) return renderOptions(lastData);
     loadQualities(1);

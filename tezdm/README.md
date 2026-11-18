@@ -18,7 +18,7 @@ No Python required. The installer installs directly on any 64-bit Windows 10/11 
 - Every file downloads over **16 connections** (up to 32 in Options). When a connection finishes its part, it takes over half of the largest remaining part (dynamic segmentation)
 - **Pause / Resume**, even after a PC restart. Auto-retry when the connection drops
 - Captures **every Chrome download** (zip, exe, rar, pdf, iso...)
-- **Download button on every video**: YouTube, Facebook, Instagram, TikTok, X, Vimeo, and any site with m3u8 / mp4 streams
+- **Download button on every video**: YouTube, Facebook, Instagram, TikTok, X, Vimeo, and any site with m3u8 / mp4 streams. Drag the button anywhere, inside or outside the video; its place is remembered per website (double-click its dots, or use the extension popup, to reset it)
 - **Quality menu on the video's Download button**, and in the download window: choose video quality before downloading (4K, 1080p, 720p, 480p... or audio-only MP3), with the estimated size of each
 - **Progress window** for every download: downloaded size, percentage, transfer rate, time left, resume capability, and per-connection progress
 - **Download complete** window with Open / Open folder

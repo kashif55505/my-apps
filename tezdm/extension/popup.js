@@ -45,6 +45,12 @@ function say(t, ok = true) { $("msg").textContent = t; $("msg").className = ok ?
   $("open").onclick = () => fetch("http://127.0.0.1:47615/show", { headers: { "X-TezDM-Ext": "1" } }).then(() => window.close())
     .catch(() => say("TezDM is not running. Start it from the Start menu.", false));
 
+  $("resetPos").onclick = async () => {
+    const all = await chrome.storage.local.get(null);
+    await chrome.storage.local.remove(Object.keys(all).filter(k => k.startsWith("btnpos:")));
+    say("The video button is back in its default place on all websites.");
+  };
+
   $("pagevid").onclick = () => {
     chrome.runtime.sendMessage({ type: "page-video", tabId: tab.id, pageUrl: tab.url },
       (r) => say(r && r.ok ? "Sent to TezDM" : (r && r.error) || "Error", r && r.ok));
