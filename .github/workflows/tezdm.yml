@@ -2,6 +2,7 @@
 #  - Release "tezdm-latest": always the newest build, with fixed file names
 #    (the download links in the main README never change)
 #  - Release "tezdm-vX.Y.Z": one per version, kept as history
+# Tests run first on Windows; a failing test stops the release.
 # To ship a new version: change tezdm/VERSION and push.
 name: TezDM
 
@@ -21,7 +22,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Download-integrity tests on a real Windows machine; no release if any file comes out corrupted
+  test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: tezdm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tezdm/go.mod
+          cache: false
+
+      - name: Run tests (Windows)
+        run: go test -count=1 -v ./...
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     defaults:
       run:

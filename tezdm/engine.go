@@ -4,6 +4,8 @@ package main
 // pause/resume (even after restart), auto-retry.
 
 import (
+	"compress/flate"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,7 +32,57 @@ const (
 	defaultUA  = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
 )
 
-var errStopped = errors.New("stopped")
+var (
+	errStopped     = errors.New("stopped")
+	errFileChanged = errors.New("the file changed on the server")
+)
+
+// Parse "bytes a-b/total" (total may be "*")
+func parseContentRange(cr string) (start, end, total int64, ok bool) {
+	cr = strings.TrimSpace(cr)
+	if !strings.HasPrefix(cr, "bytes ") {
+		return
+	}
+	cr = strings.TrimPrefix(cr, "bytes ")
+	slash := strings.Index(cr, "/")
+	dash := strings.Index(cr, "-")
+	if slash < 0 || dash < 0 || dash > slash {
+		return
+	}
+	var err error
+	if start, err = strconv.ParseInt(cr[:dash], 10, 64); err != nil {
+		return
+	}
+	if end, err = strconv.ParseInt(cr[dash+1:slash], 10, 64); err != nil {
+		return
+	}
+	total = -1
+	if t := cr[slash+1:]; t != "*" {
+		if total, err = strconv.ParseInt(t, 10, 64); err != nil {
+			return
+		}
+	}
+	return start, end, total, true
+}
+
+func validatorOf(h http.Header) string {
+	if e := h.Get("ETag"); e != "" && !strings.HasPrefix(e, "W/") {
+		return e
+	}
+	return h.Get("Last-Modified")
+}
+
+// A web page arriving for a file that is not a web page means the link expired or needs a login
+func looksLikeErrorPage(resp *http.Response, filename string) bool {
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if !strings.HasPrefix(ct, "text/html") {
+		return false
+	}
+	ext := strings.ToLower(filepath.Ext(filename))
+	return ext != ".html" && ext != ".htm" && ext != ".php" && ext != ".asp" && ext != ".aspx" && ext != ""
+}
+
+var errWebPage = errors.New("the website sent a web page instead of the file (the link may have expired or need you to be signed in). Please start the download again from the website")
 
 type Seg struct {
 	Start int64 `json:"s"`
@@ -53,8 +105,10 @@ type Task struct {
 	Resumable bool              `json:"resumable"`
 	Segs      []*Seg            `json:"segs"`
 	Added     int64             `json:"added"`
-	Done      int64             `json:"done,omitempty"`   // for video
-	Format    string            `json:"format,omitempty"` // video quality: "", "1080", "audio"...
+	Done      int64             `json:"done,omitempty"`      // for video
+	Format    string            `json:"format,omitempty"`    // video quality: "", "1080", "audio"...
+	Validator string            `json:"validator,omitempty"` // ETag / Last-Modified: detects a file that changed on the server
+	Encoding  string            `json:"encoding,omitempty"`  // gzip etc. when the server compresses the download
 	LastTry   int64             `json:"last_try,omitempty"`
 
 	mu       sync.Mutex
@@ -340,18 +394,32 @@ func (t *Task) probe(ctx context.Context) error {
 		os.MkdirAll(t.Dir, 0o755)
 		t.Filename = filepath.Base(uniquePath(filepath.Join(t.Dir, filenameFrom(resp))))
 	}
-	t.Size = -1
-	t.Resumable = false
+	if looksLikeErrorPage(resp, t.Filename) {
+		return errWebPage
+	}
+	oldSize, oldValidator, hadData := t.Size, t.Validator, len(t.Segs) > 0
+	size, resumable := int64(-1), false
 	if resp.StatusCode == 206 {
-		cr := resp.Header.Get("Content-Range")
-		if i := strings.LastIndex(cr, "/"); i >= 0 {
-			if n, err := strconv.ParseInt(cr[i+1:], 10, 64); err == nil {
-				t.Size, t.Resumable = n, true
-			}
+		if _, _, total, ok := parseContentRange(resp.Header.Get("Content-Range")); ok && total > 0 {
+			size, resumable = total, true
 		}
 	} else if resp.ContentLength > 0 {
-		t.Size = resp.ContentLength
+		size = resp.ContentLength
 	}
+	enc := strings.ToLower(resp.Header.Get("Content-Encoding"))
+	if enc == "identity" {
+		enc = ""
+	}
+	if enc != "" { // compressed on the wire: download in one piece and decompress
+		size, resumable = -1, false
+	}
+	validator := validatorOf(resp.Header)
+	// Resuming, but the file on the server is not the same any more: start again
+	if hadData && (size != oldSize || resumable != t.Resumable || (oldValidator != "" && validator != "" && validator != oldValidator)) {
+		t.Segs = nil
+		os.Remove(filepath.Join(t.Dir, t.Filename) + ".tezpart")
+	}
+	t.Size, t.Resumable, t.Validator, t.Encoding = size, resumable, validator, enc
 	return nil
 }
 
@@ -383,13 +451,9 @@ func (t *Task) speedMeter(ctx context.Context, done chan struct{}) {
 }
 
 func (t *Task) runFile(ctx context.Context) error {
-	t.mu.Lock()
-	needProbe := t.Filename == "" || t.Size == 0 || t.FinalURL == ""
-	t.mu.Unlock()
-	if needProbe {
-		if err := t.probe(ctx); err != nil {
-			return err
-		}
+	// Probe every time: refreshes expired links and detects a file that changed on the server
+	if err := t.probe(ctx); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(t.Dir, 0o755); err != nil {
 		return err
@@ -402,6 +466,15 @@ func (t *Task) runFile(ctx context.Context) error {
 	var err error
 	if t.Resumable && t.Size > 0 {
 		err = t.segmented(ctx, part)
+		if err == errFileChanged && ctx.Err() == nil { // changed while downloading: start again once
+			t.mu.Lock()
+			t.Segs = nil
+			t.mu.Unlock()
+			os.Remove(part)
+			if err = t.probe(ctx); err == nil {
+				err = t.segmented(ctx, part)
+			}
+		}
 	} else {
 		// No range support: on failure restart from zero (up to 5 times)
 		for try := 1; ; try++ {
@@ -448,6 +521,26 @@ func (t *Task) single(ctx context.Context, part string) error {
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("server returned HTTP %d", resp.StatusCode)
 	}
+	if looksLikeErrorPage(resp, t.Filename) {
+		return errWebPage
+	}
+	var body io.Reader = resp.Body
+	switch strings.ToLower(resp.Header.Get("Content-Encoding")) {
+	case "gzip", "x-gzip":
+		zr, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return err
+		}
+		defer zr.Close()
+		body = zr
+	case "deflate":
+		fr := flate.NewReader(resp.Body)
+		defer fr.Close()
+		body = fr
+	case "", "identity":
+	default:
+		return fmt.Errorf("unsupported compression %q from server", resp.Header.Get("Content-Encoding"))
+	}
 	f, err := os.Create(part)
 	if err != nil {
 		return err
@@ -455,7 +548,7 @@ func (t *Task) single(ctx context.Context, part string) error {
 	defer f.Close()
 	buf := make([]byte, chunkSize)
 	for {
-		n, rerr := resp.Body.Read(buf)
+		n, rerr := body.Read(buf)
 		if n > 0 {
 			if _, werr := f.Write(buf[:n]); werr != nil {
 				return werr
@@ -472,11 +565,12 @@ func (t *Task) single(ctx context.Context, part string) error {
 		}
 	}
 	t.mu.Lock()
-	if t.Size <= 0 {
-		t.Size = seg.Pos
-		seg.End = seg.Pos - 1
+	defer t.mu.Unlock()
+	if t.Size > 0 && seg.Pos != t.Size && t.Encoding == "" {
+		return fmt.Errorf("incomplete download: got %d of %d bytes", seg.Pos, t.Size)
 	}
-	t.mu.Unlock()
+	t.Size = seg.Pos
+	seg.End = seg.Pos - 1
 	return nil
 }
 
@@ -516,8 +610,11 @@ func (t *Task) segmented(ctx context.Context, part string) error {
 	conns := t.Conns
 	t.mu.Unlock()
 
+	wctx, cancelWorkers := context.WithCancel(ctx)
+	defer cancelWorkers()
 	var wg sync.WaitGroup
 	var lastErr error
+	var changed bool
 	var errMu sync.Mutex
 	for i := 0; i < conns; i++ {
 		seg := t.nextSeg()
@@ -527,9 +624,13 @@ func (t *Task) segmented(ctx context.Context, part string) error {
 		wg.Add(1)
 		go func(seg *Seg) {
 			defer wg.Done()
-			if e := t.worker(ctx, f, seg); e != nil {
+			if e := t.worker(wctx, f, seg); e != nil {
 				errMu.Lock()
 				lastErr = e
+				if e == errFileChanged {
+					changed = true
+					cancelWorkers()
+				}
 				errMu.Unlock()
 			}
 		}(seg)
@@ -537,6 +638,9 @@ func (t *Task) segmented(ctx context.Context, part string) error {
 	wg.Wait()
 	if ctx.Err() != nil {
 		return errStopped
+	}
+	if changed {
+		return errFileChanged
 	}
 	t.mu.Lock()
 	var remaining int64
@@ -552,7 +656,30 @@ func (t *Task) segmented(ctx context.Context, part string) error {
 		}
 		return errors.New("download incomplete")
 	}
-	return nil
+	return t.verifyComplete(f)
+}
+
+// Final check: the parts cover the whole file exactly once and the file has the right size
+func (t *Task) verifyComplete(f *os.File) error {
+	t.mu.Lock()
+	segs := append([]*Seg(nil), t.Segs...)
+	size := t.Size
+	t.mu.Unlock()
+	sort.Slice(segs, func(i, j int) bool { return segs[i].Start < segs[j].Start })
+	var next int64
+	for _, s := range segs {
+		if s.Start != next || s.Pos != s.End+1 {
+			return errors.New("download check failed (missing part); please download again")
+		}
+		next = s.End + 1
+	}
+	if next != size {
+		return errors.New("download check failed (wrong size); please download again")
+	}
+	if st, err := f.Stat(); err != nil || st.Size() != size {
+		return errors.New("download check failed (file size); please download again")
+	}
+	return f.Sync()
 }
 
 // Give an idle connection work: a free segment first, otherwise split the largest remaining part (IDM style)
@@ -624,13 +751,41 @@ func (t *Task) fetchSeg(ctx context.Context, f *os.File, seg *Seg) error {
 			req, _ := http.NewRequestWithContext(ctx, "GET", t.FinalURL, nil)
 			t.reqHeaders(req)
 			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
+			t.mu.Lock()
+			validator, size := t.Validator, t.Size
+			t.mu.Unlock()
+			if validator != "" {
+				req.Header.Set("If-Range", validator) // server sends the whole new file if it changed
+			}
 			resp, err := httpClient.Do(req)
 			if err != nil {
 				return err
 			}
 			defer resp.Body.Close()
+			if resp.StatusCode == 200 && validator != "" {
+				return errFileChanged
+			}
 			if resp.StatusCode != 206 {
 				return fmt.Errorf("range request failed (HTTP %d)", resp.StatusCode)
+			}
+			// The server must say which bytes it sends; never trust that it is exactly what we asked for
+			rs, _, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
+			if !ok {
+				return errors.New("server sent no valid Content-Range")
+			}
+			if total > 0 && total != size {
+				return errFileChanged
+			}
+			if rs > start {
+				return fmt.Errorf("server skipped bytes (asked from %d, got from %d)", start, rs)
+			}
+			if rs < start { // server started earlier than asked: drop the extra bytes
+				if _, err := io.CopyN(io.Discard, resp.Body, start-rs); err != nil {
+					return err
+				}
+			}
+			if ce := strings.ToLower(resp.Header.Get("Content-Encoding")); ce != "" && ce != "identity" {
+				return errors.New("server compressed a range response")
 			}
 			for {
 				n, rerr := resp.Body.Read(buf)
@@ -662,6 +817,9 @@ func (t *Task) fetchSeg(ctx context.Context, f *os.File, seg *Seg) error {
 				}
 			}
 		}()
+		if err == errFileChanged {
+			return err
+		}
 		if err == nil {
 			t.mu.Lock()
 			fin := seg.Pos > seg.End

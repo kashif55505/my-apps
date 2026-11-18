@@ -36,6 +36,8 @@ Every push that changes the `tezdm/` folder builds TezDM on GitHub Actions and p
 - release `tezdm-latest`: always the newest `TezDM_Setup.exe` and `TezDM_Chrome_Extension.zip`
 - release `tezdm-vX.Y.Z`: one per version, kept as history
 
+Before every release, download-integrity tests (`engine_test.go`) run on a Windows machine; if any downloaded file comes out different from the original, nothing is released.
+
 To publish a new version, change the number in `tezdm/VERSION` (for example `2.3.0` to `2.4.0`) and push.
 
 ## Build from source (developers)
