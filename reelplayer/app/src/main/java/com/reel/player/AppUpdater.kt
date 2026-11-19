@@ -134,7 +134,6 @@ object AppUpdater {
                             .setTitle("You're up to date")
                             .setMessage("Reel Player ${installedName(a)} is the newest version.")
                             .setPositiveButton("OK", null)
-                            .setNeutralButton("Change token") { _, _ -> askToken(a) {} }
                             .show()
                     } else {
                         val notes = r.notes.lines().firstOrNull { it.isNotBlank() && !it.startsWith("Automatic build") } ?: ""
