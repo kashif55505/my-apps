@@ -95,10 +95,37 @@ object Engine {
             .addOption("--dump-single-json")
             .addOption("--no-playlist")
             .addOption("--no-warnings")
+        addCookies(ctx, request, url)
         val response = YoutubeDL.getInstance().execute(request, null, null)
         val json = response.out.lineSequence().firstOrNull { it.trimStart().startsWith("{") }
             ?: throw IllegalStateException("No video found at this link")
         return parse(url, JSONObject(json))
+    }
+
+    /**
+     * For Facebook and Instagram links, hand yt-dlp the login of the in-app browser (cookies),
+     * so videos that need a signed-in viewer can still be fetched.
+     */
+    fun addCookies(ctx: Context, request: YoutubeDLRequest, url: String) {
+        val host = runCatching { android.net.Uri.parse(url).host ?: "" }.getOrDefault("")
+        val domain = when {
+            host.contains("facebook.com") || host.contains("fb.watch") -> "facebook.com"
+            host.contains("instagram.com") -> "instagram.com"
+            else -> return
+        }
+        val raw = runCatching { android.webkit.CookieManager.getInstance().getCookie("https://www.$domain") }.getOrNull()
+        if (raw.isNullOrBlank()) return
+        val expires = System.currentTimeMillis() / 1000 + 30L * 86400
+        val lines = StringBuilder("# Netscape HTTP Cookie File\n")
+        for (part in raw.split(";")) {
+            val kv = part.trim()
+            val eq = kv.indexOf('=')
+            if (eq <= 0) continue
+            lines.append(".$domain\tTRUE\t/\tTRUE\t$expires\t${kv.substring(0, eq)}\t${kv.substring(eq + 1)}\n")
+        }
+        val f = java.io.File(ctx.filesDir, "cookies-$domain.txt")
+        f.writeText(lines.toString())
+        request.addOption("--cookies", f.absolutePath)
     }
 
     /** YouTube search through yt-dlp. Blocking; call off the main thread. */

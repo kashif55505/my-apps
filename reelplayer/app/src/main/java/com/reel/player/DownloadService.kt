@@ -141,6 +141,7 @@ class DownloadService : Service() {
                 .addOption("-o", File(dir, "%(title).80B.%(ext)s").absolutePath)
                 .addOption("--no-playlist")
                 .addOption("--no-mtime")
+            Engine.addCookies(applicationContext, request, job.url)
             when (job.choice.kind) {
                 Choice.Kind.VIDEO -> request.addOption("--merge-output-format", "mp4/mkv")
                 Choice.Kind.MP3 -> {

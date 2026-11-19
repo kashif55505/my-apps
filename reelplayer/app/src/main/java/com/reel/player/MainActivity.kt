@@ -123,6 +123,7 @@ class MainActivity : AppCompatActivity() {
             drawer.closeDrawer(GravityCompat.START)
             when (item.itemId) {
                 R.id.navVideos -> { current = null; render() }
+                R.id.navFacebook -> startActivity(Intent(this, FacebookActivity::class.java))
                 R.id.navYoutube -> startActivity(Intent(this, YouTubeActivity::class.java))
                 R.id.navDownloader -> startActivity(Intent(this, DownloaderActivity::class.java))
                 R.id.navDownloads -> openDownloadsFolder()
