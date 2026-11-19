@@ -49,11 +49,16 @@ class YouTubeActivity : AppCompatActivity() {
     private val ui = android.os.Handler(android.os.Looper.getMainLooper())
     private var suggestRun: Runnable? = null
     private var settingText = false
+    private var currentQuery = ""
+
+    /** Earlier result pages, so Back returns to them (and finally to the first page) like YouTube. */
+    private class Screen(val query: String, val items: List<YtItem>, val page: Yt.Results?, val scroll: Int)
+    private val backStack = ArrayList<Screen>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_youtube)
-        findViewById<MaterialToolbar>(R.id.toolbar).setNavigationOnClickListener { finish() }
+        findViewById<MaterialToolbar>(R.id.toolbar).setNavigationOnClickListener { onBackPressedDispatcher.onBackPressed() }
         query = findViewById(R.id.query)
         results = findViewById(R.id.results)
         loading = findViewById(R.id.loading)
@@ -69,17 +74,23 @@ class YouTubeActivity : AppCompatActivity() {
             }
         })
 
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                when {
+                    popup.isShowing -> popup.dismiss()
+                    backStack.isNotEmpty() -> goBack()
+                    else -> { isEnabled = false; onBackPressedDispatcher.onBackPressed() }
+                }
+            }
+        })
         setupSuggestions()
         findViewById<View>(R.id.btnSearch).setOnClickListener { go() }
         query.setOnEditorActionListener { _, id, _ ->
             if (id == EditorInfo.IME_ACTION_SEARCH || id == EditorInfo.IME_ACTION_DONE) { go(); true } else false
         }
 
-        val last = getSharedPreferences("reel", MODE_PRIVATE).getString("ytQuery", null)
-        settingText = true
-        query.setText(last ?: "")
-        settingText = false
-        search(last ?: "new songs")
+        // The first page (home) is always the same; searches open on top of it.
+        search(HOME_QUERY, home = true)
     }
 
     override fun onStart() {
@@ -168,8 +179,29 @@ class YouTubeActivity : AppCompatActivity() {
         if (!popup.isShowing) popup.show() else popup.listView?.invalidateViews()
     }
 
-    private fun search(q: String) {
+    private fun goBack() {
+        val prev = backStack.removeAt(backStack.size - 1)
+        currentQuery = prev.query
+        settingText = true
+        query.setText(if (prev.query == HOME_QUERY) "" else prev.query)
+        settingText = false
+        query.clearFocus()
+        message.visibility = View.GONE
+        items.clear()
+        items += prev.items
+        page = prev.page
+        results.adapter?.notifyDataSetChanged()
+        (results.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(prev.scroll, 0)
+    }
+
+    private fun search(q: String, home: Boolean = false) {
         if (searching) return
+        if (!home && q == currentQuery) return
+        if (!home && currentQuery.isNotEmpty()) {
+            val pos = (results.layoutManager as LinearLayoutManager).findFirstVisibleItemPosition().coerceAtLeast(0)
+            backStack += Screen(currentQuery, ArrayList(items), page, pos)
+        }
+        currentQuery = q
         searching = true
         message.visibility = View.GONE
         loading.visibility = View.VISIBLE
@@ -247,6 +279,8 @@ class YouTubeActivity : AppCompatActivity() {
     }
 
     companion object {
+        private const val HOME_QUERY = "new songs"
+
         fun openVideo(a: Activity, url: String, title: String?, channel: String?, thumb: String?) {
             a.startActivity(
                 Intent(a, YtVideoActivity::class.java)
