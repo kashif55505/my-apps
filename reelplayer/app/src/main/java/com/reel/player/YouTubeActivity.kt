@@ -138,6 +138,16 @@ class YouTubeActivity : AppCompatActivity() {
     private fun history(): List<String> =
         getSharedPreferences("reel", MODE_PRIVATE).getString("ytHistory", "")!!.split('\n').filter { it.isNotBlank() }
 
+    private fun homeSeen(): Set<String> =
+        getSharedPreferences("reel", MODE_PRIVATE).getString("ytHomeSeen", "")!!.split(',').filter { it.isNotBlank() }.toSet()
+
+    /** Remember what the home page showed, so next time other videos come first. */
+    private fun rememberHomeSeen(list: List<YtItem>) {
+        val now = list.take(20).map { it.id }
+        val all = (now + homeSeen().filter { it !in now }).take(300)
+        getSharedPreferences("reel", MODE_PRIVATE).edit().putString("ytHomeSeen", all.joinToString(",")).apply()
+    }
+
     private fun addHistory(q: String) {
         val list = (listOf(q) + history().filter { !it.equals(q, true) }).take(15)
         getSharedPreferences("reel", MODE_PRIVATE).edit().putString("ytHistory", list.joinToString("\n")).apply()
@@ -218,7 +228,10 @@ class YouTubeActivity : AppCompatActivity() {
         loadingText.text = if (home) "Loading new videos…" else "Searching…"
         io.execute {
             // Fast engine first; the slower yt-dlp search only if that fails.
-            val r = runCatching { if (home) Yt.home(history(), HOME_QUERY) else Yt.search(q) }
+            val r = runCatching {
+                if (home) Yt.home(history(), watched(this), homeSeen(), HOME_QUERY).also { rememberHomeSeen(it.items) }
+                else Yt.search(q)
+            }
             val fallback = if (r.isFailure) runCatching { Engine.search(applicationContext, q) } else null
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
@@ -291,6 +304,15 @@ class YouTubeActivity : AppCompatActivity() {
 
     companion object {
         private const val HOME_QUERY = "new songs"
+
+        /** Videos the user opened recently (newest first); the home page recommends related videos. */
+        fun watched(c: android.content.Context): List<String> =
+            c.getSharedPreferences("reel", MODE_PRIVATE).getString("ytWatched", "")!!.split('\n').filter { it.isNotBlank() }
+
+        fun addWatched(c: android.content.Context, url: String) {
+            val list = (listOf(url) + watched(c).filter { it != url }).take(20)
+            c.getSharedPreferences("reel", MODE_PRIVATE).edit().putString("ytWatched", list.joinToString("\n")).apply()
+        }
 
         fun openVideo(a: Activity, url: String, title: String?, channel: String?, thumb: String?) {
             a.startActivity(

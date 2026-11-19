@@ -160,6 +160,7 @@ class YtVideoActivity : AppCompatActivity() {
                     sub.text = listOfNotNull(inf.uploaderName, OnlinePlayer.views(inf.viewCount).ifEmpty { null }).joinToString(" · ")
                     if (cover.visibility == View.VISIBLE) Yt.thumbnail(inf)?.let { Glide.with(cover).load(it).centerCrop().into(cover) }
                     showChoices(Yt.downloadChoices(inf))
+                    YouTubeActivity.addWatched(this, inf.url)
                     updateQualityLabel()
                     if (!resuming && !OnlinePlayer.playYt(this, inf, height)) playNextWay(0L)
                 }

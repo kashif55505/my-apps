@@ -75,28 +75,54 @@ object Yt {
     }
 
     /**
-     * A fresh home page like YouTube's: what is trending now, mixed with new videos about the
-     * things this user searched for recently. Different every time it is opened or refreshed.
+     * A fresh home page like YouTube's, different every time:
+     *  - "up next" videos related to what the user watched recently (like YouTube's recommendations),
+     *  - new videos about things they searched for (a random page of results each time),
+     *  - what is trending in music right now, and new songs of this month.
+     * Videos already shown on the home page recently go to the end, so the top is always new.
      */
-    fun home(recent: List<String>, fallback: String): Results {
+    fun home(recent: List<String>, watched: List<String>, seen: Set<String>, fallback: String): Results {
         init()
-        val topics = (recent.take(3) + fallback).distinct()
-        val pool = java.util.concurrent.Executors.newFixedThreadPool(4)
+        val rnd = java.util.Random()
+        val month = java.text.SimpleDateFormat("MMMM yyyy", java.util.Locale.ENGLISH).format(java.util.Date())
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(6)
         try {
-            val trending = pool.submit<List<YtItem>> { runCatching { trendingMusic() }.getOrDefault(emptyList()) }
-            val searches = topics.map { t -> pool.submit<Results?> { runCatching { search(t) }.getOrNull() } }
+            val jobs = ArrayList<java.util.concurrent.Future<List<YtItem>>>()
+            // Related to recently watched videos
+            for (url in watched.take(10).shuffled(rnd).take(3)) {
+                jobs += pool.submit<List<YtItem>> {
+                    runCatching { toItems(StreamInfo.getInfo(yt, url).relatedItems) }.getOrDefault(emptyList())
+                }
+            }
+            // New videos about recent searches, from a random results page
+            val topics = recent.take(8).shuffled(rnd).take(3).map { if (rnd.nextBoolean()) "$it new" else it } +
+                listOf("$fallback $month")
+            var morePage: Results? = null
+            val searchJobs = topics.map { t ->
+                pool.submit<Results?> {
+                    runCatching {
+                        var r = search(t)
+                        repeat(rnd.nextInt(3)) { if (r.next != null) r = more(r) }
+                        r
+                    }.getOrNull()
+                }
+            }
+            jobs += pool.submit<List<YtItem>> { runCatching { trendingMusic() }.getOrDefault(emptyList()) }
+
             val lists = ArrayList<List<YtItem>>()
-            lists += trending.get().shuffled()
-            val found = searches.mapNotNull { it.get() }
-            found.forEach { lists += it.items.take(12).shuffled() }
+            jobs.forEach { lists += it.get().shuffled(rnd).take(12) }
+            searchJobs.forEach { f -> f.get()?.let { r -> if (morePage == null && r.next != null) morePage = r; lists += r.items.shuffled(rnd).take(10) } }
+            lists.shuffle(rnd)
+
             // Interleave the lists so the page is a mix, then drop repeats.
             val mixed = ArrayList<YtItem>()
             var i = 0
             while (lists.any { i < it.size }) { lists.forEach { if (i < it.size) mixed += it[i] }; i++ }
-            val seen = HashSet<String>()
-            val items = mixed.filter { seen.add(it.id) }
+            val ids = HashSet<String>()
+            val unique = mixed.filter { ids.add(it.id) }
+            val items = unique.filter { it.id !in seen } + unique.filter { it.id in seen }
             if (items.isEmpty()) throw IllegalStateException("Couldn't load videos. Check your internet and try again.")
-            val more = found.firstOrNull { it.next != null }
+            val more = morePage
             return Results(items, more?.query ?: yt.searchQHFactory.fromQuery(fallback), more?.next)
         } finally {
             pool.shutdown()
