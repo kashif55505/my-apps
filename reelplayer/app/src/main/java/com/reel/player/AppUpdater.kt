@@ -322,11 +322,38 @@ object AppUpdater {
             a.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${a.packageName}")))
             return
         }
-        val uri = FileProvider.getUriForFile(a, "${a.packageName}.files", apk)
-        a.startActivity(
-            Intent(Intent.ACTION_VIEW)
-                .setDataAndType(uri, "application/vnd.android.package-archive")
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
+        try {
+            // Install through the app's own installer session. On Android 12+, once Reel Player has
+            // installed itself one time, later updates need no tap: the app closes and updates.
+            val pi = a.packageManager.packageInstaller
+            val params = android.content.pm.PackageInstaller.SessionParams(
+                android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+            params.setAppPackageName(a.packageName)
+            params.setSize(apk.length())
+            if (Build.VERSION.SDK_INT >= 31) {
+                params.setRequireUserAction(android.content.pm.PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+            }
+            val id = pi.createSession(params)
+            pi.openSession(id).use { session ->
+                session.openWrite("base.apk", 0, apk.length()).use { out ->
+                    apk.inputStream().use { it.copyTo(out, 1 shl 16) }
+                    session.fsync(out)
+                }
+                val flags = android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                    (if (Build.VERSION.SDK_INT >= 31) android.app.PendingIntent.FLAG_MUTABLE else 0)
+                val status = android.app.PendingIntent.getBroadcast(
+                    a, id, Intent(a, UpdateReceiver::class.java).setAction(UpdateReceiver.ACTION_STATUS), flags)
+                Toast.makeText(a, "Updating… Reel Player will close and update.", Toast.LENGTH_LONG).show()
+                session.commit(status.intentSender)
+            }
+        } catch (e: Exception) {
+            // Old way as a last resort: Android's own install screen.
+            val uri = FileProvider.getUriForFile(a, "${a.packageName}.files", apk)
+            a.startActivity(
+                Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(uri, "application/vnd.android.package-archive")
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }
     }
 }
