@@ -12,8 +12,17 @@
         android:layout_height="?attr/actionBarSize"
         android:background="@color/panel"
         app:navigationIcon="@drawable/ic_back"
-        app:title="Facebook"
+        app:title="Facebook Videos"
         app:titleTextColor="@color/fg" />
+
+    <com.google.android.material.tabs.TabLayout
+        android:id="@+id/tabs"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/panel"
+        app:tabIndicatorColor="@color/accent"
+        app:tabSelectedTextColor="@color/accent"
+        app:tabTextColor="@color/muted" />
 
     <ProgressBar
         android:id="@+id/progress"
