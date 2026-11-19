@@ -6,23 +6,30 @@
     android:background="@color/ink"
     android:orientation="vertical">
 
-    <com.google.android.material.appbar.MaterialToolbar
-        android:id="@+id/toolbar"
+    <!-- One slim bar: back arrow and the Reels / Videos tabs -->
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="?attr/actionBarSize"
+        android:layout_height="48dp"
         android:background="@color/panel"
-        app:navigationIcon="@drawable/ic_back"
-        app:title="Facebook Videos"
-        app:titleTextColor="@color/fg" />
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
 
-    <com.google.android.material.tabs.TabLayout
-        android:id="@+id/tabs"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:background="@color/panel"
-        app:tabIndicatorColor="@color/accent"
-        app:tabSelectedTextColor="@color/accent"
-        app:tabTextColor="@color/muted" />
+        <ImageButton
+            android:id="@+id/btnBack"
+            style="@style/PlayerIcon"
+            android:contentDescription="Back"
+            android:src="@drawable/ic_back" />
+
+        <com.google.android.material.tabs.TabLayout
+            android:id="@+id/tabs"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:background="@color/panel"
+            app:tabIndicatorColor="@color/accent"
+            app:tabSelectedTextColor="@color/accent"
+            app:tabTextColor="@color/muted" />
+    </LinearLayout>
 
     <ProgressBar
         android:id="@+id/progress"
@@ -66,14 +73,7 @@
                 app:icon="@drawable/ic_download"
                 app:iconTint="@color/accent_ink" />
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnPlay"
-                style="@style/Widget.Material3.Button.TonalButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="6dp"
-                android:text="Play in Reel"
-                app:icon="@drawable/ic_play" />
+
         </LinearLayout>
     </FrameLayout>
 </LinearLayout>

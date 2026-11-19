@@ -12,7 +12,6 @@ import android.webkit.WebViewClient
 import android.widget.ProgressBar
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
-import com.google.android.material.appbar.MaterialToolbar
 import java.util.concurrent.Executors
 
 /**
@@ -46,9 +45,24 @@ class FacebookActivity : AppCompatActivity() {
           if (window.__reelHide) return; window.__reelHide = true;
           var css = document.createElement('style');
           css.textContent = '[role=banner],[role=navigation],[role=tablist],#header,#MChromeHeader,' +
-            '[data-sigil*=MTopBlueBarHeader],[aria-label*="Open app"],[aria-label*="Get the app"]{display:none!important}';
+            '[data-sigil*=MTopBlueBarHeader],[aria-label*="Open app"],[aria-label*="Get the app"]{display:none!important}' +
+            'html,body{padding-top:0!important;margin-top:0!important}';
           document.documentElement.appendChild(css);
+          // Like, react, share, send, save and "more" buttons are hidden; Comment stays.
+          var hideLabel = /^(like|unlike|remove like|react|reaction|share|send|save|more|remix|follow)/i;
           function sweep(){
+            document.querySelectorAll('[aria-label]').forEach(function(e){
+              var l = e.getAttribute('aria-label') || '';
+              if (hideLabel.test(l.trim()) && !/comment/i.test(l)) e.style.display = 'none';
+            });
+            // Gap left at the top by Facebook's hidden header.
+            var n = document.body, depth = 0;
+            while (n && depth < 6) {
+              var cs = getComputedStyle(n);
+              if (parseFloat(cs.paddingTop) > 20) n.style.paddingTop = '0px';
+              if (parseFloat(cs.marginTop) > 20) n.style.marginTop = '0px';
+              n = n.firstElementChild; depth++;
+            }
             if (location.pathname.indexOf('/reel') === 0) return;
             document.querySelectorAll('body *').forEach(function(e){
               var s = getComputedStyle(e);
@@ -56,7 +70,9 @@ class FacebookActivity : AppCompatActivity() {
                   e.offsetHeight < 140 && !e.querySelector('video')) e.style.display = 'none';
             });
           }
-          sweep(); setInterval(sweep, 1500);
+          sweep(); setInterval(sweep, 1000);
+          new MutationObserver(function(){ clearTimeout(window.__reelT); window.__reelT = setTimeout(sweep, 150); })
+            .observe(document.documentElement, {childList:true, subtree:true});
         })();
     """.trimIndent()
 
@@ -71,7 +87,7 @@ class FacebookActivity : AppCompatActivity() {
         web = findViewById(R.id.web)
         videoBar = findViewById(R.id.videoBar)
         progress = findViewById(R.id.progress)
-        findViewById<MaterialToolbar>(R.id.toolbar).setNavigationOnClickListener { finish() }
+        findViewById<View>(R.id.btnBack).setOnClickListener { finish() }
         // Only the video side of Facebook: Reels and Videos, like the Video tab of the Facebook app.
         val tabs = findViewById<com.google.android.material.tabs.TabLayout>(R.id.tabs)
         tabs.addTab(tabs.newTab().setText("Reels"))
@@ -121,12 +137,6 @@ class FacebookActivity : AppCompatActivity() {
             val u = videoUrl ?: return@setOnClickListener
             CookieManager.getInstance().flush()
             YouTubeActivity.pickQuality(this, io, u, "Facebook video")
-        }
-        findViewById<View>(R.id.btnPlay).setOnClickListener {
-            val u = videoUrl ?: return@setOnClickListener
-            CookieManager.getInstance().flush()
-            web.onPause()   // stop Facebook's own sound
-            YouTubeActivity.openVideo(this, u, "Facebook video", null, null)
         }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
