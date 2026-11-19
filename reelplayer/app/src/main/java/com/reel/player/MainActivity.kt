@@ -127,6 +127,7 @@ class MainActivity : AppCompatActivity() {
                 R.id.navDownloader -> startActivity(Intent(this, DownloaderActivity::class.java))
                 R.id.navDownloads -> openDownloadsFolder()
                 R.id.navUpdate -> updateEngine()
+                R.id.navAppUpdate -> AppUpdater.checkAndOffer(this) { refreshUpdateItem() }
             }
             item.itemId == R.id.navVideos
         }
@@ -186,6 +187,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        refreshUpdateItem()
         uiHandler.post(nowTicker)
         PlayerHolder.peek()?.addListener(nowListener)
         updateNowBar()
@@ -273,6 +275,17 @@ class MainActivity : AppCompatActivity() {
             current = f
             render()
             list.scrollToPosition(0)
+        }
+    }
+
+    /** Sidebar shows "App update · 1.15 available" when there is a newer version. */
+    private fun refreshUpdateItem() {
+        val item = nav.menu.findItem(R.id.navAppUpdate) ?: return
+        val now = AppUpdater.installedName(this)
+        item.title = "App update  (v$now)"
+        AppUpdater.checkQuietly(this) { r ->
+            item.title = if (r != null) "App update  ·  ${r.name} available" else "App update  (v$now)"
+            if (r != null) item.setIcon(R.drawable.ic_download_dot) else item.setIcon(R.drawable.ic_download)
         }
     }
 
