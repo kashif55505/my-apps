@@ -39,6 +39,7 @@ class YouTubeActivity : AppCompatActivity() {
     private var page: Yt.Results? = null
     private var searching = false
     private var loadingMore = false
+    private lateinit var nowBar: NowBar
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,6 +53,7 @@ class YouTubeActivity : AppCompatActivity() {
         val lm = LinearLayoutManager(this)
         results.layoutManager = lm
         results.adapter = Adapter()
+        nowBar = NowBar(this, results)
         results.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
                 if (dy > 0 && lm.findLastVisibleItemPosition() >= items.size - 4) loadMore()
@@ -66,6 +68,16 @@ class YouTubeActivity : AppCompatActivity() {
         val last = getSharedPreferences("reel", MODE_PRIVATE).getString("ytQuery", null)
         query.setText(last ?: "")
         search(last ?: "new songs")
+    }
+
+    override fun onStart() {
+        super.onStart()
+        nowBar.start()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        nowBar.stop()
     }
 
     override fun onDestroy() {

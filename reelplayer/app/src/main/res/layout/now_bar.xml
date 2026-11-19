@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/nowBar"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_gravity="bottom"
+    android:layout_margin="12dp"
+    android:background="@drawable/bg_chip"
+    android:elevation="6dp"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingVertical="6dp"
+    android:paddingStart="14dp"
+    android:paddingEnd="4dp"
+    android:visibility="gone">
+
+    <ImageView
+        android:layout_width="22dp"
+        android:layout_height="22dp"
+        android:contentDescription="@null"
+        android:src="@drawable/ic_headphones"
+        android:tint="@color/accent" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:letterSpacing="0.08"
+            android:text="NOW PLAYING"
+            android:textColor="@color/muted"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+        <TextView
+            android:id="@+id/nowTime"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFeatureSettings="tnum"
+            android:textColor="@color/accent"
+            android:textSize="11sp"
+            android:visibility="gone" />
+        <TextView
+            android:id="@+id/nowTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:singleLine="true"
+            android:textColor="@color/fg"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <ImageButton
+        android:id="@+id/nowPlay"
+        style="@style/PlayerIcon"
+        android:contentDescription="Play or pause"
+        android:src="@drawable/ic_pause" />
+
+    <ImageButton
+        android:id="@+id/nowClose"
+        style="@style/PlayerIcon"
+        android:contentDescription="Stop"
+        android:src="@drawable/ic_close" />
+</LinearLayout>
