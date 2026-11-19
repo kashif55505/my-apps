@@ -43,25 +43,26 @@ jobs:
           echo "VERSION_CODE=$N" >> "$GITHUB_ENV"
           echo "VERSION_NAME=1.$N" >> "$GITHUB_ENV"
 
-      - name: Check signing secrets
+      - name: Signing key
         id: keys
         env:
           KS: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          if [ -z "$KS" ]; then
-            echo "::warning::Signing secrets are not set yet: building only to check the code, no release. See the repo README > Signing."
-            echo "signed=false" >> "$GITHUB_OUTPUT"
-          else
+          # Uses the KEYSTORE_* secrets if they are set, otherwise the repo's own key in .signing/.
+          if [ -n "$KS" ]; then
             echo "$KS" | base64 -d > "$RUNNER_TEMP/release.jks"
-            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            cp "$GITHUB_WORKSPACE/.signing/release.jks" "$RUNNER_TEMP/release.jks"
+            cat "$GITHUB_WORKSPACE/.signing/key.env" >> "$GITHUB_ENV"
           fi
+          echo "signed=true" >> "$GITHUB_OUTPUT"
 
       - name: Build APK
         env:
           KEYSTORE_FILE: ${{ steps.keys.outputs.signed == 'true' && format('{0}/release.jks', runner.temp) || '' }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || env.SIGN_PW }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS || env.SIGN_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || env.SIGN_PW }}
         run: |
           chmod +x gradlew
           ./gradlew --no-daemon assembleRelease -PbuildNumber=$VERSION_CODE

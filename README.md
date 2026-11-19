@@ -43,4 +43,4 @@ Windows app: copy `.github/workflows/tezdm.yml` instead and change the folder, b
 
 ## Signing
 
-All APKs are signed with one release key stored in the repository secrets (`KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`). Keep the backup of that key: updates only install over an app signed with the same key.
+All APKs are signed with one release key, kept in this private repository under `.signing/` (used when the `KEYSTORE_*` repository secrets are not set). Keep a backup of `.signing/release.jks`: updates only install over an app signed with the same key. Never make this repository public while the key is in it.
