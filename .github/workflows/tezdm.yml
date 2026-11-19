@@ -94,22 +94,38 @@ jobs:
           V="${{ steps.v.outputs.version }}"
           NOTES="Version $V - $(git log -1 --pretty=%s)"
 
+          # GitHub's API sometimes answers 502/503 for a moment: retry every call
+          retry() { for i in 1 2 3 4 5; do "$@" && return 0; echo "retry $i: $*"; sleep $((i * 10)); done; return 1; }
+          # 0 = release exists, 1 = it does not, anything else = could not tell
+          has_release() {
+            for i in 1 2 3 4 5; do
+              if out=$(gh release view "$1" --json tagName 2>&1); then return 0; fi
+              if echo "$out" | grep -qi "not found"; then return 1; fi
+              echo "retry $i: release view $1 ($out)"; sleep $((i * 10))
+            done
+            return 2
+          }
+
           # 1) Versioned release (history)
           TAG="tezdm-v$V"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "dist/TezDM_Setup_$V.exe" dist/TezDM_Chrome_Extension.zip --clobber
-          else
-            gh release create "$TAG" "dist/TezDM_Setup_$V.exe" dist/TezDM_Chrome_Extension.zip \
+          if has_release "$TAG"; then
+            retry gh release upload "$TAG" "dist/TezDM_Setup_$V.exe" dist/TezDM_Chrome_Extension.zip --clobber
+          elif [ $? -eq 1 ]; then
+            retry gh release create "$TAG" "dist/TezDM_Setup_$V.exe" dist/TezDM_Chrome_Extension.zip \
               --title "TezDM $V" --notes "$NOTES" --latest=false
+          else
+            exit 1
           fi
 
           # 2) Moving "latest" release with fixed file names
           git tag -f tezdm-latest
-          git push -f origin tezdm-latest
-          if gh release view tezdm-latest >/dev/null 2>&1; then
-            gh release edit tezdm-latest --title "TezDM (latest: $V)" --notes "$NOTES" --latest=false
-            gh release upload tezdm-latest dist/TezDM_Setup.exe dist/TezDM_Chrome_Extension.zip --clobber
-          else
-            gh release create tezdm-latest dist/TezDM_Setup.exe dist/TezDM_Chrome_Extension.zip \
+          retry git push -f origin tezdm-latest
+          if has_release tezdm-latest; then
+            retry gh release edit tezdm-latest --title "TezDM (latest: $V)" --notes "$NOTES" --latest=false
+            retry gh release upload tezdm-latest dist/TezDM_Setup.exe dist/TezDM_Chrome_Extension.zip --clobber
+          elif [ $? -eq 1 ]; then
+            retry gh release create tezdm-latest dist/TezDM_Setup.exe dist/TezDM_Chrome_Extension.zip \
               --title "TezDM (latest: $V)" --notes "$NOTES" --latest=false
+          else
+            exit 1
           fi
