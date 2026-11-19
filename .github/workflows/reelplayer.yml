@@ -78,6 +78,16 @@ jobs:
             --title "ReelPlayer ${VERSION_NAME}" --latest=false \
             --notes "$NOTES" \
             --target "$GITHUB_SHA"
+          # Fixed link that always gives the newest APK:
+          # .../releases/download/reelplayer-latest/ReelPlayer.apk
+          cp "../ReelPlayer-v${VERSION_NAME}.apk" ../ReelPlayer.apk
+          if ! gh release view reelplayer-latest >/dev/null 2>&1; then
+            gh release create reelplayer-latest --title "ReelPlayer (latest download link)" \
+              --notes "Always the newest ReelPlayer. Link: https://github.com/${GITHUB_REPOSITORY}/releases/download/reelplayer-latest/ReelPlayer.apk" \
+              --latest=false --target "$GITHUB_SHA"
+          fi
+          gh release upload reelplayer-latest ../ReelPlayer.apk --clobber
+          gh release edit reelplayer-latest --title "ReelPlayer (latest: ${VERSION_NAME})"
 
       - name: Keep the unsigned test build
         if: steps.keys.outputs.signed != 'true'
