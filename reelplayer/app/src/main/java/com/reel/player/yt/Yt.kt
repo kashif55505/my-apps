@@ -43,7 +43,14 @@ object Yt {
     @Synchronized
     fun init() {
         if (ready) return
-        NewPipe.init(NpDownloader)
+        // Trending and results for the phone's own country and language.
+        val loc = java.util.Locale.getDefault()
+        val country = loc.country.ifEmpty { "US" }
+        NewPipe.init(
+            NpDownloader,
+            org.schabi.newpipe.extractor.localization.Localization.fromLocale(loc),
+            org.schabi.newpipe.extractor.localization.ContentCountry(country)
+        )
         ready = true
     }
 
@@ -56,6 +63,44 @@ object Yt {
         val handler = yt.searchQHFactory.fromQuery(q)
         val info = SearchInfo.getInfo(yt, handler)
         return Results(toItems(info.relatedItems), handler, info.nextPage)
+    }
+
+    /** Trending music right now in the user's country. */
+    fun trendingMusic(): List<YtItem> {
+        init()
+        val ex = yt.kioskList.getExtractorById(
+            org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeTrendingMusicLinkHandlerFactory.KIOSK_ID, null)
+        val info = org.schabi.newpipe.extractor.kiosk.KioskInfo.getInfo(ex)
+        return toItems(info.relatedItems)
+    }
+
+    /**
+     * A fresh home page like YouTube's: what is trending now, mixed with new videos about the
+     * things this user searched for recently. Different every time it is opened or refreshed.
+     */
+    fun home(recent: List<String>, fallback: String): Results {
+        init()
+        val topics = (recent.take(3) + fallback).distinct()
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(4)
+        try {
+            val trending = pool.submit<List<YtItem>> { runCatching { trendingMusic() }.getOrDefault(emptyList()) }
+            val searches = topics.map { t -> pool.submit<Results?> { runCatching { search(t) }.getOrNull() } }
+            val lists = ArrayList<List<YtItem>>()
+            lists += trending.get().shuffled()
+            val found = searches.mapNotNull { it.get() }
+            found.forEach { lists += it.items.take(12).shuffled() }
+            // Interleave the lists so the page is a mix, then drop repeats.
+            val mixed = ArrayList<YtItem>()
+            var i = 0
+            while (lists.any { i < it.size }) { lists.forEach { if (i < it.size) mixed += it[i] }; i++ }
+            val seen = HashSet<String>()
+            val items = mixed.filter { seen.add(it.id) }
+            if (items.isEmpty()) throw IllegalStateException("Couldn't load videos. Check your internet and try again.")
+            val more = found.firstOrNull { it.next != null }
+            return Results(items, more?.query ?: yt.searchQHFactory.fromQuery(fallback), more?.next)
+        } finally {
+            pool.shutdown()
+        }
     }
 
     fun more(r: Results): Results {

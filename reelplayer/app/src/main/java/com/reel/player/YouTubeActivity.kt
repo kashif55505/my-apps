@@ -50,6 +50,7 @@ class YouTubeActivity : AppCompatActivity() {
     private var suggestRun: Runnable? = null
     private var settingText = false
     private var currentQuery = ""
+    private lateinit var swipe: androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 
     /** Earlier result pages, so Back returns to them (and finally to the first page) like YouTube. */
     private class Screen(val query: String, val items: List<YtItem>, val page: Yt.Results?, val scroll: Int)
@@ -67,6 +68,15 @@ class YouTubeActivity : AppCompatActivity() {
         val lm = LinearLayoutManager(this)
         results.layoutManager = lm
         results.adapter = Adapter()
+        swipe = findViewById(R.id.swipe)
+        swipe.setColorSchemeColors(ContextCompat.getColor(this, R.color.accent))
+        swipe.setProgressBackgroundColorSchemeColor(ContextCompat.getColor(this, R.color.panel2))
+        // Pull down for new videos on the page you are on.
+        swipe.setOnRefreshListener {
+            val q = currentQuery
+            currentQuery = ""
+            if (q == HOME_QUERY || q.isEmpty()) search(HOME_QUERY, home = true) else search(q, refresh = true)
+        }
         nowBar = NowBar(this, results)
         results.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
@@ -194,26 +204,27 @@ class YouTubeActivity : AppCompatActivity() {
         (results.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(prev.scroll, 0)
     }
 
-    private fun search(q: String, home: Boolean = false) {
-        if (searching) return
+    private fun search(q: String, home: Boolean = false, refresh: Boolean = false) {
+        if (searching) { swipe.isRefreshing = false; return }
         if (!home && q == currentQuery) return
-        if (!home && currentQuery.isNotEmpty()) {
+        if (!home && !refresh && currentQuery.isNotEmpty()) {
             val pos = (results.layoutManager as LinearLayoutManager).findFirstVisibleItemPosition().coerceAtLeast(0)
             backStack += Screen(currentQuery, ArrayList(items), page, pos)
         }
         currentQuery = q
         searching = true
         message.visibility = View.GONE
-        loading.visibility = View.VISIBLE
-        loadingText.text = "Searching…"
+        if (!swipe.isRefreshing) loading.visibility = View.VISIBLE
+        loadingText.text = if (home) "Loading new videos…" else "Searching…"
         io.execute {
             // Fast engine first; the slower yt-dlp search only if that fails.
-            val r = runCatching { Yt.search(q) }
+            val r = runCatching { if (home) Yt.home(history(), HOME_QUERY) else Yt.search(q) }
             val fallback = if (r.isFailure) runCatching { Engine.search(applicationContext, q) } else null
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
                 searching = false
                 loading.visibility = View.GONE
+                swipe.isRefreshing = false
                 val list = r.getOrNull()?.items ?: fallback?.getOrNull()
                 page = r.getOrNull()
                 if (list == null) {
