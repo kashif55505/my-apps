@@ -127,7 +127,7 @@ object AppUpdater {
     }
 
     /** Sidebar → App update. */
-    fun checkAndOffer(a: AppCompatActivity, onChecked: () -> Unit = {}) {
+    fun checkAndOffer(a: AppCompatActivity, direct: Boolean = false, onChecked: () -> Unit = {}) {
         // A public repository needs no token; a private one asks for it once.
         val t = token(a)
         val wait = MaterialAlertDialogBuilder(a).setTitle("App update").setMessage("Checking for a new version…").show()
@@ -139,7 +139,7 @@ object AppUpdater {
                 result.onFailure {
                     if (it is SecurityException) {
                         Toast.makeText(a, "The GitHub token doesn't work any more. Enter a new one.", Toast.LENGTH_LONG).show()
-                        askToken(a) { checkAndOffer(a, onChecked) }
+                        askToken(a) { checkAndOffer(a, direct, onChecked) }
                     } else {
                         Toast.makeText(a, "Couldn't check for updates. Check your internet and try again.", Toast.LENGTH_LONG).show()
                     }
@@ -154,6 +154,9 @@ object AppUpdater {
                             .setMessage("Reel Player ${installedName(a)} is the newest version.\n\n${installInfo(a)}")
                             .setPositiveButton("OK", null)
                             .show()
+                    } else if (direct) {
+                        // The user already said "Update": no second question.
+                        download(a, t, r)
                     } else {
                         val notes = r.notes.lines().firstOrNull { it.isNotBlank() && !it.startsWith("Automatic build") } ?: ""
                         MaterialAlertDialogBuilder(a)

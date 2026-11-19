@@ -127,7 +127,7 @@ class MainActivity : AppCompatActivity() {
                 R.id.navYoutube -> startActivity(Intent(this, YouTubeActivity::class.java))
                 R.id.navDownloader -> startActivity(Intent(this, DownloaderActivity::class.java))
                 R.id.navDownloads -> openDownloadsFolder()
-                R.id.navAppUpdate -> AppUpdater.checkAndOffer(this) { refreshUpdateItem() }
+                R.id.navAppUpdate -> AppUpdater.checkAndOffer(this, direct = true) { refreshUpdateItem() }
             }
             item.itemId == R.id.navVideos
         }
@@ -292,7 +292,7 @@ class MainActivity : AppCompatActivity() {
                 MaterialAlertDialogBuilder(this)
                     .setTitle("New version ${r.name}")
                     .setMessage("A new version of Reel Player is ready. You can also update later from the menu → App update.")
-                    .setPositiveButton("Update") { _, _ -> AppUpdater.checkAndOffer(this) { refreshUpdateItem() } }
+                    .setPositiveButton("Update") { _, _ -> AppUpdater.checkAndOffer(this, direct = true) { refreshUpdateItem() } }
                     .setNegativeButton("Later", null)
                     .show()
             }
