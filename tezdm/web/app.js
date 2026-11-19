@@ -80,8 +80,15 @@ function render() {
   } else b.className = "banner hidden";
 }
 
+let offline = false;
 async function refresh() {
-  try { state = await api("/api/state"); state.tasks = state.tasks || []; render(); } catch (e) {}
+  try {
+    state = await api("/api/state"); state.tasks = state.tasks || [];
+    if (offline) { offline = false; $("#offline").classList.add("hidden"); }
+    render();
+  } catch (e) {
+    if (!offline) { offline = true; $("#offline").classList.remove("hidden"); $("#banner").className = "banner hidden"; }
+  }
 }
 setInterval(refresh, 700);
 refresh();
@@ -171,8 +178,8 @@ $("#aUrl").addEventListener("keydown", e => { if (e.key === "Enter") addGo(); })
 
 // ----- settings -----
 async function pick(input) {
-  const r = await api("/api/pickfolder?initial=" + encodeURIComponent(input.value));
-  if (r.path) input.value = r.path;
+  const p = await folderPicker(input.value.trim());
+  if (p) input.value = p;
 }
 function openSettings() {
   const s = state.settings;

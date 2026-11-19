@@ -118,20 +118,16 @@ func setClipboard(s string) {
 	cmd.Run()
 }
 
-func pickFolder(initial string) string {
-	script := "Add-Type -AssemblyName System.Windows.Forms;" +
-		"$f=New-Object System.Windows.Forms.FolderBrowserDialog;" +
-		"$f.Description='TezDM: choose download folder';" +
-		"$f.SelectedPath=" + psQuote(initial) + ";" +
-		"$o=New-Object System.Windows.Forms.Form;$o.TopMost=$true;" +
-		"if($f.ShowDialog($o) -eq 'OK'){[Console]::OutputEncoding=[Text.Encoding]::UTF8;Write-Output $f.SelectedPath}"
-	cmd := exec.Command("powershell", "-NoProfile", "-STA", "-Command", script)
-	hideWindow(cmd)
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
+// Drive letters that exist (C:\, D:\, ...)
+func drives() []string {
+	var out []string
+	for c := 'A'; c <= 'Z'; c++ {
+		d := string(c) + `:\`
+		if _, err := os.Stat(d); err == nil {
+			out = append(out, d)
+		}
 	}
-	return strings.TrimSpace(string(out))
+	return out
 }
 
 // Kill a process and all its children (yt-dlp.exe runs a child process)

@@ -136,3 +136,19 @@ input[type=checkbox] { width: auto; }
 .done .ic { font-size: 44px; }
 .done h2 { margin: 6px 0 4px; font-size: 17px; }
 .done .p { color: var(--muted); word-break: break-all; user-select: text; }
+
+/* folder browser */
+dialog.fp { width: 560px; max-width: calc(100vw - 30px); }
+.fpbar { display: flex; gap: 6px; padding: 10px 14px 6px; }
+.fpbar .btn { white-space: nowrap; }
+.fppath { flex: 1; }
+.fplist { height: 260px; overflow: auto; margin: 0 14px; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
+.fpitem { display: flex; align-items: center; gap: 8px; padding: 5px 10px; cursor: pointer; border-bottom: 1px solid #f2f4f7; }
+.fpitem:hover { background: var(--blue-l); }
+.fpi { width: 18px; text-align: center; }
+.fpn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fph { margin-left: auto; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
+.fpempty { padding: 16px; color: var(--muted); text-align: center; }
+.fperr { min-height: 16px; padding: 4px 14px 0; font-size: 12px; }
+.fpfoot { display: flex; gap: 8px; align-items: center; padding: 8px 14px 14px; }
+.offline { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #fde7e5; border-bottom: 1px solid #f2b8b2; color: #8e1d12; }

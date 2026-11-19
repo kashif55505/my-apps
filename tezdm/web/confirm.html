@@ -85,10 +85,14 @@
   $("#start").onclick = () => go("start");
   $("#later").onclick = () => go("later");
   $("#cancel").onclick = () => go("cancel");
-  document.addEventListener("keydown", e => { if (e.key === "Enter") go("start"); if (e.key === "Escape") go("cancel"); });
+  document.addEventListener("keydown", e => {
+    if (document.querySelector("dialog[open]")) return;   // typing in the folder browser
+    if (e.key === "Enter") go("start");
+    if (e.key === "Escape") go("cancel");
+  });
   $("#pick").onclick = async () => {
-    const r = await api("/api/pickfolder?initial=" + encodeURIComponent($("#dir").value));
-    if (r.path) $("#dir").value = r.path;
+    const p = await folderPicker($("#dir").value.trim());
+    if (p) $("#dir").value = p;
   };
   window.focus();
 </script>

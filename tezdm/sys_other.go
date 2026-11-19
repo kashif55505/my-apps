@@ -34,7 +34,7 @@ func openFolder(p string)                { os.MkdirAll(p, 0o755); openURL(p) }
 func getAutostart() bool                 { return false }
 func setAutostart(on bool)               {}
 func setClipboard(s string)              {}
-func pickFolder(initial string) string   { return "" }
+func drives() []string                   { return []string{"/"} }
 
 func killTree(cmd *exec.Cmd) error {
 	if cmd.Process == nil {

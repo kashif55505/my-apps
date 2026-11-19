@@ -1,4 +1,5 @@
 // Shared UI helpers
+const OFFLINE_MSG = "TezDM is not running (it was closed or is being updated). Start TezDM from the desktop icon or the Start menu, then try again.";
 async function api(path, body) {
   const opt = { headers: { "X-TezDM": "1" } };
   if (body !== undefined) {
@@ -6,7 +7,13 @@ async function api(path, body) {
     opt.headers["Content-Type"] = "application/json";
     opt.body = JSON.stringify(body);
   }
-  const r = await fetch(path, opt);
+  let r;
+  try {
+    r = await fetch(path, opt);
+  } catch (e) {
+    // the TezDM program is not running (closed, or being updated)
+    throw new Error(OFFLINE_MSG);
+  }
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
   return j;
@@ -60,4 +67,79 @@ function statusText(t) {
     case "queued": return "Queue";
     default: return t.size > 0 ? t.progress.toFixed(2) + "%" : (t.done ? size(t.done) : "Connecting...");
   }
+}
+
+// ---------- Folder browser (inside TezDM's own window) ----------
+function folderPicker(initial) {
+  return new Promise((resolve) => {
+    const d = document.createElement("dialog");
+    d.className = "fp";
+    d.innerHTML = `
+      <div class="dlgh">Choose a folder</div>
+      <div class="fpbar">
+        <button class="btn" data-a="up" title="Up one level">⬆ Up</button>
+        <button class="btn" data-a="home" title="Drives and common folders">🖥 This PC</button>
+        <input class="fppath" spellcheck="false" placeholder="Type a folder path and press Enter">
+      </div>
+      <div class="fplist"></div>
+      <div class="fperr bad"></div>
+      <div class="fpfoot">
+        <button class="btn" data-a="new">📁 New folder</button>
+        <span class="grow"></span>
+        <button class="btn primary" data-a="ok">Select this folder</button>
+        <button class="btn" data-a="cancel">Cancel</button>
+      </div>`;
+    document.body.appendChild(d);
+    const list = d.querySelector(".fplist"), input = d.querySelector(".fppath"), err = d.querySelector(".fperr");
+    const okBtn = d.querySelector('[data-a="ok"]');
+    let cur = { path: "", parent: "" };
+
+    function done(v) { d.close(); d.remove(); resolve(v); }
+    function row(icon, name, path, hint) {
+      const el = document.createElement("div");
+      el.className = "fpitem";
+      el.innerHTML = `<span class="fpi">${icon}</span><span class="fpn">${esc(name)}</span>${hint ? `<span class="fph">${esc(hint)}</span>` : ""}`;
+      el.title = path;
+      el.onclick = () => go(path);
+      list.appendChild(el);
+    }
+    async function go(path) {
+      err.textContent = "";
+      try {
+        const r = await api("/api/dirs?path=" + encodeURIComponent(path || ""));
+        cur = r;
+        input.value = r.path;
+        list.innerHTML = "";
+        okBtn.disabled = !r.path;
+        if (!r.path) {
+          (r.places || []).forEach(p => row("⭐", p.name, p.path, p.path));
+          (r.drives || []).forEach(dr => row("💽", dr, dr, "Drive"));
+          return;
+        }
+        if (!r.dirs.length) list.innerHTML = '<div class="fpempty">No folders here. Click "Select this folder" to use it.</div>';
+        r.dirs.forEach(n => row("📁", n, r.path.replace(/[\\/]$/, "") + (r.path.includes("\\") ? "\\" : "/") + n));
+        list.scrollTop = 0;
+      } catch (e) { err.textContent = e.message; }
+    }
+    d.addEventListener("click", async (e) => {
+      const a = e.target.closest("[data-a]"); if (!a) return;
+      switch (a.dataset.a) {
+        case "up": go(cur.path ? cur.parent : ""); break;
+        case "home": go(""); break;
+        case "cancel": done(null); break;
+        case "ok": if (cur.path) done(cur.path); break;
+        case "new": {
+          if (!cur.path) { err.textContent = "Open a drive or folder first."; return; }
+          const name = prompt("Name of the new folder:", "New folder");
+          if (!name) return;
+          try { const r = await api("/api/mkdir", { path: cur.path, name }); go(r.path); }
+          catch (ex) { err.textContent = ex.message; }
+        }
+      }
+    });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(input.value.trim()); } });
+    d.addEventListener("cancel", (e) => { e.preventDefault(); done(null); });
+    d.showModal();
+    go(initial || "");
+  });
 }

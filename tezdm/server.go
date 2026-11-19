@@ -5,6 +5,8 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -101,8 +103,8 @@ func (s *Server) routes() http.Handler {
 			return
 		}
 		s.extSeen(r)
-		if r.URL.Query().Get("ext") == "1" {
-			go s.setupExtension()
+		if r.URL.Query().Get("ext") == "1" && !s.m.Settings().ExtSeen {
+			go s.setupExtension() // first install: help set up the extension
 		} else {
 			go s.openMain()
 		}
@@ -317,8 +319,57 @@ func (s *Server) routes() http.Handler {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 
-	api("/api/pickfolder", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]string{"path": pickFolder(r.URL.Query().Get("initial"))})
+	// Folder browser shown inside TezDM's own window (no separate dialog that can hide behind Chrome)
+	api("/api/dirs", func(w http.ResponseWriter, r *http.Request) {
+		p := strings.TrimSpace(r.URL.Query().Get("path"))
+		if p == "" {
+			writeJSON(w, 200, map[string]any{"path": "", "places": userPlaces(), "drives": drives()})
+			return
+		}
+		p = filepath.Clean(p)
+		entries, err := os.ReadDir(p)
+		if err != nil {
+			writeJSON(w, 400, map[string]string{"error": "Cannot open this folder: " + err.Error()})
+			return
+		}
+		dirs := []string{}
+		for _, e := range entries {
+			name := e.Name()
+			if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "$") || name == "System Volume Information" {
+				continue
+			}
+			isDir := e.IsDir()
+			if !isDir && e.Type()&os.ModeSymlink != 0 {
+				if st, err := os.Stat(filepath.Join(p, name)); err == nil {
+					isDir = st.IsDir()
+				}
+			}
+			if isDir {
+				dirs = append(dirs, name)
+			}
+		}
+		sort.Slice(dirs, func(a, b int) bool { return strings.ToLower(dirs[a]) < strings.ToLower(dirs[b]) })
+		parent := filepath.Dir(p)
+		if parent == p {
+			parent = "" // drive root: "up" goes to the list of places and drives
+		}
+		writeJSON(w, 200, map[string]any{"path": p, "parent": parent, "dirs": dirs})
+	})
+
+	api("/api/mkdir", func(w http.ResponseWriter, r *http.Request) {
+		var q struct{ Path, Name string }
+		json.NewDecoder(r.Body).Decode(&q)
+		name := sanitize(strings.TrimSpace(q.Name))
+		if q.Path == "" || name == "" {
+			writeJSON(w, 400, map[string]string{"error": "Open a folder first, then type a name"})
+			return
+		}
+		np := filepath.Join(filepath.Clean(q.Path), name)
+		if err := os.Mkdir(np, 0o755); err != nil {
+			writeJSON(w, 400, map[string]string{"error": "Could not create the folder: " + err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]string{"path": np})
 	})
 
 	api("/api/openfolder", func(w http.ResponseWriter, r *http.Request) {
@@ -376,4 +427,25 @@ func (s *Server) addPending(p *Pending, filename, dir string, start bool) *Task 
 		go s.openProgress(t.ID)
 	}
 	return t
+}
+
+type place struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+// Common folders shown at the top of the folder browser
+func userPlaces() []place {
+	home, _ := os.UserHomeDir()
+	var out []place
+	for _, n := range []string{"Desktop", "Downloads", "Documents", "Videos", "Music", "Pictures"} {
+		p := filepath.Join(home, n)
+		if st, err := os.Stat(p); err == nil && st.IsDir() {
+			out = append(out, place{n, p})
+		}
+	}
+	if def := defaultDownloadDir(); exists(def) {
+		out = append([]place{{"TezDM downloads", def}}, out...)
+	}
+	return append(out, place{"Home", home})
 }

@@ -62,6 +62,12 @@ Section "Install"
   CreateShortCut "$SMPROGRAMS\TezDM\Uninstall TezDM.lnk" "$INSTDIR\Uninstall.exe"
   CreateShortCut "$DESKTOP\TezDM.lnk" "$INSTDIR\TezDM.exe" "" "$INSTDIR\icon.ico"
 
+  ; "Start TezDM" links (tezdm://start) open the app
+  WriteRegStr HKCU "Software\Classes\tezdm" "" "URL:TezDM"
+  WriteRegStr HKCU "Software\Classes\tezdm" "URL Protocol" ""
+  WriteRegStr HKCU "Software\Classes\tezdm\DefaultIcon" "" "$INSTDIR\icon.ico"
+  WriteRegStr HKCU "Software\Classes\tezdm\shell\open\command" "" '"$INSTDIR\TezDM.exe" --minimized "%1"'
+
   ; Start in the background with Windows
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "TezDM" '"$INSTDIR\TezDM.exe" --minimized'
 
@@ -75,6 +81,8 @@ Section "Install"
   WriteRegDWORD HKCU "${UNINSTKEY}" "NoModify" 1
   WriteRegDWORD HKCU "${UNINSTKEY}" "NoRepair" 1
   WriteRegDWORD HKCU "${UNINSTKEY}" "EstimatedSize" 8000
+  ; Always start TezDM again after installing or updating, so the extension and open windows keep working
+  Exec '"$INSTDIR\TezDM.exe" --minimized'
 SectionEnd
 
 Section "Uninstall"
@@ -88,6 +96,7 @@ Section "Uninstall"
   Delete "$DESKTOP\TezDM.lnk"
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "TezDM"
   DeleteRegKey HKCU "${UNINSTKEY}"
+  DeleteRegKey HKCU "Software\Classes\tezdm"
   ; App data (video tools, extension, list). Downloaded files are kept.
   RMDir /r "$LOCALAPPDATA\TezDM"
 SectionEnd

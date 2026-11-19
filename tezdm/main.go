@@ -106,7 +106,7 @@ func main() {
 	srv := &Server{m: m}
 	go func() {
 		time.Sleep(300 * time.Millisecond)
-		if setupExt {
+		if setupExt && !m.Settings().ExtSeen {
 			srv.setupExtension()
 		}
 		if !minimized {
