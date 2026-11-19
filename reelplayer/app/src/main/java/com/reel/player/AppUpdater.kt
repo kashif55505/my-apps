@@ -48,9 +48,9 @@ object AppUpdater {
     } catch (_: Exception) { "" }
 
     /** Newest ReelPlayer release, or throws. Blocking. */
-    fun latest(token: String): Release? {
+    fun latest(token: String?): Release? {
         val conn = URL("https://api.github.com/repos/$REPO/releases?per_page=50").openConnection() as HttpURLConnection
-        conn.setRequestProperty("Authorization", "Bearer $token")
+        if (token != null) conn.setRequestProperty("Authorization", "Bearer $token")
         conn.setRequestProperty("Accept", "application/vnd.github+json")
         conn.connectTimeout = 15000
         conn.readTimeout = 20000
@@ -81,7 +81,7 @@ object AppUpdater {
 
     /** Quiet check when the app opens (at most every 6 hours). Calls back with a newer release or null. */
     fun checkQuietly(a: AppCompatActivity, onResult: (Release?) -> Unit) {
-        val t = token(a) ?: return onResult(null)
+        val t = token(a)
         val last = sp(a).getLong("updCheck", 0L)
         val cached = sp(a).getInt("updAvail", 0)
         if (System.currentTimeMillis() - last < 6 * 3600_000L) {
@@ -97,7 +97,8 @@ object AppUpdater {
 
     /** Sidebar → App update. */
     fun checkAndOffer(a: AppCompatActivity, onChecked: () -> Unit = {}) {
-        val t = token(a) ?: return askToken(a) { checkAndOffer(a, onChecked) }
+        // A public repository needs no token; a private one asks for it once.
+        val t = token(a)
         val wait = MaterialAlertDialogBuilder(a).setTitle("App update").setMessage("Checking for a new version…").show()
         io.execute {
             val result = runCatching { latest(t) }
@@ -170,7 +171,7 @@ object AppUpdater {
 
     // ------------------------------------------------------------------ download and install
 
-    private fun download(a: AppCompatActivity, token: String, r: Release) {
+    private fun download(a: AppCompatActivity, token: String?, r: Release) {
         val view = LayoutInflater.from(a).inflate(R.layout.dialog_update, null)
         val bar = view.findViewById<LinearProgressIndicator>(R.id.bar)
         val text = view.findViewById<TextView>(R.id.text)
@@ -187,7 +188,7 @@ object AppUpdater {
                 // The asset link redirects to a storage server; that server must not get the token.
                 val first = URL(r.apkUrl).openConnection() as HttpURLConnection
                 first.instanceFollowRedirects = false
-                first.setRequestProperty("Authorization", "Bearer $token")
+                if (token != null) first.setRequestProperty("Authorization", "Bearer $token")
                 first.setRequestProperty("Accept", "application/octet-stream")
                 val conn = if (first.responseCode in 300..399) {
                     val loc = first.getHeaderField("Location") ?: error("No download link")

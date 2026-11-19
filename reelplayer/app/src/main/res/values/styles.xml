@@ -7,4 +7,17 @@
         <item name="android:scaleType">center</item>
         <item name="android:tint">#FFFFFFFF</item>
     </style>
+    <style name="YtAction">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
+        <item name="android:gravity">center</item>
+        <item name="android:paddingVertical">8dp</item>
+        <item name="android:drawablePadding">4dp</item>
+        <item name="android:drawableTint">@color/fg</item>
+        <item name="android:textColor">@color/fg</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:maxLines">1</item>
+    </style>
 </resources>

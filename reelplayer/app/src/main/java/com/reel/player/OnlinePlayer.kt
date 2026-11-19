@@ -58,6 +58,26 @@ object OnlinePlayer {
         return true
     }
 
+    /** Plays a YouTube video found with NewPipe at the chosen picture height. */
+    fun playYt(ctx: Context, info: org.schabi.newpipe.extractor.stream.StreamInfo, height: Int, startMs: Long = 0L): Boolean {
+        val source = com.reel.player.yt.Yt.mediaSource(info, height) ?: return false
+        val player = PlayerHolder.get(ctx)
+        PlayerHolder.uris = arrayListOf(info.url)
+        PlayerHolder.names = arrayListOf(info.name)
+        PlayerHolder.paths = arrayListOf("")
+        player.setPlaybackSpeed(1f)
+        player.setMediaSource(source, startMs)
+        player.prepare()
+        player.playWhenReady = true
+        return true
+    }
+
+    /** True when the shared player is playing something from the internet (not a file on the phone). */
+    fun isOnline(): Boolean {
+        val id = PlayerHolder.peek()?.currentMediaItem?.mediaId ?: return false
+        return id.startsWith("http") && PlayerHolder.paths.firstOrNull().isNullOrEmpty()
+    }
+
     /** "1.2M views" */
     fun views(n: Long): String = when {
         n >= 1_000_000_000L -> String.format(Locale.US, "%.1fB views", n / 1e9)

@@ -203,6 +203,22 @@ class PlayerActivity : AppCompatActivity() {
 
         player.repeatMode = Prefs.getInt(this, "repeat", Player.REPEAT_MODE_OFF)
 
+        // Notification or "Now playing" tapped while a YouTube video plays: go back to its own page.
+        if (!intent.hasExtra(EXTRA_URIS) && intent.action != Intent.ACTION_VIEW &&
+            !intent.getBooleanExtra(EXTRA_ATTACH, false) && OnlinePlayer.isOnline()
+        ) {
+            attachOnly = true
+            val id = player.currentMediaItem?.mediaId ?: ""
+            startActivity(
+                Intent(this, YtVideoActivity::class.java)
+                    .putExtra(YtVideoActivity.EXTRA_URL, id)
+                    .putExtra(YtVideoActivity.EXTRA_TITLE, player.currentMediaItem?.mediaMetadata?.title?.toString())
+                    .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            )
+            finish()
+            return
+        }
+
         if (!loadFromIntent(intent)) { finish(); return }
 
         // Start the service directly too, so it outlives this screen when background play is on.

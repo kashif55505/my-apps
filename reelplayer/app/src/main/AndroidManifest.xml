@@ -73,6 +73,7 @@
         <activity
             android:name=".YtVideoActivity"
             android:exported="false"
+            android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"
             android:theme="@style/Theme.Reel" />
 

@@ -22,6 +22,8 @@ import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.reel.player.yt.Yt
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /** Search YouTube, play inside the app, or pick a quality and download. */
@@ -33,8 +35,10 @@ class YouTubeActivity : AppCompatActivity() {
     private lateinit var loadingText: TextView
     private lateinit var message: TextView
     private val io = Executors.newSingleThreadExecutor()
-    private var items: List<YtItem> = emptyList()
+    private val items = ArrayList<YtItem>()
+    private var page: Yt.Results? = null
     private var searching = false
+    private var loadingMore = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,8 +49,14 @@ class YouTubeActivity : AppCompatActivity() {
         loading = findViewById(R.id.loading)
         loadingText = findViewById(R.id.loadingText)
         message = findViewById(R.id.message)
-        results.layoutManager = LinearLayoutManager(this)
+        val lm = LinearLayoutManager(this)
+        results.layoutManager = lm
         results.adapter = Adapter()
+        results.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
+                if (dy > 0 && lm.findLastVisibleItemPosition() >= items.size - 4) loadMore()
+            }
+        })
 
         findViewById<View>(R.id.btnSearch).setOnClickListener { go() }
         query.setOnEditorActionListener { _, id, _ ->
@@ -80,22 +90,48 @@ class YouTubeActivity : AppCompatActivity() {
         searching = true
         message.visibility = View.GONE
         loading.visibility = View.VISIBLE
-        loadingText.text = if (items.isEmpty()) "Loading videos… The first time can take up to a minute." else "Searching…"
+        loadingText.text = "Searching…"
         io.execute {
-            val r = runCatching { Engine.search(applicationContext, q) }
+            // Fast engine first; the slower yt-dlp search only if that fails.
+            val r = runCatching { Yt.search(q) }
+            val fallback = if (r.isFailure) runCatching { Engine.search(applicationContext, q) } else null
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
                 searching = false
                 loading.visibility = View.GONE
-                r.onSuccess {
-                    items = it
-                    results.adapter?.notifyDataSetChanged()
-                    results.scrollToPosition(0)
-                    if (it.isEmpty()) { message.text = "No videos found for “$q”"; message.visibility = View.VISIBLE }
-                }
-                r.onFailure {
-                    message.text = Engine.humanize(it) + "\n\nTap Search to try again."
+                val list = r.getOrNull()?.items ?: fallback?.getOrNull()
+                page = r.getOrNull()
+                if (list == null) {
+                    val e = fallback?.exceptionOrNull() ?: r.exceptionOrNull()
+                    message.text = (e?.let { Engine.humanize(it) } ?: "Search failed") + "\n\nTap Search to try again."
                     message.visibility = View.VISIBLE
+                    return@runOnUiThread
+                }
+                items.clear()
+                items += list
+                results.adapter?.notifyDataSetChanged()
+                results.scrollToPosition(0)
+                if (list.isEmpty()) { message.text = "No videos found for “$q”"; message.visibility = View.VISIBLE }
+            }
+        }
+    }
+
+    private fun loadMore() {
+        val p = page ?: return
+        if (loadingMore || searching || p.next == null) return
+        loadingMore = true
+        io.execute {
+            val r = runCatching { Yt.more(p) }
+            runOnUiThread {
+                loadingMore = false
+                if (isDestroyed) return@runOnUiThread
+                r.onSuccess {
+                    page = it
+                    val start = items.size
+                    val seen = items.map { x -> x.id }.toHashSet()
+                    val add = it.items.filter { x -> x.id !in seen }
+                    items += add
+                    results.adapter?.notifyItemRangeInserted(start, add.size)
                 }
             }
         }
@@ -139,31 +175,34 @@ class YouTubeActivity : AppCompatActivity() {
         }
 
         /** Quality list in a dialog, straight from the search results. */
-        fun pickQuality(a: AppCompatActivity, io: java.util.concurrent.ExecutorService, url: String, title: String) {
+        fun pickQuality(a: AppCompatActivity, io: ExecutorService, url: String, title: String) {
             val dialog = MaterialAlertDialogBuilder(a)
                 .setTitle("Download")
                 .setMessage("Getting qualities…")
                 .setNegativeButton("Cancel", null)
                 .show()
             io.execute {
-                val r = runCatching { Engine.fetch(a.applicationContext, url) }
+                val choices = runCatching { Yt.downloadChoices(Yt.info(url)) }.getOrNull()
+                val meta = if (choices == null) runCatching { Engine.fetch(a.applicationContext, url) } else null
                 a.runOnUiThread {
                     if (a.isDestroyed || !dialog.isShowing) return@runOnUiThread
                     dialog.dismiss()
-                    r.onFailure { Toast.makeText(a, Engine.humanize(it), Toast.LENGTH_LONG).show() }
-                    r.onSuccess { meta ->
-                        val labels = meta.choices.map { "${it.label}   ·   ${it.detail}" }.toTypedArray()
-                        MaterialAlertDialogBuilder(a)
-                            .setTitle(meta.title)
-                            .setItems(labels) { _, which -> startDownload(a, meta, meta.choices[which]) }
-                            .setNegativeButton("Cancel", null)
-                            .show()
+                    val list = choices ?: meta?.getOrNull()?.choices
+                    if (list == null) {
+                        Toast.makeText(a, meta?.exceptionOrNull()?.let { Engine.humanize(it) } ?: "Couldn't get qualities", Toast.LENGTH_LONG).show()
+                        return@runOnUiThread
                     }
+                    val labels = list.map { "${it.label}   ·   ${it.detail}" }.toTypedArray()
+                    MaterialAlertDialogBuilder(a)
+                        .setTitle(title)
+                        .setItems(labels) { _, which -> startDownload(a, url, title, list[which]) }
+                        .setNegativeButton("Cancel", null)
+                        .show()
                 }
             }
         }
 
-        fun startDownload(a: Activity, meta: VideoMeta, c: Choice) {
+        fun startDownload(a: Activity, url: String, title: String, c: Choice) {
             if (Build.VERSION.SDK_INT < 29 &&
                 ContextCompat.checkSelfPermission(a, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
             ) {
@@ -171,7 +210,7 @@ class YouTubeActivity : AppCompatActivity() {
                 Toast.makeText(a, "Allow storage, then tap the quality again", Toast.LENGTH_LONG).show()
                 return
             }
-            DownloadService.enqueue(a, meta.url, meta.title, c)
+            DownloadService.enqueue(a, url, title, c)
             Toast.makeText(a, "Downloading ${c.label} · see progress in notifications", Toast.LENGTH_SHORT).show()
         }
     }

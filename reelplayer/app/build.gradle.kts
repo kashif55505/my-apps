@@ -67,6 +67,9 @@ dependencies {
     implementation("androidx.media3:media3-session:1.4.1")
     implementation("androidx.media3:media3-extractor:1.4.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.4.1")
+    implementation("androidx.media3:media3-exoplayer-dash:1.4.1")
+    // Fast YouTube search and streams (the engine of the NewPipe app)
+    implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.27.1")
     // FFmpeg audio decoders (AC3, E-AC3, DTS, TrueHD, FLAC, ALAC…) for MKV/AVI files whose sound
     // the phone can't decode itself. Same build the Jellyfin app uses with Media3 1.4.1.
     implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.3.1+2")
