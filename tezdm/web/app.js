@@ -86,6 +86,7 @@ async function refresh() {
     state = await api("/api/state"); state.tasks = state.tasks || [];
     if (offline) { offline = false; $("#offline").classList.add("hidden"); }
     render();
+    renderUpdate();
   } catch (e) {
     if (!offline) { offline = true; $("#offline").classList.remove("hidden"); $("#banner").className = "banner hidden"; }
   }
@@ -201,6 +202,43 @@ $("#sSave").onclick = async () => {
 };
 $("#mFile").onclick = () => api("/api/openfolder", {});
 $("#mHelp").onclick = () => alert("TezDM " + (state.version || "") + "\n\n• Every Chrome download is captured by TezDM automatically\n• Click the Download button on a video, then choose a quality\n• Double-click a download: progress window\n• TezDM keeps running in the background when you close this window");
+
+// ----- updates -----
+let firstVersion = null;
+function renderUpdate() {
+  if (firstVersion === null && state.version) firstVersion = state.version;
+  if (firstVersion && state.version && state.version !== firstVersion) {
+    const u = $("#updated");
+    u.classList.remove("hidden");
+    u.innerHTML = `✔ TezDM was updated to version <b>${esc(state.version)}</b>.`;
+  }
+  $("#updDot").style.display = state.updateAvailable ? "" : "none";
+  $("#updLbl").textContent = state.updateAvailable ? "Update!" : "Update";
+  $("#bUpdate").classList.toggle("warn", !!state.updateAvailable);
+  if (!$("#dUpd").open) return;
+  $("#uCur").textContent = state.version || "-";
+  $("#uLatest").textContent = state.latest ? state.latest + (state.updateAvailable ? "  (new!)" : "  (you have it)") : "Not checked yet";
+  const msg = {
+    downloading: state.updateDetail || "Downloading the update...",
+    installing: state.updateDetail,
+    error: state.updateDetail,
+  }[state.updateStatus] || (state.updateAvailable ? "A new version is available." : (state.latest ? "TezDM is up to date." : ""));
+  const m = $("#uMsg");
+  m.textContent = msg;
+  m.className = state.updateStatus === "error" ? "bad" : (state.updateAvailable || state.updateStatus ? "" : "ok");
+  $("#uGo").disabled = state.updateStatus === "downloading" || state.updateStatus === "installing";
+}
+$("#bUpdate").onclick = () => { $("#dUpd").showModal(); renderUpdate(); api("/api/update/check", {}).catch(() => {}); };
+$("#uClose").onclick = () => $("#dUpd").close();
+$("#uCheck").onclick = async () => {
+  await api("/api/update/check", {}).catch(e => alert(e.message));
+  $("#uMsg").textContent = "Checking... (takes up to a minute; needs Chrome open and signed in to GitHub)";
+  $("#uMsg").className = "";
+};
+$("#uPage").onclick = () => window.open(state.releasePage, "_blank");
+$("#uGo").onclick = async () => {
+  try { await api("/api/update/start", {}); renderUpdate(); } catch (e) { alert(e.message); }
+};
 
 // ----- extension & exit -----
 async function extSetup() { await api("/api/ext-setup", {}); }

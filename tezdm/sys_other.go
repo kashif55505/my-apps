@@ -42,3 +42,11 @@ func killTree(cmd *exec.Cmd) error {
 	}
 	return cmd.Process.Kill()
 }
+
+func startDetached(path string, args ...string) error {
+	cmd := exec.Command(path, args...)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}

@@ -23,6 +23,8 @@ async function appAlive() {
     clearTimeout(t);
     if (!r.ok) return false;
     const j = await r.json().catch(() => ({}));
+    if (j.release_page) chrome.storage.local.set({ releasePage: j.release_page });
+    if (j.check_update) checkLatest(j.release_page);
     const mine = chrome.runtime.getManifest().version;
     if (j.ext_version && j.ext_version !== mine) {
       const { reloadedFor } = await chrome.storage.local.get("reloadedFor");
@@ -42,9 +44,9 @@ async function cookieHeader(url) {
   } catch (e) { return ""; }
 }
 
-async function requestBody({ url, filename, referer, kind = "file", format = "" }) {
+async function requestBody({ url, filename, referer, kind = "file", format = "", origUrl = "" }) {
   return {
-    url, filename: filename || "", referer: referer || "",
+    url, origUrl, filename: filename || "", referer: referer || "",
     cookies: await cookieHeader(url),
     userAgent: navigator.userAgent, kind, format
   };
@@ -94,7 +96,7 @@ chrome.downloads.onCreated.addListener(async (item) => {
   try { await chrome.downloads.erase({ id: item.id }); } catch (e) {}
 
   try {
-    await sendToApp({ url, filename: baseName(item.filename), referer: item.referrer, kind: "file" });
+    await sendToApp({ url, origUrl: item.url, filename: baseName(item.filename), referer: item.referrer, kind: "file" });
   } catch (e) {
     skipOnce.add(url);
     chrome.downloads.download({ url });
@@ -210,14 +212,37 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   return true;
 });
 
-// ---------- 4) Keep the app informed that the extension is installed ----------
-function setupAlarm() { chrome.alarms.create("tezdm-ping", { periodInMinutes: 1 }); }
-chrome.alarms.onAlarm.addListener((a) => { if (a.name === "tezdm-ping") appAlive(); });
+// ---------- 4) TezDM updates: read the newest version from the release page ----------
+// The repository is private: this works because the request carries the user's GitHub sign-in.
+async function checkLatest(page) {
+  try {
+    page = page || (await chrome.storage.local.get("releasePage")).releasePage;
+    if (!page) return;
+    const r = await fetch(page, { credentials: "include", cache: "no-store" });
+    if (!r.ok) return;
+    const m = (await r.text()).match(/TezDM \(latest: ([0-9][0-9.]*)\)/);
+    if (!m) return;
+    await fetch(APP + "/update-info", {
+      method: "POST", headers: { "Content-Type": "application/json", ...EXT_HDR },
+      body: JSON.stringify({ latest: m[1] })
+    });
+  } catch (e) {}
+}
+
+// ---------- 5) Keep the app informed that the extension is installed ----------
+function setupAlarm() {
+  chrome.alarms.create("tezdm-ping", { periodInMinutes: 1 });
+  chrome.alarms.create("tezdm-update", { periodInMinutes: 180 });
+}
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name === "tezdm-ping") appAlive();
+  if (a.name === "tezdm-update") checkLatest();
+});
 chrome.runtime.onStartup.addListener(() => { setupAlarm(); appAlive(); });
 setupAlarm();
-appAlive();
+appAlive().then(() => checkLatest());
 
-// ---------- 5) Right-click menu ----------
+// ---------- 6) Right-click menu ----------
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({ id: "link", title: "Download with TezDM", contexts: ["link"] });

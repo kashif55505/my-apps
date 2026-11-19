@@ -142,3 +142,20 @@ func killTree(cmd *exec.Cmd) error {
 	}
 	return nil
 }
+
+// Start a program that keeps running after TezDM exits (used for the update installer)
+func startDetached(path string, args ...string) error {
+	const detached, newGroup, breakaway = 0x00000008, 0x00000200, 0x01000000
+	cmd := exec.Command(path, args...)
+	cmd.Dir = filepath.Dir(path)
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: detached | newGroup | breakaway}
+	if err := cmd.Start(); err != nil {
+		cmd = exec.Command(path, args...) // breakaway not allowed: start normally
+		cmd.Dir = filepath.Dir(path)
+		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: detached | newGroup}
+		if err := cmd.Start(); err != nil {
+			return err
+		}
+	}
+	return cmd.Process.Release()
+}

@@ -82,6 +82,8 @@ func looksLikeErrorPage(resp *http.Response, filename string) bool {
 	return ext != ".html" && ext != ".htm" && ext != ".php" && ext != ".asp" && ext != ".aspx" && ext != ""
 }
 
+var errBadInstaller = errors.New("not a valid installer")
+
 var errWebPage = errors.New("the website sent a web page instead of the file (the link may have expired or need you to be signed in). Please start the download again from the website")
 
 type Seg struct {
@@ -109,6 +111,7 @@ type Task struct {
 	Format    string            `json:"format,omitempty"`    // video quality: "", "1080", "audio"...
 	Validator string            `json:"validator,omitempty"` // ETag / Last-Modified: detects a file that changed on the server
 	Encoding  string            `json:"encoding,omitempty"`  // gzip etc. when the server compresses the download
+	Update    bool              `json:"update,omitempty"`    // TezDM's own update: run the installer when done
 	LastTry   int64             `json:"last_try,omitempty"`
 
 	mu       sync.Mutex
@@ -343,6 +346,12 @@ func (t *Task) run(ctx context.Context, m *Manager) {
 		t.Error = err.Error()
 	default:
 		t.Status = "completed"
+		if t.Update && t.Filename != "" {
+			go installUpdate(filepath.Join(t.Dir, t.Filename))
+		}
+	}
+	if t.Update && t.Status == "error" {
+		upd.set("error", "Downloading the update failed: "+t.Error)
 	}
 	t.running = false
 	t.speed = 0
@@ -870,6 +879,7 @@ type Pending struct {
 	UA       string `json:"userAgent"`
 	Format   string `json:"format"`
 	Dir      string `json:"dir"`
+	OrigURL  string `json:"origUrl"` // the link before redirects (from Chrome)
 }
 
 func (p *Pending) headers() map[string]string {
