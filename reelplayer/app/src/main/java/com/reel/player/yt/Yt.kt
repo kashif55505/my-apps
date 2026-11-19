@@ -80,6 +80,12 @@ object Yt {
             )
         }
 
+    /** What YouTube suggests while typing. */
+    fun suggestions(q: String): List<String> {
+        init()
+        return yt.suggestionExtractor.suggestionList(q)
+    }
+
     fun info(url: String): StreamInfo {
         init()
         return StreamInfo.getInfo(yt, url)

@@ -11,7 +11,11 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import android.text.Editable
+import android.text.TextWatcher
+import android.widget.ArrayAdapter
 import android.widget.EditText
+import androidx.appcompat.widget.ListPopupWindow
 import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
@@ -40,6 +44,11 @@ class YouTubeActivity : AppCompatActivity() {
     private var searching = false
     private var loadingMore = false
     private lateinit var nowBar: NowBar
+    private lateinit var popup: ListPopupWindow
+    private val suggestIo = Executors.newSingleThreadExecutor()
+    private val ui = android.os.Handler(android.os.Looper.getMainLooper())
+    private var suggestRun: Runnable? = null
+    private var settingText = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,13 +69,16 @@ class YouTubeActivity : AppCompatActivity() {
             }
         })
 
+        setupSuggestions()
         findViewById<View>(R.id.btnSearch).setOnClickListener { go() }
         query.setOnEditorActionListener { _, id, _ ->
             if (id == EditorInfo.IME_ACTION_SEARCH || id == EditorInfo.IME_ACTION_DONE) { go(); true } else false
         }
 
         val last = getSharedPreferences("reel", MODE_PRIVATE).getString("ytQuery", null)
+        settingText = true
         query.setText(last ?: "")
+        settingText = false
         search(last ?: "new songs")
     }
 
@@ -83,6 +95,7 @@ class YouTubeActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         io.shutdown()
+        suggestIo.shutdown()
     }
 
     private fun go() {
@@ -94,7 +107,65 @@ class YouTubeActivity : AppCompatActivity() {
         val link = Regex("https?://\\S+").find(text)?.value
         if (link != null) { openVideo(this, link, null, null, null); return }
         getSharedPreferences("reel", MODE_PRIVATE).edit().putString("ytQuery", text).apply()
+        addHistory(text)
+        popup.dismiss()
         search(text)
+    }
+
+    // ------------------------------------------------------------------ suggestions while typing
+
+    private fun history(): List<String> =
+        getSharedPreferences("reel", MODE_PRIVATE).getString("ytHistory", "")!!.split('\n').filter { it.isNotBlank() }
+
+    private fun addHistory(q: String) {
+        val list = (listOf(q) + history().filter { !it.equals(q, true) }).take(15)
+        getSharedPreferences("reel", MODE_PRIVATE).edit().putString("ytHistory", list.joinToString("\n")).apply()
+    }
+
+    private fun setupSuggestions() {
+        popup = ListPopupWindow(this)
+        popup.anchorView = query
+        popup.isModal = false
+        popup.inputMethodMode = ListPopupWindow.INPUT_METHOD_NEEDED
+        popup.setOnItemClickListener { parent, _, pos, _ ->
+            val text = (parent.getItemAtPosition(pos) as String).removePrefix("🕘  ")
+            settingText = true
+            query.setText(text)
+            query.setSelection(text.length)
+            settingText = false
+            go()
+        }
+        query.setOnFocusChangeListener { _, has -> if (has && query.text.isBlank()) showList(history().map { "🕘  $it" }) }
+        query.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                if (settingText) return
+                val q = s?.toString()?.trim() ?: ""
+                suggestRun?.let { ui.removeCallbacks(it) }
+                if (q.isEmpty()) { showList(history().map { "🕘  $it" }); return }
+                if (q.startsWith("http")) { popup.dismiss(); return }
+                val r = Runnable {
+                    suggestIo.execute {
+                        val found = runCatching { Yt.suggestions(q) }.getOrDefault(emptyList())
+                        val past = history().filter { it.contains(q, true) }.take(3).map { "🕘  $it" }
+                        runOnUiThread {
+                            if (isDestroyed || query.text.toString().trim() != q) return@runOnUiThread
+                            showList((past + found.filter { f -> past.none { it.endsWith(f) } }).take(10))
+                        }
+                    }
+                }
+                suggestRun = r
+                ui.postDelayed(r, 200)   // wait for a short pause in typing
+            }
+        })
+    }
+
+    private fun showList(items: List<String>) {
+        if (items.isEmpty() || !query.hasFocus()) { popup.dismiss(); return }
+        popup.setAdapter(ArrayAdapter(this, android.R.layout.simple_list_item_1, items))
+        popup.width = query.width
+        if (!popup.isShowing) popup.show() else popup.listView?.invalidateViews()
     }
 
     private fun search(q: String) {
