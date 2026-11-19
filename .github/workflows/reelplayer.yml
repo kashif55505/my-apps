@@ -68,13 +68,30 @@ jobs:
           ./gradlew --no-daemon assembleRelease -PbuildNumber=$VERSION_CODE
           cp app/build/outputs/apk/release/app-release.apk "../ReelPlayer-v${VERSION_NAME}.apk"
 
+      - name: Small update patches from the last few versions
+        if: steps.keys.outputs.signed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p ../old ../patches
+          for back in 1 2 3 4 5; do
+            OLD=$(( VERSION_CODE - back ))
+            if gh release download "reelplayer-v1.$OLD" -p "*.apk" -D ../old 2>/dev/null; then
+              python3 tools/make_patch.py "../old/ReelPlayer-v1.$OLD.apk" "../ReelPlayer-v${VERSION_NAME}.apk" \
+                "../patches/ReelPlayer-from-1.$OLD.patch" || rm -f "../patches/ReelPlayer-from-1.$OLD.patch"
+              rm -f ../old/*.apk
+            fi
+          done
+          ls -la ../patches
+
       - name: Publish release
         if: steps.keys.outputs.signed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          shopt -s nullglob
           NOTES=$(git log -1 --pretty=%B)
-          gh release create "reelplayer-v${VERSION_NAME}" "../ReelPlayer-v${VERSION_NAME}.apk" \
+          gh release create "reelplayer-v${VERSION_NAME}" "../ReelPlayer-v${VERSION_NAME}.apk" ../patches/*.patch \
             --title "ReelPlayer ${VERSION_NAME}" --latest=false \
             --notes "$NOTES" \
             --target "$GITHUB_SHA"

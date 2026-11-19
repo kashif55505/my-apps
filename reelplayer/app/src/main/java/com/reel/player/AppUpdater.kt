@@ -32,7 +32,13 @@ object AppUpdater {
     private const val TITLE_PREFIX = "ReelPlayer "
     private val io = Executors.newSingleThreadExecutor()
 
-    data class Release(val versionCode: Int, val name: String, val apkUrl: String, val size: Long, val notes: String)
+    data class Release(
+        val versionCode: Int, val name: String, val apkUrl: String, val size: Long, val notes: String,
+        /** Small patch from the installed version, if the release has one. */
+        val patchUrl: String? = null, val patchSize: Long = 0L
+    ) {
+        val downloadSize: Long get() = if (patchUrl != null) patchSize else size
+    }
 
     private fun sp(c: Context) = c.getSharedPreferences("reel", Context.MODE_PRIVATE)
     fun token(c: Context): String? = sp(c).getString("ghToken", null)?.takeIf { it.isNotBlank() }
@@ -48,7 +54,7 @@ object AppUpdater {
     } catch (_: Exception) { "" }
 
     /** Newest ReelPlayer release, or throws. Blocking. */
-    fun latest(token: String?): Release? {
+    fun latest(token: String?, installed: Int = 0): Release? {
         val conn = URL("https://api.github.com/repos/$REPO/releases?per_page=50").openConnection() as HttpURLConnection
         if (token != null) conn.setRequestProperty("Authorization", "Bearer $token")
         conn.setRequestProperty("Accept", "application/vnd.github+json")
@@ -68,12 +74,18 @@ object AppUpdater {
             if (!name.startsWith(TITLE_PREFIX)) continue
             val code = name.removePrefix(TITLE_PREFIX).substringAfterLast('.').toIntOrNull() ?: continue
             val assets = r.optJSONArray("assets") ?: continue
+            if (best != null && code <= best.versionCode) continue
+            var apk: org.json.JSONObject? = null
+            var patch: org.json.JSONObject? = null
             for (k in 0 until assets.length()) {
                 val a = assets.getJSONObject(k)
-                if (!a.optString("name").endsWith(".apk")) continue
-                if (best == null || code > best.versionCode) {
-                    best = Release(code, name.removePrefix(TITLE_PREFIX), a.optString("url"), a.optLong("size"), r.optString("body"))
-                }
+                val n = a.optString("name")
+                if (n.endsWith(".apk")) apk = a
+                if (installed > 0 && n == "ReelPlayer-from-1.$installed.patch") patch = a
+            }
+            if (apk != null) {
+                best = Release(code, name.removePrefix(TITLE_PREFIX), apk.optString("url"), apk.optLong("size"), r.optString("body"),
+                    patch?.optString("url"), patch?.optLong("size") ?: 0L)
             }
         }
         return best
@@ -84,12 +96,12 @@ object AppUpdater {
         val t = token(a)
         val last = sp(a).getLong("updCheck", 0L)
         val cached = sp(a).getInt("updAvail", 0)
-        if (System.currentTimeMillis() - last < 6 * 3600_000L) {
+        if (System.currentTimeMillis() - last < 3600_000L) {
             onResult(if (cached > installedVersion(a)) Release(cached, "1.$cached", "", 0, "") else null)
             return
         }
         io.execute {
-            val r = try { latest(t) } catch (_: Exception) { null }
+            val r = try { latest(t, installedVersion(a)) } catch (_: Exception) { null }
             sp(a).edit().putLong("updCheck", System.currentTimeMillis()).putInt("updAvail", r?.versionCode ?: 0).apply()
             a.runOnUiThread { if (!a.isDestroyed) onResult(r?.takeIf { it.versionCode > installedVersion(a) }) }
         }
@@ -101,7 +113,7 @@ object AppUpdater {
         val t = token(a)
         val wait = MaterialAlertDialogBuilder(a).setTitle("App update").setMessage("Checking for a new version…").show()
         io.execute {
-            val result = runCatching { latest(t) }
+            val result = runCatching { latest(t, installedVersion(a)) }
             a.runOnUiThread {
                 wait.dismiss()
                 if (a.isDestroyed) return@runOnUiThread
@@ -128,7 +140,8 @@ object AppUpdater {
                         val notes = r.notes.lines().firstOrNull { it.isNotBlank() && !it.startsWith("Automatic build") } ?: ""
                         MaterialAlertDialogBuilder(a)
                             .setTitle("Update to ${r.name}")
-                            .setMessage("You have ${installedName(a)}. Download size: ${fmtSize(r.size)}." +
+                            .setMessage("You have ${installedName(a)}. Download size: ${fmtSize(r.downloadSize)}" +
+                                (if (r.patchUrl != null) " (only the changes)." else ".") +
                                 if (notes.isNotEmpty()) "\n\nWhat's new: $notes" else "")
                             .setPositiveButton("Update") { _, _ -> download(a, t, r) }
                             .setNegativeButton("Later", null)
@@ -177,51 +190,37 @@ object AppUpdater {
         val text = view.findViewById<TextView>(R.id.text)
         val canceled = java.util.concurrent.atomic.AtomicBoolean(false)
         val dialog = MaterialAlertDialogBuilder(a)
-            .setTitle("Downloading ${r.name}")
+            .setTitle("Updating to ${r.name}")
             .setView(view)
             .setCancelable(false)
             .setNegativeButton("Cancel") { _, _ -> canceled.set(true) }
             .show()
-        val out = File(File(a.cacheDir, "update").apply { mkdirs() }, "ReelPlayer-${r.name}.apk")
+        val dir = File(a.cacheDir, "update").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
+        val out = File(dir, "ReelPlayer-${r.name}.apk")
+        val progress = { label: String, done: Long, total: Long ->
+            val pct = if (total > 0) (done * 100 / total).toInt() else 0
+            a.runOnUiThread {
+                bar.isIndeterminate = total <= 0
+                bar.progress = pct
+                text.text = "$label  ${fmtSize(done)} of ${fmtSize(total)}  ·  $pct%"
+            }
+        }
         io.execute {
             val ok = runCatching {
-                // The asset link redirects to a storage server; that server must not get the token.
-                val first = URL(r.apkUrl).openConnection() as HttpURLConnection
-                first.instanceFollowRedirects = false
-                if (token != null) first.setRequestProperty("Authorization", "Bearer $token")
-                first.setRequestProperty("Accept", "application/octet-stream")
-                val conn = if (first.responseCode in 300..399) {
-                    val loc = first.getHeaderField("Location") ?: error("No download link")
-                    first.disconnect()
-                    URL(loc).openConnection() as HttpURLConnection
-                } else first
-                conn.connectTimeout = 20000
-                conn.readTimeout = 30000
-                if (conn.responseCode !in 200..299) error("Download failed (${conn.responseCode})")
-                val total = conn.contentLengthLong.takeIf { it > 0 } ?: r.size
-                var done = 0L
-                var lastUi = 0L
-                conn.inputStream.use { inp ->
-                    out.outputStream().use { o ->
-                        val buf = ByteArray(256 * 1024)
-                        while (true) {
-                            if (canceled.get()) error("canceled")
-                            val n = inp.read(buf)
-                            if (n < 0) break
-                            o.write(buf, 0, n)
-                            done += n
-                            val now = System.currentTimeMillis()
-                            if (now - lastUi > 300) {
-                                lastUi = now
-                                val pct = if (total > 0) (done * 100 / total).toInt() else 0
-                                a.runOnUiThread {
-                                    bar.isIndeterminate = total <= 0
-                                    bar.progress = pct
-                                    text.text = "${fmtSize(done)} of ${fmtSize(total)}  ·  $pct%"
-                                }
-                            }
-                        }
-                    }
+                var built = false
+                if (r.patchUrl != null) {
+                    // Small way: download only the changes and rebuild the new APK from the installed one.
+                    built = runCatching {
+                        val patch = File(dir, "update.patch")
+                        fetch(r.patchUrl, token, patch, r.patchSize, canceled) { d, t -> progress("Downloading changes", d, t) }
+                        a.runOnUiThread { bar.isIndeterminate = true; text.text = "Preparing update…" }
+                        val ok = applyPatch(File(a.applicationInfo.sourceDir), patch, out)
+                        patch.delete()
+                        ok
+                    }.getOrElse { if (canceled.get()) throw it; false }
+                }
+                if (!built) {
+                    fetch(r.apkUrl, token, out, r.size, canceled) { d, t -> progress("Downloading", d, t) }
                 }
             }
             a.runOnUiThread {
@@ -233,6 +232,88 @@ object AppUpdater {
                     if (it.message != "canceled") Toast.makeText(a, "Update download failed. Try again.", Toast.LENGTH_LONG).show()
                 }
             }
+        }
+    }
+
+    /** Downloads a release file. The asset link redirects to a storage server that must not get the token. */
+    private fun fetch(
+        url: String, token: String?, out: File, size: Long,
+        canceled: java.util.concurrent.atomic.AtomicBoolean, onProgress: (Long, Long) -> Unit
+    ) {
+        val first = URL(url).openConnection() as HttpURLConnection
+        first.instanceFollowRedirects = false
+        if (token != null) first.setRequestProperty("Authorization", "Bearer $token")
+        first.setRequestProperty("Accept", "application/octet-stream")
+        val conn = if (first.responseCode in 300..399) {
+            val loc = first.getHeaderField("Location") ?: error("No download link")
+            first.disconnect()
+            URL(loc).openConnection() as HttpURLConnection
+        } else first
+        conn.connectTimeout = 20000
+        conn.readTimeout = 30000
+        if (conn.responseCode !in 200..299) error("Download failed (${conn.responseCode})")
+        val total = conn.contentLengthLong.takeIf { it > 0 } ?: size
+        var done = 0L
+        var lastUi = 0L
+        conn.inputStream.use { inp ->
+            out.outputStream().use { o ->
+                val buf = ByteArray(256 * 1024)
+                while (true) {
+                    if (canceled.get()) error("canceled")
+                    val n = inp.read(buf)
+                    if (n < 0) break
+                    o.write(buf, 0, n)
+                    done += n
+                    val now = System.currentTimeMillis()
+                    if (now - lastUi > 300) { lastUi = now; onProgress(done, total) }
+                }
+            }
+        }
+        onProgress(done, total)
+    }
+
+    /**
+     * Rebuilds the new APK: copy unchanged parts from the installed APK, take new parts from the patch.
+     * Returns false (and the full APK is downloaded instead) if the result isn't exactly right.
+     */
+    private fun applyPatch(oldApk: File, patch: File, out: File): Boolean {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        java.io.DataInputStream(java.io.BufferedInputStream(patch.inputStream(), 1 shl 16)).use { inp ->
+            val magic = ByteArray(4); inp.readFully(magic)
+            if (String(magic, Charsets.US_ASCII) != "RPD1") return false
+            val newSize = inp.readLong()
+            val expected = ByteArray(32); inp.readFully(expected)
+            java.io.RandomAccessFile(oldApk, "r").use { old ->
+                java.io.BufferedOutputStream(out.outputStream(), 1 shl 16).use { o ->
+                    val buf = ByteArray(1 shl 16)
+                    var written = 0L
+                    while (true) {
+                        when (inp.readUnsignedByte()) {
+                            0xFF -> break
+                            0x00 -> {
+                                val off = inp.readLong(); var len = inp.readLong()
+                                old.seek(off)
+                                while (len > 0) {
+                                    val n = old.read(buf, 0, minOf(buf.size.toLong(), len).toInt())
+                                    if (n < 0) return false
+                                    o.write(buf, 0, n); md.update(buf, 0, n); len -= n; written += n
+                                }
+                            }
+                            0x01 -> {
+                                var len = inp.readLong()
+                                while (len > 0) {
+                                    val n = inp.read(buf, 0, minOf(buf.size.toLong(), len).toInt())
+                                    if (n < 0) return false
+                                    o.write(buf, 0, n); md.update(buf, 0, n); len -= n; written += n
+                                }
+                            }
+                            else -> return false
+                        }
+                    }
+                    if (written != newSize) return false
+                }
+            }
+            return md.digest().contentEquals(expected)
         }
     }
 

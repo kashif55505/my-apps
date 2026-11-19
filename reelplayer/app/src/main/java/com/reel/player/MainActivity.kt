@@ -126,7 +126,6 @@ class MainActivity : AppCompatActivity() {
                 R.id.navYoutube -> startActivity(Intent(this, YouTubeActivity::class.java))
                 R.id.navDownloader -> startActivity(Intent(this, DownloaderActivity::class.java))
                 R.id.navDownloads -> openDownloadsFolder()
-                R.id.navUpdate -> updateEngine()
                 R.id.navAppUpdate -> AppUpdater.checkAndOffer(this) { refreshUpdateItem() }
             }
             item.itemId == R.id.navVideos
@@ -286,6 +285,16 @@ class MainActivity : AppCompatActivity() {
         AppUpdater.checkQuietly(this) { r ->
             item.title = if (r != null) "App update  ·  ${r.name} available" else "App update  (v$now)"
             if (r != null) item.setIcon(R.drawable.ic_download_dot) else item.setIcon(R.drawable.ic_download)
+            // Tell the user once per new version, right when the app opens.
+            if (r != null && Prefs.getInt(this, "updPrompted", 0) != r.versionCode && !isFinishing) {
+                Prefs.setInt(this, "updPrompted", r.versionCode)
+                MaterialAlertDialogBuilder(this)
+                    .setTitle("New version ${r.name}")
+                    .setMessage("A new version of Reel Player is ready. You can also update later from the menu → App update.")
+                    .setPositiveButton("Update") { _, _ -> AppUpdater.checkAndOffer(this) { refreshUpdateItem() } }
+                    .setNegativeButton("Later", null)
+                    .show()
+            }
         }
     }
 
