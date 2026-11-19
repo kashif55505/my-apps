@@ -49,6 +49,25 @@ object AppUpdater {
         if (Build.VERSION.SDK_INT >= 28) pi.longVersionCode.toInt() else @Suppress("DEPRECATION") pi.versionCode
     } catch (_: Exception) { 0 }
 
+    /** Which app installed Reel Player, and whether updates can go through without a tap. */
+    fun installInfo(c: Context): String {
+        val who = try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                val src = c.packageManager.getInstallSourceInfo(c.packageName)
+                val owner = if (Build.VERSION.SDK_INT >= 34) src.updateOwnerPackageName else null
+                (src.installingPackageName ?: "unknown") + (if (owner != null) ", update owner: $owner" else "")
+            } else @Suppress("DEPRECATION") (c.packageManager.getInstallerPackageName(c.packageName) ?: "unknown")
+        } catch (_: Exception) { "unknown" }
+        val self = who.startsWith(c.packageName)
+        return "Installed by: " + (if (self) "Reel Player itself" else who) +
+            "\nAndroid ${Build.VERSION.RELEASE} · ${Build.MANUFACTURER} ${Build.MODEL}" +
+            when {
+                Build.VERSION.SDK_INT < 31 -> "\nThis Android version always asks before installing."
+                self -> "\nUpdates install without asking."
+                else -> "\nThe next update asks once; after that updates install without asking."
+            }
+    }
+
     fun installedName(c: Context): String = try {
         c.packageManager.getPackageInfo(c.packageName, 0).versionName ?: ""
     } catch (_: Exception) { "" }
@@ -132,7 +151,7 @@ object AppUpdater {
                     if (r == null || r.versionCode <= mine) {
                         MaterialAlertDialogBuilder(a)
                             .setTitle("You're up to date")
-                            .setMessage("Reel Player ${installedName(a)} is the newest version.")
+                            .setMessage("Reel Player ${installedName(a)} is the newest version.\n\n${installInfo(a)}")
                             .setPositiveButton("OK", null)
                             .show()
                     } else {
@@ -332,6 +351,10 @@ object AppUpdater {
             params.setSize(apk.length())
             if (Build.VERSION.SDK_INT >= 31) {
                 params.setRequireUserAction(android.content.pm.PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+            }
+            if (Build.VERSION.SDK_INT >= 34) {
+                // Become the app's "update owner", so later updates from here need no confirmation.
+                params.setRequestUpdateOwnership(true)
             }
             val id = pi.createSession(params)
             pi.openSession(id).use { session ->
