@@ -134,9 +134,17 @@ class FacebookActivity : AppCompatActivity() {
         }
 
         findViewById<View>(R.id.btnDownload).setOnClickListener {
-            val u = videoUrl ?: return@setOnClickListener
             CookieManager.getInstance().flush()
-            YouTubeActivity.pickQuality(this, io, u, "Facebook video")
+            // Find the reel or video that is on screen right now.
+            web.evaluateJavascript(findVideoJs) { raw ->
+                val found = raw?.trim('"')?.replace("\\/", "/")?.takeIf { it.startsWith("http") }
+                val u = found?.let { normalize(it) } ?: videoUrl
+                if (u == null) {
+                    android.widget.Toast.makeText(this, "Open a reel or video first, then tap Download", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    YouTubeActivity.pickQuality(this, io, u, "Facebook video")
+                }
+            }
         }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -162,11 +170,41 @@ class FacebookActivity : AppCompatActivity() {
         return false
     }
 
+    private fun normalize(u: String) =
+        u.replace("://m.facebook.com", "://www.facebook.com").replace("://web.facebook.com", "://www.facebook.com")
+
+    /** The Download button stays on the Reels and Videos pages (it finds the video on screen when tapped). */
     private fun check(url: String) {
         val isVideo = videoLink.containsMatchIn(url)
-        videoUrl = if (isVideo) url.replace("://m.facebook.com", "://www.facebook.com").replace("://web.facebook.com", "://www.facebook.com") else null
-        videoBar.visibility = if (isVideo) View.VISIBLE else View.GONE
+        videoUrl = if (isVideo) normalize(url) else null
+        val path = android.net.Uri.parse(url).path ?: ""
+        val videoPage = isVideo || path.startsWith("/reel") || path.startsWith("/watch") || path.contains("/videos")
+        videoBar.visibility = if (videoPage) View.VISIBLE else View.GONE
     }
+
+    /** JavaScript: the link of the video in the middle of the screen (or its file as a last resort). */
+    private val findVideoJs = """
+        (function(){
+          var u = location.href;
+          if (/\/reel\/\d+/.test(u) || /\/videos\/\d+/.test(u) || /[?&]v=\d+/.test(u)) return u;
+          var mid = innerHeight / 2, best = null;
+          document.querySelectorAll('video').forEach(function(v){
+            var r = v.getBoundingClientRect();
+            if (!best && r.top < mid && r.bottom > mid) best = v;
+          });
+          var el = best;
+          for (var k = 0; el && k < 15; k++, el = el.parentElement) {
+            var a = el.querySelector('a[href*="/reel/"],a[href*="/videos/"],a[href*="watch/?v="],a[href*="video.php"]');
+            if (a) return a.href;
+            var id = el.getAttribute && (el.getAttribute('data-video-id') || el.getAttribute('data-id'));
+            if (id && /^\d{8,}$/.test(id)) return 'https://www.facebook.com/reel/' + id;
+          }
+          var m = document.documentElement.innerHTML.match(/"video_id":"(\d{8,})"/);
+          if (m) return 'https://www.facebook.com/reel/' + m[1];
+          if (best && best.currentSrc && best.currentSrc.indexOf('http') === 0) return best.currentSrc;
+          return '';
+        })();
+    """.trimIndent()
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
