@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,8 +23,12 @@ import (
 )
 
 const (
-	ytdlpURL  = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
-	ffmpegURL = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+	ytdlpURL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+	// Unpacked build: starts about 1 s faster than the single exe (no unpacking to a temp folder
+	// on every run), but has no self-update, so TezDM updates it itself
+	ytdlpZipURL    = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_win.zip"
+	ytdlpLatestURL = "https://github.com/yt-dlp/yt-dlp/releases/latest"
+	ffmpegURL      = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
 	// YouTube needs a JavaScript runtime for yt-dlp (since yt-dlp 2025.11)
 	denoURL = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip"
 )
@@ -50,13 +55,120 @@ func (ts *ToolState) Get() (string, string) {
 
 func binDir() string { return filepath.Join(dataDir(), "bin") }
 
+func ytdlpFolder() string { return filepath.Join(binDir(), "yt-dlp") }
+
 func ytdlpPath() string {
 	if runtime.GOOS != "windows" {
 		if p, err := exec.LookPath("yt-dlp"); err == nil {
 			return p
 		}
 	}
+	if p := filepath.Join(ytdlpFolder(), "yt-dlp.exe"); exists(p) {
+		return p
+	}
 	return filepath.Join(binDir(), "yt-dlp.exe")
+}
+
+// Newest yt-dlp version on GitHub (from the redirect of /releases/latest)
+func latestYtdlpVersion() (string, error) {
+	c := *httpClient
+	c.Timeout = 30 * time.Second
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := c.Get(ytdlpLatestURL)
+	if err != nil {
+		return "", err
+	}
+	resp.Body.Close()
+	loc := resp.Header.Get("Location")
+	i := strings.LastIndex(loc, "/tag/")
+	if i < 0 {
+		return "", fmt.Errorf("unexpected answer from GitHub (HTTP %d)", resp.StatusCode)
+	}
+	return loc[i+5:], nil
+}
+
+// Unpack a whole zip into dst (refusing paths that would leave dst)
+func extractAll(zipPath, dst string) error {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	root, _ := filepath.Abs(dst)
+	for _, f := range r.File {
+		target := filepath.Join(root, filepath.FromSlash(f.Name))
+		if target != root && !strings.HasPrefix(target, root+string(os.PathSeparator)) {
+			return fmt.Errorf("bad path in zip: %s", f.Name)
+		}
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return err
+		}
+		out, err := os.Create(target)
+		if err == nil {
+			_, err = io.Copy(out, rc)
+			out.Close()
+		}
+		rc.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Install (or update) the unpacked yt-dlp build into bin/yt-dlp
+func installYtdlpFolder(version string, progress func(done, total int64)) error {
+	z := filepath.Join(binDir(), "yt-dlp_win.zip")
+	defer os.Remove(z)
+	if err := downloadTo(ytdlpZipURL, z, progress); err != nil {
+		return err
+	}
+	tmp := ytdlpFolder() + ".new"
+	os.RemoveAll(tmp)
+	if err := extractAll(z, tmp); err != nil {
+		os.RemoveAll(tmp)
+		return err
+	}
+	if !exists(filepath.Join(tmp, "yt-dlp.exe")) {
+		os.RemoveAll(tmp)
+		return errors.New("yt-dlp.exe missing in the download")
+	}
+	os.WriteFile(filepath.Join(tmp, "VERSION"), []byte(version), 0o644)
+	// swap while no yt-dlp is running
+	if !lockForUpdate(2 * time.Hour) {
+		os.RemoveAll(tmp)
+		return errors.New("yt-dlp stayed busy; will try again later")
+	}
+	defer ytLock.Unlock()
+	old := ytdlpFolder() + ".old"
+	os.RemoveAll(old)
+	if exists(ytdlpFolder()) {
+		if err := os.Rename(ytdlpFolder(), old); err != nil {
+			os.RemoveAll(tmp)
+			return err
+		}
+	}
+	if err := os.Rename(tmp, ytdlpFolder()); err != nil {
+		os.Rename(old, ytdlpFolder())
+		return err
+	}
+	os.RemoveAll(old)
+	return nil
+}
+
+func installedYtdlpVersion() string {
+	b, _ := os.ReadFile(filepath.Join(ytdlpFolder(), "VERSION"))
+	return strings.TrimSpace(string(b))
 }
 
 func denoPath() string {
@@ -70,8 +182,21 @@ func denoPath() string {
 	return ""
 }
 
-// ytLock: the daily self-update replaces yt-dlp.exe, so it must not run while yt-dlp is in use
+// ytLock: the daily update replaces yt-dlp, so it must not run while yt-dlp is in use
 var ytLock sync.RWMutex
+
+// lockForUpdate waits until no yt-dlp is running, without ever making new quality
+// lookups or downloads wait (a plain Lock would block them behind a long download)
+func lockForUpdate(maxWait time.Duration) bool {
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		if ytLock.TryLock() {
+			return true
+		}
+		time.Sleep(3 * time.Second)
+	}
+	return false
+}
 
 // Common arguments for every yt-dlp run
 func ytBaseArgs() []string {
@@ -192,9 +317,14 @@ func EnsureTools() {
 	for attempt := 1; ; attempt++ {
 		var err error
 		if !exists(ytdlpPath()) {
-			err = downloadTo(ytdlpURL, ytdlpPath(), func(d, t int64) {
-				tools.set("downloading", "Downloading video tools (yt-dlp): "+mb(d))
-			})
+			prog := func(d, t int64) { tools.set("downloading", "Downloading video tools (yt-dlp): "+mb(d)) }
+			v, verr := latestYtdlpVersion()
+			if verr == nil {
+				err = installYtdlpFolder(v, prog)
+			}
+			if verr != nil || err != nil {
+				err = downloadTo(ytdlpURL, filepath.Join(binDir(), "yt-dlp.exe"), prog)
+			}
 		}
 		if err == nil && ffmpegPath() == "" {
 			z := filepath.Join(binDir(), "ffmpeg.zip")
@@ -239,15 +369,25 @@ func EnsureTools() {
 	go func() {
 		for {
 			stamp := filepath.Join(binDir(), "last_update")
-			if st, err := os.Stat(stamp); err != nil || time.Since(st.ModTime()) > 24*time.Hour {
-				ytLock.Lock()
-				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-				cmd := ytCommand(ctx, "-U")
-				if cmd.Run() == nil {
+			// older installs use the slower single exe: switch to the unpacked build right away
+			migrate := !exists(filepath.Join(ytdlpFolder(), "yt-dlp.exe"))
+			if st, err := os.Stat(stamp); migrate || err != nil || time.Since(st.ModTime()) > 24*time.Hour {
+				ok := false
+				if v, err := latestYtdlpVersion(); err == nil {
+					// also moves older installs from the single exe to the faster unpacked build
+					if v == installedYtdlpVersion() || installYtdlpFolder(v, nil) == nil {
+						ok = true
+					}
+				}
+				if !ok && !exists(filepath.Join(ytdlpFolder(), "yt-dlp.exe")) && lockForUpdate(2*time.Hour) {
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+					ok = ytCommand(ctx, "-U").Run() == nil
+					cancel()
+					ytLock.Unlock()
+				}
+				if ok {
 					os.WriteFile(stamp, []byte(time.Now().String()), 0o644)
 				}
-				cancel()
-				ytLock.Unlock()
 			}
 			time.Sleep(time.Hour)
 		}

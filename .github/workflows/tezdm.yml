@@ -38,6 +38,8 @@ jobs:
           cache: false
 
       - name: Run tests (Windows)
+        env:
+          TEZDM_NET_TESTS: "1"
         run: go test -count=1 -v ./...
 
   build:

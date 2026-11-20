@@ -223,15 +223,24 @@
   }
 
   let prefetchedFor = "";
-  function videoSrc() {
-    const v = current;
+  function videoSrc(v) {
+    v = v || current;
     return v ? (v.currentSrc || v.src || (v.querySelector("source") || {}).src || "") : "";
   }
-  function prefetch() {
+  function prefetch(v) {
     if (prefetchedFor === location.href) return;
     prefetchedFor = location.href;
-    try { chrome.runtime.sendMessage({ type: "prefetch", pageUrl: location.href, src: videoSrc() }, () => void chrome.runtime.lastError); } catch (e) {}
+    try { chrome.runtime.sendMessage({ type: "prefetch", pageUrl: location.href, src: videoSrc(v) }, () => void chrome.runtime.lastError); } catch (e) {}
   }
+  // Start looking up qualities as soon as a page shows a video (also after YouTube
+  // switches to the next video), so the menu is usually ready before the first click
+  setInterval(() => {
+    if (prefetchedFor === location.href || document.hidden) return;
+    for (const v of document.querySelectorAll("video")) {
+      const r = v.getBoundingClientRect();
+      if (r.width >= 160 && r.height >= 90) { prefetch(v); break; }
+    }
+  }, 1500);
 
   function renderOptions(data) {
     const info = data.info || {};

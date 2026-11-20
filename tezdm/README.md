@@ -31,7 +31,7 @@ Click **Update** in TezDM's toolbar, then **Download and install**. TezDM downlo
 The first time, install version 2.5.0 or newer by hand; from then on updates come through the button.
 
 ## Video tools on first run
-On first run TezDM downloads **yt-dlp**, **ffmpeg** and **Deno** (about 200 MB, one time only; Deno is the JavaScript runtime yt-dlp needs for YouTube). They are required for video downloads. yt-dlp updates itself daily so downloads keep working when YouTube changes.
+On first run TezDM downloads **yt-dlp** (the unpacked build, which starts about 1 second faster per lookup than the single exe; TezDM updates it daily), **ffmpeg** and **Deno** (about 200 MB, one time only; Deno is the JavaScript runtime yt-dlp needs for YouTube). They are required for video downloads. yt-dlp updates itself daily so downloads keep working when YouTube changes.
 
 ## About speed
 Multiple connections greatly increase speed on servers that limit speed per connection. Speed cannot exceed your internet plan. Some premium file hosts (Mega etc.) limit free users on their own servers; no software can bypass that. DRM-protected streams (Netflix, Prime) cannot be downloaded.
