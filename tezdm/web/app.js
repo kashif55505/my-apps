@@ -208,10 +208,20 @@ let firstVersion = null;
 function renderUpdate() {
   if (firstVersion === null && state.version) firstVersion = state.version;
   if (firstVersion && state.version && state.version !== firstVersion) {
+    // TezDM was updated while this window was open: reload it to get the new screens
+    try { sessionStorage.setItem("tezdmUpdatedTo", state.version); } catch (e) {}
+    location.reload();
+    return;
+  }
+  let justUpdated = null;
+  try { justUpdated = sessionStorage.getItem("tezdmUpdatedTo"); } catch (e) {}
+  if (justUpdated && justUpdated === state.version) {
     const u = $("#updated");
     u.classList.remove("hidden");
-    u.innerHTML = `✔ TezDM was updated to version <b>${esc(state.version)}</b>.`;
+    u.innerHTML = `✔ TezDM was updated to version <b>${esc(state.version)}</b>. <button class="btn" id="updOk">OK</button>`;
+    $("#updOk").onclick = () => { try { sessionStorage.removeItem("tezdmUpdatedTo"); } catch (e) {} u.classList.add("hidden"); };
   }
+  $("#sVer").textContent = state.version ? "TezDM " + state.version : "";
   $("#updDot").style.display = state.updateAvailable ? "" : "none";
   $("#updLbl").textContent = state.updateAvailable ? "Update!" : "Update";
   $("#bUpdate").classList.toggle("warn", !!state.updateAvailable);
@@ -228,7 +238,9 @@ function renderUpdate() {
   m.className = state.updateStatus === "error" ? "bad" : (state.updateAvailable || state.updateStatus ? "" : "ok");
   $("#uGo").disabled = state.updateStatus === "downloading" || state.updateStatus === "installing";
 }
-$("#bUpdate").onclick = () => { $("#dUpd").showModal(); renderUpdate(); api("/api/update/check", {}).catch(() => {}); };
+function openUpdate() { $("#dUpd").showModal(); renderUpdate(); api("/api/update/check", {}).catch(() => {}); }
+$("#bUpdate").onclick = openUpdate;
+$("#mUpd").onclick = openUpdate;
 $("#uClose").onclick = () => $("#dUpd").close();
 $("#uCheck").onclick = async () => {
   await api("/api/update/check", {}).catch(e => alert(e.message));
