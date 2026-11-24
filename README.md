@@ -18,7 +18,7 @@ All my apps in one place. Each app lives in its own folder and has its own autom
 
 | App | Folder | Download the latest version |
 |---|---|---|
-| Phone Data Recovery – recover photos, videos, voice notes and documents from Android, iPhone backups, SD cards and HDD/SSD/NVMe; read your WhatsApp backups and Snapchat export (built-in updater) | [`phone-data-recovery/`](phone-data-recovery/) | [**PhoneDataRecovery.zip**](../../releases/download/phone-data-recovery-latest/PhoneDataRecovery.zip) · [release page](../../releases/tag/phone-data-recovery-latest) |
+| Phone Data Recovery – recover photos, videos, voice notes and documents from Android, iPhone backups, SD cards and HDD/SSD/NVMe; read your WhatsApp backups and Snapchat export (built-in updater) | [`phone-data-recovery/`](phone-data-recovery/) | [**PhoneDataRecovery.exe**](../../releases/download/phone-data-recovery-latest/PhoneDataRecovery.exe) · [Python zip](../../releases/download/phone-data-recovery-latest/PhoneDataRecovery.zip) · [release page](../../releases/tag/phone-data-recovery-latest) |
 
 To publish a new Phone Data Recovery version, change the number in `phone-data-recovery/VERSION` and push.
 

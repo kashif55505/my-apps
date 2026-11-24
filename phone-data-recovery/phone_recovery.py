@@ -44,7 +44,10 @@ from collections import OrderedDict
 # --------------------------------------------------------------------------
 # Version / update source
 # --------------------------------------------------------------------------
-HERE = os.path.dirname(os.path.abspath(__file__))
+FROZEN = getattr(sys, "frozen", False)                  # running as PhoneDataRecovery.exe
+HERE = os.path.dirname(sys.executable) if FROZEN else os.path.dirname(os.path.abspath(__file__))
+BUNDLE = getattr(sys, "_MEIPASS", HERE)                   # files packed inside the exe
+RELEASE_EXE = "PhoneDataRecovery.exe"
 GITHUB_REPO = "kashif55505/my-apps"
 APP_FOLDER = "phone-data-recovery"
 RELEASE_TAG = "phone-data-recovery-latest"
@@ -53,7 +56,7 @@ RELEASE_ZIP = "PhoneDataRecovery.zip"
 
 def local_version():
     try:
-        with open(os.path.join(HERE, "VERSION")) as f:
+        with open(os.path.join(BUNDLE, "VERSION")) as f:
             return f.read().strip() or "0"
     except OSError:
         return "0"
@@ -124,18 +127,41 @@ def parse_cats(value):
 # 1) ANDROID over ADB
 # ==========================================================================
 def find_adb():
-    here = os.path.dirname(os.path.abspath(__file__))
-    for cand in (os.path.join(here, "platform-tools", "adb"),
-                 os.path.join(here, "platform-tools", "adb.exe"),
-                 os.path.join(here, "adb"), os.path.join(here, "adb.exe")):
+    for cand in (os.path.join(HERE, "platform-tools", "adb.exe"),
+                 os.path.join(HERE, "platform-tools", "adb"),
+                 os.path.join(HERE, "adb.exe"), os.path.join(HERE, "adb")):
         if os.path.isfile(cand):
             return cand
     found = shutil.which("adb")
-    if not found:
-        sys.exit("ADB not found. Download Android 'platform-tools' from\n"
-                 "https://developer.android.com/tools/releases/platform-tools\n"
-                 "and unzip it next to this script (folder name: platform-tools).")
-    return found
+    if found:
+        return found
+    if sys.stdin and sys.stdin.isatty():
+        ans = input("ADB (Android platform-tools) is missing. Download it from Google now? [Y/n]: ")
+        if ans.strip().lower() in ("", "y", "yes"):
+            return download_platform_tools()
+    sys.exit("ADB not found. Download Android 'platform-tools' from\n"
+             "https://developer.android.com/tools/releases/platform-tools\n"
+             f"and unzip it here: {HERE}")
+
+
+def download_platform_tools():
+    import urllib.request
+    osname = "windows" if os.name == "nt" else "darwin" if sys.platform == "darwin" else "linux"
+    url = f"https://dl.google.com/android/repository/platform-tools-latest-{osname}.zip"
+    print(f"Downloading {url} ...")
+    try:
+        with urllib.request.urlopen(url, timeout=120) as r:
+            blob = r.read()
+        with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+            zf.extractall(HERE)
+    except Exception as e:
+        sys.exit(f"Download failed ({e}). Get it manually from\n"
+                 "https://developer.android.com/tools/releases/platform-tools")
+    adb = os.path.join(HERE, "platform-tools", "adb.exe" if os.name == "nt" else "adb")
+    if os.name != "nt":
+        os.chmod(adb, 0o755)
+    print("ADB installed.")
+    return adb
 
 
 def adb_run(adb, args, serial=None):
@@ -1549,15 +1575,17 @@ def latest_release():
     data = json.loads(_gh_get(f"{os.environ.get('PDR_API_BASE', 'https://api.github.com')}/repos/{GITHUB_REPO}/releases/tags/{RELEASE_TAG}"))
     m = re.search(r"latest:\s*([\d.]+)", data.get("name") or "")
     version = m.group(1) if m else None
-    zip_url = None
+    zip_url = exe_url = None
     for a in data.get("assets", []):
         if a.get("name") == "VERSION.txt" and not version:
             version = _gh_get(a["url"], "application/octet-stream").decode().strip()
         if a.get("name") == RELEASE_ZIP:
             zip_url = a["url"]
-    if not version or not zip_url:
-        raise ValueError("release has no version or zip")
-    return version, zip_url
+        if a.get("name") == RELEASE_EXE:
+            exe_url = a["url"]
+    if not version or not (exe_url if FROZEN else zip_url):
+        raise ValueError("release has no version or download file")
+    return version, (exe_url if FROZEN else zip_url)
 
 
 def check_for_update(quiet=False):
@@ -1594,7 +1622,9 @@ def self_update(force=False):
         print("You already have the latest version.")
         return
     print("Downloading ...")
-    blob = _gh_get(zip_url, "application/octet-stream", timeout=120)
+    blob = _gh_get(zip_url, "application/octet-stream", timeout=300)
+    if FROZEN:
+        return _replace_exe(blob, remote)
     try:
         zf = zipfile.ZipFile(io.BytesIO(blob))
     except zipfile.BadZipFile:
@@ -1629,14 +1659,54 @@ def self_update(force=False):
     print("Start the tool again to use the new version.")
 
 
+def _replace_exe(blob, remote):
+    exe = sys.executable
+    magic = b"MZ" if os.name == "nt" else b"\x7fELF" if sys.platform.startswith("linux") else b""
+    if len(blob) < 1_000_000 or not blob.startswith(magic):
+        sys.exit("Downloaded program looks damaged - nothing was changed.")
+    new = exe + ".new"
+    with open(new, "wb") as f:
+        f.write(blob)
+    if os.name != "nt":
+        os.chmod(new, 0o755)
+    backup = os.path.join(HERE, "_backup", f"v{__version__}")
+    os.makedirs(backup, exist_ok=True)
+    old = os.path.join(backup, os.path.basename(exe))
+    if os.path.exists(old):
+        os.remove(old)
+    os.replace(exe, old)             # a running exe can be renamed (not overwritten)
+    os.replace(new, exe)
+    print(f"Updated {__version__} -> {remote}. Old version saved in {backup}")
+    print("Close this window and start PhoneDataRecovery again.")
+
+
+def is_admin():
+    if os.name != "nt":
+        return os.geteuid() == 0
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def relaunch_as_admin():
+    """Windows: start this program again with an Administrator (UAC) prompt."""
+    import ctypes
+    exe = sys.executable
+    params = "" if FROZEN else f'"{os.path.abspath(__file__)}"'
+    rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, HERE, 1)
+    return rc > 32
+
+
 # ==========================================================================
 # Menu + CLI
 # ==========================================================================
-def menu():
+def _menu_once(first):
     print("=" * 52)
     print(f"  Phone Data Recovery v{__version__}  (use only on your own devices)")
     print("=" * 52)
-    newer = check_for_update(quiet=True)
+    newer = check_for_update(quiet=True) if first else None
     if newer:
         print(f"  ** New version {newer} available - choose 9 to update **")
     print(" 1) Android phone (USB)   - copy files + trash")
@@ -1648,12 +1718,19 @@ def menu():
     print(" 7) WhatsApp backup - decrypt and read your chats")
     print(" 8) Snapchat - read your data export, download all Memories")
     print(" 9) Check for updates")
-    c = input("Choose 1-9: ").strip()
+    print(" 0) Exit")
+    c = input("Choose 0-9: ").strip()
+    if c in ("0", "q", "exit"):
+        return "quit"
     if c == "9":
         self_update()
-        if os.name == "nt":
-            input("\nPress Enter to close...")
         return
+    if c in ("3", "4", "6") and os.name == "nt" and not is_admin():
+        print("This option reads drives directly and needs Administrator rights.")
+        if input("Restart as Administrator now? [Y/n]: ").strip().lower() in ("", "y", "yes"):
+            if relaunch_as_admin():
+                return "quit"
+            print("Could not get Administrator rights - continuing (may fail).")
     out = input("Output folder [Recovered]: ").strip() or "Recovered"
     cats = set(CATEGORIES)
     if c == "6":
@@ -1686,8 +1763,27 @@ def menu():
         snapchat_menu(out)
     else:
         print("Invalid choice.")
-    if os.name == "nt":
-        input("\nPress Enter to close...")
+
+
+def menu():
+    first = True
+    while True:
+        try:
+            if _menu_once(first) == "quit":
+                return
+        except SystemExit as e:
+            if isinstance(e.code, str):
+                print(e.code)
+        except KeyboardInterrupt:
+            print("\nStopped.")
+        except Exception as e:
+            print(f"\nError: {e}")
+        first = False
+        try:
+            input("\nPress Enter to go back to the menu...")
+        except (EOFError, KeyboardInterrupt):
+            return
+        print()
 
 
 def main():

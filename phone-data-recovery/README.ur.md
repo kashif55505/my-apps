@@ -8,8 +8,16 @@ Ye tool Android, iPhone, SD card aur computer ki Hard Drive / SSD / NVMe / USB d
 
 ## Download
 
-Naya version hamesha yahan milta hai:
-**[PhoneDataRecovery.zip](../../../releases/download/phone-data-recovery-latest/PhoneDataRecovery.zip)**
+| Windows program (Python ki zaroorat nahi) | Python scripts (Windows / Mac / Linux) |
+|---|---|
+| **[PhoneDataRecovery.exe](../../../releases/download/phone-data-recovery-latest/PhoneDataRecovery.exe)** | [PhoneDataRecovery.zip](../../../releases/download/phone-data-recovery-latest/PhoneDataRecovery.zip) |
+
+**Exe kaise chalayein:**
+1. `PhoneDataRecovery.exe` ko aik alag folder mein rakhein (jaise `C:\PhoneDataRecovery`) aur double-click karein.
+2. Agar Windows ka neela "Windows protected your PC" message aaye to **More info → Run anyway** dabayein. Ye is liye aata hai ke program par paid signature nahi hai.
+3. Hard drive aur SD card wale options (3, 4, 6) khud Administrator ke tor par restart hone ka poochte hain.
+4. Android ke liye ADB pehli dafa Google se khud download ho jata hai.
+5. Kaam khatam hone par menu wapas aata hai. Band karne ke liye **0** dabayein.
 
 ## Update kaise karein (Option 9)
 
@@ -17,7 +25,7 @@ Menu mein **9) Check for updates** chunein, ya ye command chalayein:
 ```
 python phone_recovery.py update
 ```
-Tool GitHub se naya version check karta hai, download karta hai, pehle test karta hai ke code sahi hai, phir install karta hai. Purani files `_backup/` folder mein mehfooz rehti hain. Jab naya version aaye to menu khud bata deta hai.
+Tool GitHub se naya version check karke khud install kar leta hai. **Exe** khud ko naye exe se badal leta hai, aur **Python** version pehle test karta hai ke naya code sahi hai. Purana version `_backup/` folder mein mehfooz rehta hai. Jab naya version aaye to menu khud bata deta hai.
 
 > Agar repository **private** ho to update ke liye aik read-only token chahiye. GitHub par jayein: Settings → Developer settings → Fine-grained token → sirf `my-apps` repo → **Contents: Read-only**. Token ko `github_token.txt` naam ki file mein script ke saath rakh dein.
 
