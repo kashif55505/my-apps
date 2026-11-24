@@ -6,6 +6,7 @@ All my apps in one place. Each app lives in its own folder and has its own autom
 |---|---|---|---|
 | Mail – multi-account email with notifications | [`mail/`](mail/) | `Mail 1.0.<n>` | `Mail-v1.0.<n>.apk` |
 | ReelPlayer – video player, downloader, YouTube | [`reelplayer/`](reelplayer/) | `ReelPlayer 1.<n>` | `ReelPlayer-v1.<n>.apk` |
+| My Vault – private locked vault for photos, videos, files and notes, synced with your laptop | [`vault/`](vault/) | `Vault 1.<n>` | `MyVault-v1.<n>.apk` |
 
 ## Windows apps
 

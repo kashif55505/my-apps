@@ -20,3 +20,7 @@ tezdm/dist/
 tezdm/*.syso
 tezdm/winres/tezdm.rc
 tezdm/winres/tezdm.manifest
+vault/server/vault-data/
+vault/.gradle/
+vault/build/
+vault/app/build/
