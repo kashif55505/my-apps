@@ -1713,7 +1713,12 @@ class Automation:
         new = [(f"--protected-starttime={int(time.time())}" if a.startswith("--protected-starttime=") else a) for a in new]
         new += [f"--remote-debugging-port={port}", "--remote-allow-origins=*"]
         try:
-            self._ix_proc = subprocess.Popen(new, creationflags=0x08000000)
+            si = None
+            if os.name == "nt":
+                si = subprocess.STARTUPINFO()
+                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                si.wShowWindow = 1          # SW_SHOWNORMAL — browser nazar aaye
+            self._ix_proc = subprocess.Popen(new, startupinfo=si, creationflags=0)
         except Exception as e:
             self.log(f"[{account['name']}] ixBrowser (free) launch error: {e}")
             return False
@@ -1800,6 +1805,57 @@ class Automation:
                 return True
         return bool(self._fb_uid())
 
+    def _find_login_inputs(self):
+        e = self.page.query_selector("input[name='email']") or \
+            self.page.query_selector("input[type='email']") or \
+            self.page.query_selector("input[autocomplete='username']")
+        p = self.page.query_selector("input[name='pass']") or \
+            self.page.query_selector("input[type='password']")
+        return e, p
+
+    def _fill_login_form(self, acc):
+        """Login form bharo. 'Saved account' wali screen ho to doosre tareeqe aazmao."""
+        for attempt in range(4):
+            e, p = self._find_login_inputs()
+            if not e and not p:
+                if attempt == 0:
+                    # saved-profile screen: "Use another profile / Log into another account"
+                    self._click_button(["Use another profile", "Log into another account",
+                                        "Log in to another account", "Not you?", "Switch account"])
+                elif attempt == 1:
+                    self.page.goto("https://www.facebook.com/login/", wait_until="domcontentloaded")
+                else:
+                    self.page.goto("https://www.facebook.com/login.php?login_attempt=1", wait_until="domcontentloaded")
+                time.sleep(3)
+                continue
+            try:
+                if e:
+                    e.click(); e.fill(""); e.type(acc["email"], delay=40)
+                    time.sleep(0.5)
+                if not p:
+                    # do-step login: pehle email, phir Next/Continue
+                    self._click_button(["Continue", "Next"]); time.sleep(3)
+                    _, p = self._find_login_inputs()
+                if p:
+                    p.click(); p.type(acc["password"], delay=40)
+                    time.sleep(0.5)
+                    if not self._click_css("button[name='login']"):
+                        p.press("Enter")
+                    return True
+            except Exception as ex:
+                self.log(f"[{acc['name']}] login form: {ex}")
+            time.sleep(2)
+        return False
+
+    def _click_css(self, sel):
+        try:
+            el = self.page.query_selector(sel)
+            if el:
+                el.click(); return True
+        except Exception:
+            pass
+        return False
+
     def login(self, wait_for_2fa_callback=None):
         acc = self.current_acc
         if self.is_logged_in():
@@ -1808,12 +1864,8 @@ class Automation:
 
         self.log(T(f"[{acc['name']}] Logging in...", f"[{acc['name']}] Login kar rahe hain..."))
         self.page.goto(FB_HOME, wait_until="domcontentloaded")
-        time.sleep(2)
-        try:
-            self.page.fill("input[name='email']", acc["email"], timeout=15000)
-            self.page.fill("input[name='pass']", acc["password"], timeout=15000)
-            self.page.click("button[name='login']", timeout=15000)
-        except PWTimeout:
+        time.sleep(3)
+        if not self._fill_login_form(acc):
             self.log(T(f"[{acc['name']}] Login form not found. Please log in manually in the browser.", f"[{acc['name']}] Login form nahi mila. Browser mein khud login karein."))
             if wait_for_2fa_callback:
                 wait_for_2fa_callback(acc)
