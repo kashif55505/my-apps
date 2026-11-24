@@ -14,6 +14,14 @@ All my apps in one place. Each app lives in its own folder and has its own autom
 |---|---|---|
 | TezDM – fast download manager with a Chrome extension (multi-connection downloads, pause/resume, video downloads with quality selection) | [`tezdm/`](tezdm/) | [**TezDM_Setup.exe**](../../releases/download/tezdm-latest/TezDM_Setup.exe) · [release page](../../releases/tag/tezdm-latest) |
 
+## Windows / Mac / Linux tools (Python)
+
+| App | Folder | Download the latest version |
+|---|---|---|
+| Phone Data Recovery – recover photos, videos, voice notes and documents from Android, iPhone backups, SD cards and HDD/SSD/NVMe; read your WhatsApp backups and Snapchat export (built-in updater) | [`phone-data-recovery/`](phone-data-recovery/) | [**PhoneDataRecovery.exe**](../../releases/download/phone-data-recovery-latest/PhoneDataRecovery.exe) · [Python zip](../../releases/download/phone-data-recovery-latest/PhoneDataRecovery.zip) · [release page](../../releases/tag/phone-data-recovery-latest) |
+
+To publish a new Phone Data Recovery version, change the number in `phone-data-recovery/VERSION` and push.
+
 The `tezdm-latest` release always holds the newest build with fixed file names, so the link above never changes. Each version is also kept as its own release (`TezDM 2.3.0`, ...). To publish a new TezDM version, change the number in `tezdm/VERSION` and push. Downloads need you to be signed in to GitHub, because the repository is private.
 
 ## Install and update with Obtainium

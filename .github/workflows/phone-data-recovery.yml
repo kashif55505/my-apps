@@ -1,0 +1,139 @@
+# Phone Data Recovery: every push that changes phone-data-recovery/ tests the tool
+# and publishes it.
+#  - Release "phone-data-recovery-latest": always the newest version, fixed file names
+#    PhoneDataRecovery.exe (Windows program) and PhoneDataRecovery.zip (Python scripts);
+#    the tool's built-in "update" option downloads these
+#  - Release "phone-data-recovery-vX.Y.Z": one per version, kept as history
+# To ship a new version: change phone-data-recovery/VERSION and push.
+name: Phone Data Recovery
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "phone-data-recovery/**"
+      - ".github/workflows/phone-data-recovery.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phone-data-recovery-release
+  cancel-in-progress: false
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: phone-data-recovery
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install optional libraries
+        run: pip install -r requirements.txt
+      - name: Compile and start
+        run: |
+          python -m py_compile phone_recovery.py whatsapp.py snapchat.py
+          python phone_recovery.py --version
+          python phone_recovery.py -h
+          python -c "import whatsapp, snapchat"
+
+  build-exe:
+    needs: test
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: phone-data-recovery
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build PhoneDataRecovery.exe
+        run: |
+          pip install pyinstaller pillow -r requirements.txt
+          pyinstaller --onefile --console --name PhoneDataRecovery --icon app_icon.ico --add-data "VERSION;." --hidden-import whatsapp --hidden-import snapchat --collect-submodules iphone_backup_decrypt phone_recovery.py
+      - name: Test the exe
+        run: |
+          .\dist\PhoneDataRecovery.exe --version
+          .\dist\PhoneDataRecovery.exe -h
+          .\dist\PhoneDataRecovery.exe whatsapp -h
+          "0" | .\dist\PhoneDataRecovery.exe
+          if ((Get-Item .\dist\PhoneDataRecovery.exe).Length -lt 5MB) { throw "exe too small" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PhoneDataRecovery-exe
+          path: phone-data-recovery/dist/PhoneDataRecovery.exe
+
+  publish:
+    needs: [test, build-exe]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: PhoneDataRecovery-exe
+          path: dist
+
+      - name: Package
+        id: v
+        run: |
+          V=$(tr -d ' \r\n' < phone-data-recovery/VERSION)
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          mkdir -p dist
+          # only committed files: no tokens, backups or recovered data can slip in
+          git archive --format=zip --prefix=phone-data-recovery/ -o dist/PhoneDataRecovery.zip HEAD:phone-data-recovery
+          cp dist/PhoneDataRecovery.zip "dist/PhoneDataRecovery_$V.zip"
+          cp dist/PhoneDataRecovery.exe "dist/PhoneDataRecovery_$V.exe"
+          echo "$V" > dist/VERSION.txt
+
+      - name: Publish releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${{ steps.v.outputs.version }}"
+          NOTES="Version $V - $(git log -1 --pretty=%s)"
+          retry() { for i in 1 2 3 4 5; do "$@" && return 0; echo "retry $i: $*"; sleep $((i * 10)); done; return 1; }
+          has_release() {
+            for i in 1 2 3 4 5; do
+              if out=$(gh release view "$1" --json tagName 2>&1); then return 0; fi
+              if echo "$out" | grep -qi "not found"; then return 1; fi
+              echo "retry $i: release view $1 ($out)"; sleep $((i * 10))
+            done
+            return 2
+          }
+
+          # 1) Versioned release (history)
+          TAG="phone-data-recovery-v$V"
+          if has_release "$TAG"; then
+            retry gh release upload "$TAG" "dist/PhoneDataRecovery_$V.exe" "dist/PhoneDataRecovery_$V.zip" --clobber
+          elif [ $? -eq 1 ]; then
+            retry gh release create "$TAG" "dist/PhoneDataRecovery_$V.exe" "dist/PhoneDataRecovery_$V.zip" \
+              --title "Phone Data Recovery $V" --notes "$NOTES" --latest=false
+          else
+            exit 1
+          fi
+
+          # 2) Moving "latest" release with a fixed file name (used by the built-in updater)
+          git tag -f phone-data-recovery-latest
+          retry git push -f origin phone-data-recovery-latest
+          if has_release phone-data-recovery-latest; then
+            retry gh release edit phone-data-recovery-latest --title "Phone Data Recovery (latest: $V)" --notes "$NOTES" --latest=false
+            retry gh release upload phone-data-recovery-latest dist/PhoneDataRecovery.exe dist/PhoneDataRecovery.zip dist/VERSION.txt --clobber
+          elif [ $? -eq 1 ]; then
+            retry gh release create phone-data-recovery-latest dist/PhoneDataRecovery.exe dist/PhoneDataRecovery.zip dist/VERSION.txt \
+              --title "Phone Data Recovery (latest: $V)" --notes "$NOTES" --latest=false
+          else
+            exit 1
+          fi
