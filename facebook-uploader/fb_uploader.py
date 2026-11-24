@@ -148,7 +148,12 @@ def do_update(log=print):
                 f.write("set /a n+=1\r\nif %n% LSS 300 goto loop\r\n:done\r\n")
                 f.write(f'start "" "{cur}"\r\n')
                 f.write('del "%~f0"\r\n')
-            subprocess.Popen(["cmd", "/c", bat], **_NOWIN)
+            # PyInstaller ke andar wale env vars hata do, warna nayi exe purane
+            # (delete ho chuke) temp folder ko dhoondti hai -> "python311.dll" error
+            env = {k: v for k, v in os.environ.items()
+                   if not k.upper().startswith(("_MEI", "_PYI", "PYINSTALLER"))}
+            env.pop("TCL_LIBRARY", None); env.pop("TK_LIBRARY", None)
+            subprocess.Popen(["cmd", "/c", bat], env=env, **_NOWIN)
             log("Update tayyar — app band ho kar nayi version se khulega.")
             return "restart_exe"
         else:
