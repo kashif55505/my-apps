@@ -41,10 +41,12 @@ jobs:
         run: pip install -r requirements.txt
       - name: Compile and start
         run: |
-          python -m py_compile phone_recovery.py whatsapp.py snapchat.py
+          python -m py_compile phone_recovery.py whatsapp.py snapchat.py gui.py
           python phone_recovery.py --version
           python phone_recovery.py -h
           python -c "import whatsapp, snapchat"
+          python gui.py --selftest selftest.txt
+          cat selftest.txt
 
   build-exe:
     needs: test
@@ -58,16 +60,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Build PhoneDataRecovery.exe
+      - name: Build PhoneDataRecovery.exe (app window)
         run: |
-          pip install pyinstaller pillow -r requirements.txt
-          pyinstaller --onefile --console --name PhoneDataRecovery --icon app_icon.ico --add-data "VERSION;." --hidden-import whatsapp --hidden-import snapchat --collect-submodules iphone_backup_decrypt phone_recovery.py
-      - name: Test the exe
+          pip install pyinstaller -r requirements.txt
+          pyinstaller --onefile --windowed --uac-admin --name PhoneDataRecovery --icon app_icon.ico `
+            --add-data "VERSION;." --add-data "ui;ui" `
+            --hidden-import phone_recovery --hidden-import whatsapp --hidden-import snapchat `
+            --collect-submodules iphone_backup_decrypt gui.py
+      - name: Test the exe (engine self-test, no window)
         run: |
-          .\dist\PhoneDataRecovery.exe --version
-          .\dist\PhoneDataRecovery.exe -h
-          .\dist\PhoneDataRecovery.exe whatsapp -h
-          "0" | .\dist\PhoneDataRecovery.exe
+          $p = Start-Process -FilePath .\dist\PhoneDataRecovery.exe -ArgumentList "--selftest", "$PWD\exe_selftest.txt" -Wait -PassThru
+          Get-Content exe_selftest.txt
+          if ($p.ExitCode -ne 0) { throw "exe self-test failed ($($p.ExitCode))" }
+          if (-not (Select-String -Path exe_selftest.txt -Pattern "SELFTEST OK" -Quiet)) { throw "self-test did not finish" }
           if ((Get-Item .\dist\PhoneDataRecovery.exe).Length -lt 5MB) { throw "exe too small" }
       - uses: actions/upload-artifact@v4
         with:

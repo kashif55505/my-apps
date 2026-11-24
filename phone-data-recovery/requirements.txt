@@ -1,4 +1,5 @@
-# Optional: WhatsApp backup decryption
-cryptography>=41
-# Optional: encrypted iPhone backups
-iphone_backup_decrypt
+# Optional extras (the core tool needs none)
+pywebview>=5     # the app window (gui.py)
+pillow           # photo previews, Snapchat text overlays
+cryptography>=41 # WhatsApp backup decryption
+iphone_backup_decrypt  # encrypted iPhone backups

@@ -12,16 +12,21 @@ Ye tool Android, iPhone, SD card aur computer ki Hard Drive / SSD / NVMe / USB d
 |---|---|
 | **[PhoneDataRecovery.exe](../../../releases/download/phone-data-recovery-latest/PhoneDataRecovery.exe)** | [PhoneDataRecovery.zip](../../../releases/download/phone-data-recovery-latest/PhoneDataRecovery.zip) |
 
+![App](screenshots/home.png)
+
 **Exe kaise chalayein:**
 1. `PhoneDataRecovery.exe` ko aik alag folder mein rakhein (jaise `C:\PhoneDataRecovery`) aur double-click karein.
-2. Agar Windows ka neela "Windows protected your PC" message aaye to **More info → Run anyway** dabayein. Ye is liye aata hai ke program par paid signature nahi hai.
-3. Hard drive aur SD card wale options (3, 4, 6) khud Administrator ke tor par restart hone ka poochte hain.
-4. Android ke liye ADB pehli dafa Google se khud download ho jata hai.
-5. Kaam khatam hone par menu wapas aata hai. Band karne ke liye **0** dabayein.
+2. Windows **Administrator** ki ijazat maangega. **Yes** dabayein, kyunke drives parhne ke liye ye zaroori hai.
+3. Agar neela "Windows protected your PC" message aaye to **More info → Run anyway** dabayein. Ye is liye aata hai ke program par paid signature nahi hai.
+4. App khulegi. Baen taraf se chunein ke kahan se recover karna hai, steps follow karein aur **Start** dabayein.
+5. Scan ke dauran progress circle dikhta hai, aur **Stop** se beech mein rok bhi sakte hain. Aakhir mein recover hui tasveeron ka preview aur **Open folder** button aata hai.
+6. Android ke liye ADB pehli dafa Google se khud download ho jata hai (Android page par **Install ADB** button).
+
+Python se: `pip install -r requirements.txt` karein, phir `python gui.py` (app window) ya `python phone_recovery.py` (text menu) chalayein.
 
 ## Update kaise karein (Option 9)
 
-Menu mein **9) Check for updates** chunein, ya ye command chalayein:
+App mein **Updates & about** kholein aur **Update now** dabayein (text menu mein option 9), ya ye command chalayein:
 ```
 python phone_recovery.py update
 ```

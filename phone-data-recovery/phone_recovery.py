@@ -324,8 +324,9 @@ def describe_backup(bdir):
     try:
         with open(os.path.join(bdir, "Info.plist"), "rb") as f:
             info = plistlib.load(f)
-        return f"{info.get('Device Name', '?')} ({info.get('Product Type', '?')}, " \
-               f"iOS {info.get('Product Version', '?')}, {info.get('Last Backup Date', '')})"
+        parts = [info.get("Product Type"), f"iOS {info['Product Version']}" if info.get("Product Version") else None,
+                 str(info["Last Backup Date"])[:16] if info.get("Last Backup Date") else None]
+        return f"{info.get('Device Name', 'iPhone')} ({', '.join(p for p in parts if p)})"
     except Exception:
         return os.path.basename(bdir)
 

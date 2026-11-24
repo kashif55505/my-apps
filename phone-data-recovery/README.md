@@ -1,5 +1,7 @@
 # Phone & Drive Data Recovery
 
+![Home screen](screenshots/home.png)
+
 Recover **photos, videos, voice notes / audio (MP3, M4A, OPUS, AMR, WAV) and documents (PDF, Word, Excel, PowerPoint)** from:
 
 | Source | What it does |
@@ -23,7 +25,13 @@ Python 3.9+, no required dependencies (`pip install -r requirements.txt` for Wha
 
 Always the newest version · [release page](../../../releases/tag/phone-data-recovery-latest)
 
-Put `PhoneDataRecovery.exe` in its own folder (e.g. `C:\PhoneDataRecovery`) and double-click it. Windows SmartScreen may warn because the program is not code-signed: click *More info → Run anyway*. Options that read drives (3, 4, 6) ask to restart as Administrator. ADB for Android is downloaded from Google automatically the first time.
+Put `PhoneDataRecovery.exe` in its own folder (e.g. `C:\PhoneDataRecovery`) and double-click it. Windows asks for Administrator permission (needed to read drives), and SmartScreen may warn because the program is not code-signed: click *More info → Run anyway*. ADB for Android is downloaded from Google automatically the first time. Needs the Microsoft Edge WebView2 runtime, which Windows 10/11 already include.
+
+| Scanning | Results with previews |
+|---|---|
+| ![Scanning](screenshots/scanning.png) | ![Results](screenshots/results.png) |
+
+From Python: `pip install -r requirements.txt` then `python gui.py` (app window) or `python phone_recovery.py` (text menu / command line).
 
 ## Updating
 
@@ -33,7 +41,7 @@ The tool updates itself from this repository's releases:
 python phone_recovery.py update          # download + install the newest version
 python phone_recovery.py update --check  # only check
 ```
-or menu option **9**. The menu also tells you when a new version is out. The `.exe` replaces itself with the new `.exe`; the Python version replaces its scripts after checking that all code compiles. The old version is kept in `_backup/`. If this repository is private, put a read-only fine-grained token (Contents: Read-only) in `github_token.txt` next to the script.
+or **Updates & about** in the app (menu option **9** in the text version). The app also tells you when a new version is out. The `.exe` replaces itself with the new `.exe`; the Python version replaces its scripts after checking that all code compiles. The old version is kept in `_backup/`. If this repository is private, put a read-only fine-grained token (Contents: Read-only) in `github_token.txt` next to the script.
 
 **Publishing a new version:** change the number in `VERSION` and push to `main`; the *Phone Data Recovery* workflow tests the tool on Windows and Linux, builds the `.exe` and publishes the release.
 

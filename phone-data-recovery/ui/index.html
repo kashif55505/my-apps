@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phone Data Recovery</title>
+<style>
+:root{
+  --nav:#0f172a;--nav2:#1e293b;--navtext:#cbd5e1;--navmuted:#64748b;
+  --bg:#f1f5f9;--card:#ffffff;--line:#e2e8f0;--text:#0f172a;--muted:#64748b;--soft:#f8fafc;
+  --acc:#2563eb;--acc2:#0891b2;--accsoft:#eff6ff;--ok:#16a34a;--oksoft:#f0fdf4;--warn:#d97706;--warnsoft:#fffbeb;--bad:#dc2626;--badsoft:#fef2f2;
+  --r:14px;--shadow:0 1px 2px rgba(15,23,42,.06),0 4px 16px rgba(15,23,42,.05);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font:14px/1.5 "Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;color:var(--text);background:var(--bg);display:flex;overflow:hidden;user-select:none}
+svg.i{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+button{font:inherit;cursor:pointer}
+input,select{font:inherit}
+/* ---------- sidebar ---------- */
+#nav{width:236px;background:var(--nav);color:var(--navtext);display:flex;flex-direction:column;flex:none}
+.brand{display:flex;align-items:center;gap:11px;padding:20px 18px 18px}
+.logo{width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,#2563eb,#06b6d4);display:grid;place-items:center;color:#fff;box-shadow:0 4px 14px rgba(37,99,235,.45)}
+.brand b{display:block;color:#fff;font-size:15px;letter-spacing:.2px}.brand small{color:var(--navmuted);font-size:11.5px}
+.navsec{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--navmuted);padding:14px 20px 6px}
+.nitem{display:flex;align-items:center;gap:11px;margin:1px 10px;padding:9px 12px;border-radius:9px;color:var(--navtext);border:0;background:none;text-align:left;width:calc(100% - 20px)}
+.nitem:hover{background:var(--nav2);color:#fff}
+.nitem.on{background:linear-gradient(90deg,rgba(37,99,235,.35),rgba(37,99,235,.08));color:#fff;box-shadow:inset 3px 0 0 #3b82f6}
+.nitem svg{width:18px;height:18px}
+#runpill{display:none;margin:10px 12px 0;padding:10px 12px;border-radius:10px;background:#1d4ed8;color:#fff;border:0;text-align:left}
+#runpill .bar{height:4px;border-radius:2px;background:rgba(255,255,255,.25);margin-top:7px;overflow:hidden}#runpill .bar i{display:block;height:100%;background:#fff;width:0}
+.navfoot{margin-top:auto;padding:14px 18px;font-size:12px;color:var(--navmuted);border-top:1px solid #1e293b}
+.navfoot .upd{display:none;margin-top:6px;background:#16a34a;color:#fff;border:0;border-radius:20px;padding:4px 10px;font-size:12px}
+/* ---------- main ---------- */
+#main{flex:1;overflow-y:auto;padding:28px 34px 40px}
+.page{display:none;max-width:1080px;margin:0 auto;animation:fade .18s ease}
+.page.on{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.ph{display:flex;align-items:center;gap:16px;margin-bottom:22px}
+.ph .ic{width:52px;height:52px;border-radius:15px;display:grid;place-items:center;color:#fff;flex:none}
+.ph .ic svg{width:26px;height:26px}
+.ph h1{margin:0;font-size:23px;letter-spacing:-.2px}.ph p{margin:2px 0 0;color:var(--muted)}
+.cols{display:grid;grid-template-columns:1fr 300px;gap:18px;align-items:start}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:20px 22px;margin-bottom:16px}
+.card h3{margin:0 0 4px;font-size:15.5px;display:flex;align-items:center;gap:9px}
+.card h3 .n{width:22px;height:22px;border-radius:50%;background:var(--accsoft);color:var(--acc);font-size:12px;display:grid;place-items:center;font-weight:700}
+.card .sub{color:var(--muted);margin:0 0 14px;font-size:13px}
+.side .card{padding:18px}
+.side h4{margin:0 0 10px;font-size:13.5px}
+.side ul{margin:0;padding-left:18px;color:var(--muted);font-size:13px}.side li{margin:5px 0}
+.btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:#fff;color:var(--text);padding:8px 14px;border-radius:9px;font-weight:500}
+.btn:hover{border-color:#cbd5e1;background:var(--soft)}
+.btn.sm{padding:6px 11px;font-size:13px}.btn svg{width:16px;height:16px}
+.btn.pri{background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;border:0;box-shadow:0 4px 14px rgba(37,99,235,.3)}
+.btn.pri:hover{filter:brightness(1.07)}
+.btn.big{padding:13px 26px;font-size:15.5px;border-radius:11px;font-weight:600}
+.btn.ok{background:var(--ok);color:#fff;border:0}.btn.danger{color:var(--bad);border-color:#fecaca}
+.btn:disabled{opacity:.5;cursor:not-allowed;filter:none}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.startrow{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px 20px;box-shadow:var(--shadow)}
+/* chips */
+.chips{display:flex;gap:10px;flex-wrap:wrap}
+.chip{display:flex;align-items:center;gap:9px;text-align:left;padding:10px 14px;border:1.5px solid var(--line);border-radius:11px;background:#fff;min-width:140px;color:var(--muted)}
+.chip .dot{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;background:var(--soft)}
+.chip b{display:block;color:var(--text);font-weight:600;font-size:13.5px}.chip small{font-size:11.5px}
+.chip.on{border-color:var(--acc);background:var(--accsoft)}.chip.on .dot{background:#dbeafe;color:var(--acc)}
+.chip .tick{margin-left:auto;width:18px;height:18px;border-radius:5px;border:1.5px solid #cbd5e1;display:grid;place-items:center}
+.chip.on .tick{background:var(--acc);border-color:var(--acc);color:#fff}.chip:not(.on) .tick svg{visibility:hidden}.chip .tick svg{width:12px;height:12px;stroke-width:3}
+/* fields */
+.field{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:10px;padding:7px 8px 7px 12px;background:var(--soft)}
+.field .path{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);user-select:text}
+.field .path.none{color:#94a3b8}
+.field svg{color:var(--muted)}
+input.txt{width:100%;border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#fff;color:var(--text);outline:none;user-select:text}
+input.txt:focus{border-color:var(--acc);box-shadow:0 0 0 3px #dbeafe}
+label.lbl{display:block;font-weight:600;font-size:13px;margin:14px 0 6px}
+.chk{display:flex;align-items:center;gap:9px;margin-top:12px;color:var(--text)}
+.chk input{width:17px;height:17px;accent-color:var(--acc)}
+/* notes */
+.note{display:flex;gap:10px;padding:11px 13px;border-radius:10px;font-size:13px;margin-top:12px;line-height:1.45}
+.note svg{width:18px;height:18px;margin-top:1px}
+.note.info{background:var(--accsoft);color:#1e40af}.note.warn{background:var(--warnsoft);color:#92400e}.note.bad{background:var(--badsoft);color:#991b1b}.note.okn{background:var(--oksoft);color:#166534}
+/* home */
+.hero{border-radius:18px;padding:26px 28px;color:#fff;background:radial-gradient(1200px 300px at 0% 0%,#1d4ed8 0%,#0f172a 60%);display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:22px;box-shadow:0 10px 30px rgba(15,23,42,.18)}
+.hero h1{margin:0 0 6px;font-size:26px;letter-spacing:-.3px}.hero p{margin:0;color:#bfdbfe;max-width:560px}
+.hero .stat{display:flex;gap:22px}.hero .stat div{text-align:center}.hero .stat b{display:block;font-size:20px}.hero .stat small{color:#93c5fd}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(235px,1fr));gap:14px}
+.tile{position:relative;text-align:left;background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:var(--shadow);transition:.15s;color:var(--text)}
+.tile:hover{transform:translateY(-2px);box-shadow:0 10px 26px rgba(15,23,42,.1);border-color:#bfdbfe}
+.tile .ic{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;color:#fff;margin-bottom:12px}
+.tile .ic svg{width:23px;height:23px}
+.tile b{display:block;font-size:15px}.tile span{display:block;color:var(--muted);font-size:12.8px;margin-top:3px}
+.tile .go{position:absolute;right:16px;top:20px;color:#cbd5e1}.tile:hover .go{color:var(--acc)}
+.g1{background:linear-gradient(135deg,#22c55e,#15803d)}.g2{background:linear-gradient(135deg,#64748b,#334155)}.g3{background:linear-gradient(135deg,#3b82f6,#1d4ed8)}.g4{background:linear-gradient(135deg,#f59e0b,#d97706)}
+.g5{background:linear-gradient(135deg,#10b981,#047857)}.g6{background:linear-gradient(135deg,#facc15,#ca8a04)}.g7{background:linear-gradient(135deg,#8b5cf6,#6d28d9)}.g8{background:linear-gradient(135deg,#06b6d4,#0e7490)}
+.tips{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}
+.tips div{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 16px;font-size:13px;color:var(--muted)}.tips b{display:block;color:var(--text);margin-bottom:3px}
+/* lists */
+.list{display:flex;flex-direction:column;gap:8px}
+.opt{display:flex;align-items:center;gap:13px;padding:12px 14px;border:1.5px solid var(--line);border-radius:12px;background:#fff;text-align:left;width:100%;color:var(--text)}
+.opt:hover{border-color:#bfdbfe}.opt.on{border-color:var(--acc);background:var(--accsoft)}
+.opt .oi{width:40px;height:40px;border-radius:10px;background:var(--soft);display:grid;place-items:center;color:var(--muted)}
+.opt.on .oi{background:#dbeafe;color:var(--acc)}
+.opt .ot{flex:1;min-width:0}.opt .ot b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.opt .ot small{color:var(--muted)}
+.opt .radio{width:18px;height:18px;border-radius:50%;border:2px solid #cbd5e1;flex:none}.opt.on .radio{border:5px solid var(--acc)}
+.badge{font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:20px;background:var(--soft);color:var(--muted);border:1px solid var(--line);white-space:nowrap}
+.badge.blue{background:#dbeafe;color:#1d4ed8;border-color:#bfdbfe}.badge.green{background:#dcfce7;color:#15803d;border-color:#bbf7d0}.badge.amber{background:#fef3c7;color:#b45309;border-color:#fde68a}.badge.red{background:#fee2e2;color:#b91c1c;border-color:#fecaca}
+.empty{padding:22px;text-align:center;color:var(--muted);border:1.5px dashed var(--line);border-radius:12px}
+/* segmented */
+.seg{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.seg button{border:1.5px solid var(--line);background:#fff;border-radius:12px;padding:13px;text-align:left;color:var(--text)}
+.seg button.on{border-color:var(--acc);background:var(--accsoft)}
+.seg b{display:flex;align-items:center;gap:7px}.seg small{display:block;color:var(--muted);margin-top:4px;font-size:12px;line-height:1.4}
+.seg svg{width:17px;height:17px;color:var(--acc)}
+/* device status */
+.dev{display:flex;align-items:center;gap:16px;padding:16px;border-radius:12px;background:var(--soft);border:1px solid var(--line)}
+.dev .big{width:54px;height:54px;border-radius:14px;display:grid;place-items:center;background:#e2e8f0;color:var(--muted)}
+.dev.okd .big{background:#dcfce7;color:var(--ok)}.dev.wait .big{background:#fef3c7;color:var(--warn)}
+.dev .big svg{width:26px;height:26px}.dev b{display:block;font-size:15px}.dev small{color:var(--muted)}
+.steps{margin:12px 0 0;padding:0;list-style:none;counter-reset:s}
+.steps li{counter-increment:s;display:flex;gap:10px;margin:8px 0;color:var(--muted);font-size:13px}
+.steps li::before{content:counter(s);width:21px;height:21px;border-radius:50%;background:#e0e7ff;color:#3730a3;font-size:11.5px;font-weight:700;display:grid;place-items:center;flex:none}
+.steps b{color:var(--text)}
+.tabs{display:flex;gap:6px;background:#e2e8f0;padding:4px;border-radius:11px;width:max-content;margin-bottom:16px}
+.tabs button{border:0;background:none;padding:8px 16px;border-radius:8px;color:var(--muted);font-weight:500}
+.tabs button.on{background:#fff;color:var(--text);box-shadow:var(--shadow)}
+/* progress */
+.prog{max-width:720px;margin:20px auto 0;text-align:center}
+.ring{position:relative;width:210px;height:210px;margin:10px auto 18px}
+.ring svg{width:210px;height:210px;transform:rotate(-90deg)}
+.ring circle{fill:none;stroke-width:14}.ring .bgc{stroke:#e2e8f0}.ring .fg{stroke:url(#gr);stroke-linecap:round;transition:stroke-dashoffset .4s}
+.ring .pct{position:absolute;inset:0;display:grid;place-items:center;font-size:40px;font-weight:700;letter-spacing:-1px}
+.ring .pct small{display:block;font-size:13px;font-weight:500;color:var(--muted);letter-spacing:0}
+.ring.ind svg{animation:spin 1.2s linear infinite}.ring.ind .fg{stroke-dasharray:160 600!important}
+@keyframes spin{to{transform:rotate(270deg)}}
+.prog h2{margin:0;font-size:21px}.status{color:var(--muted);margin:6px auto 18px;min-height:22px;max-width:640px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:Consolas,ui-monospace,monospace;font-size:12.5px}
+.meta{display:flex;justify-content:center;gap:12px;margin-bottom:20px}
+.meta div{background:#fff;border:1px solid var(--line);border-radius:11px;padding:9px 16px;font-size:12.5px;color:var(--muted)}.meta b{display:block;color:var(--text);font-size:15px}
+details{margin-top:18px;text-align:left}summary{cursor:pointer;color:var(--muted);font-size:13px}
+pre.log{background:#0f172a;color:#cbd5e1;border-radius:11px;padding:12px 14px;max-height:230px;overflow:auto;font:12px/1.5 Consolas,ui-monospace,monospace;white-space:pre-wrap;user-select:text}
+/* results */
+.reshead{display:flex;align-items:center;gap:16px;background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px 20px;box-shadow:var(--shadow);margin-bottom:16px}
+.reshead .okc{width:52px;height:52px;border-radius:50%;background:#dcfce7;color:var(--ok);display:grid;place-items:center}
+.reshead .okc.badc{background:#fee2e2;color:var(--bad)}
+.reshead>div:nth-child(2){min-width:0;flex:1}.reshead h2{margin:0;font-size:20px}.reshead p{margin:2px 0 0;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.reshead .acts{margin-left:auto;display:flex;gap:8px;flex:none}
+.cats{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.cats button{display:flex;align-items:center;gap:8px;border:1.5px solid var(--line);background:#fff;border-radius:11px;padding:8px 14px;color:var(--text)}
+.cats button.on{border-color:var(--acc);background:var(--accsoft)}.cats span{color:var(--muted);font-size:12.5px}
+.files{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:12px}
+.file{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;cursor:pointer;transition:.12s;text-align:left;padding:0;color:var(--text)}
+.file:hover{border-color:#93c5fd;box-shadow:0 6px 18px rgba(15,23,42,.08)}
+.file .th{height:112px;background:var(--soft);display:grid;place-items:center;color:#94a3b8;position:relative}
+.file .th img{width:100%;height:100%;object-fit:cover}
+.file .th svg{width:34px;height:34px;stroke-width:1.6}
+.file .th .b{position:absolute;left:6px;top:6px}
+.file .fn{padding:8px 10px}.file .fn b{display:block;font-size:12.3px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.file .fn small{color:var(--muted);font-size:11.5px}
+.more{margin:16px 0;color:var(--muted);font-size:13px;text-align:center}
+.about{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.kv{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}.kv:last-child{border:0}.kv span{color:var(--muted)}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:10px;border:2px solid var(--bg)}
+#nav ::-webkit-scrollbar-thumb{background:#334155}
+.hide{display:none!important}
+#toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(20px);background:#0f172a;color:#fff;padding:10px 18px;border-radius:10px;opacity:0;transition:.25s;pointer-events:none;font-size:13.5px;z-index:9}
+#toast.on{opacity:1;transform:translateX(-50%)}
+@media (max-width:1100px){.cols{grid-template-columns:1fr}.side{display:none}.tips{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute"><defs>
+<linearGradient id="gr" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2563eb"/><stop offset="1" stop-color="#06b6d4"/></linearGradient>
+<symbol id="i-home" viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></symbol>
+<symbol id="i-phone" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2.5"/><path d="M11 18h2"/></symbol>
+<symbol id="i-iphone" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="3.5"/><path d="M10 5h4"/><circle cx="12" cy="18" r=".6"/></symbol>
+<symbol id="i-hdd" viewBox="0 0 24 24"><path d="M22 12H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><path d="M6 16h.01M10 16h.01"/></symbol>
+<symbol id="i-sd" viewBox="0 0 24 24"><path d="M6 22a2 2 0 0 1-2-2V7.5L8.5 3H18a2 2 0 0 1 2 2v15a2 2 0 0 1-2 2Z"/><path d="M9 7v3M12.5 7v3M16 7v3"/></symbol>
+<symbol id="i-disc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="2.5"/><path d="M12 2a10 10 0 0 1 10 10"/></symbol>
+<symbol id="i-chat" viewBox="0 0 24 24"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/><path d="M8 12h.01M12 12h.01M16 12h.01"/></symbol>
+<symbol id="i-ghost" viewBox="0 0 24 24"><path d="M9 10h.01M15 10h.01M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"/></symbol>
+<symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9l-.8-1.2A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
+<symbol id="i-file" viewBox="0 0 24 24"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v6h6"/></symbol>
+<symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></symbol>
+<symbol id="i-video" viewBox="0 0 24 24"><path d="m22 8-6 4 6 4z"/><rect x="2" y="6" width="14" height="12" rx="2"/></symbol>
+<symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></symbol>
+<symbol id="i-doc" viewBox="0 0 24 24"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></symbol>
+<symbol id="i-archive" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="5" rx="1"/><path d="M4 9v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9M10 13h4"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+<symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.7 18-8-14a2 2 0 0 0-3.5 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z"/><path d="M12 9v4M12 17h.01"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></symbol>
+<symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+<symbol id="i-key" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/></symbol>
+<symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></symbol>
+<symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></symbol>
+<symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></symbol>
+<symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></symbol>
+<symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/></symbol>
+<symbol id="i-scan" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 12h10"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="m6 3 14 9-14 9z"/></symbol>
+<symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></symbol>
+<symbol id="i-usb" viewBox="0 0 24 24"><rect x="7" y="9" width="10" height="13" rx="2"/><path d="M9 9V3h6v6M11 5.5h.01M13 5.5h.01"/></symbol>
+<symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+<symbol id="i-ext" viewBox="0 0 24 24"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+</defs></svg>
+
+<nav id="nav">
+  <div class="brand"><div class="logo"><svg class="i"><use href="#i-refresh"/></svg></div><div><b>Phone Data Recovery</b><small id="ver">v—</small></div></div>
+  <button class="nitem on" data-go="home"><svg class="i"><use href="#i-home"/></svg>Home</button>
+  <div class="navsec">Recover from</div>
+  <button class="nitem" data-go="android"><svg class="i"><use href="#i-phone"/></svg>Android phone</button>
+  <button class="nitem" data-go="ios"><svg class="i"><use href="#i-iphone"/></svg>iPhone backup</button>
+  <button class="nitem" data-go="drive"><svg class="i"><use href="#i-hdd"/></svg>Hard drive / SSD</button>
+  <button class="nitem" data-go="sdcard"><svg class="i"><use href="#i-sd"/></svg>SD card / USB</button>
+  <button class="nitem" data-go="image"><svg class="i"><use href="#i-disc"/></svg>Disk image file</button>
+  <div class="navsec">Apps</div>
+  <button class="nitem" data-go="whatsapp"><svg class="i"><use href="#i-chat"/></svg>WhatsApp backup</button>
+  <button class="nitem" data-go="snapchat"><svg class="i"><use href="#i-ghost"/></svg>Snapchat data</button>
+  <button id="runpill" data-go="progress"><b style="font-size:12.5px">Task running…</b><div class="bar"><i></i></div></button>
+  <div class="navfoot">
+    <button class="nitem" data-go="about" style="margin:0 0 6px -12px;width:calc(100% + 12px)"><svg class="i"><use href="#i-sparkle"/></svg>Updates &amp; about</button>
+    Use only on your own devices.<br><button class="upd" id="updpill" data-go="about">Update available</button>
+  </div>
+</nav>
+
+<main id="main">
+
+<!-- HOME -->
+<section class="page on" id="p-home">
+  <div class="hero">
+    <div><h1>What would you like to recover?</h1>
+      <p>Get back deleted photos, videos, voice notes and documents from phones, memory cards and computer drives — and read your WhatsApp and Snapchat backups. Everything stays on this computer.</p></div>
+    <div class="stat"><div><b>8</b><small>sources</small></div><div><b>40+</b><small>file types</small></div><div><b>100%</b><small>offline</small></div></div>
+  </div>
+  <div class="grid">
+    <button class="tile" data-go="android"><div class="ic g1"><svg class="i"><use href="#i-phone"/></svg></div><b>Android phone</b><span>Photos, videos, WhatsApp media and files in the trash, over USB</span><svg class="i go"><use href="#i-arrow"/></svg></button>
+    <button class="tile" data-go="ios"><div class="ic g2"><svg class="i"><use href="#i-iphone"/></svg></div><b>iPhone</b><span>Camera roll, Recently Deleted, voice memos from a computer backup</span><svg class="i go"><use href="#i-arrow"/></svg></button>
+    <button class="tile" data-go="drive"><div class="ic g3"><svg class="i"><use href="#i-hdd"/></svg></div><b>Hard drive / SSD</b><span>Deleted files with original names from HDD, SSD and NVMe</span><svg class="i go"><use href="#i-arrow"/></svg></button>
+    <button class="tile" data-go="sdcard"><div class="ic g4"><svg class="i"><use href="#i-sd"/></svg></div><b>SD card / USB</b><span>Deep scan of memory cards and flash drives, even after format</span><svg class="i go"><use href="#i-arrow"/></svg></button>
+    <button class="tile" data-go="whatsapp"><div class="ic g5"><svg class="i"><use href="#i-chat"/></svg></div><b>WhatsApp backup</b><span>Open .crypt14 / .crypt15 backups and read all your chats</span><svg class="i go"><use href="#i-arrow"/></svg></button>
+    <button class="tile" data-go="snapchat"><div class="ic g6"><svg class="i"><use href="#i-ghost"/></svg></div><b>Snapchat data</b><span>Read saved chats and download all your Memories</span><svg class="i go"><use href="#i-arrow"/></svg></button>
+    <button class="tile" data-go="image"><div class="ic g7"><svg class="i"><use href="#i-disc"/></svg></div><b>Disk image file</b><span>Scan a .img / .dd copy of a card or drive</span><svg class="i go"><use href="#i-arrow"/></svg></button>
+    <button class="tile" data-go="about"><div class="ic g8"><svg class="i"><use href="#i-sparkle"/></svg></div><b>Updates</b><span id="homeupd">Check for the newest version</span><svg class="i go"><use href="#i-arrow"/></svg></button>
+  </div>
+  <div class="tips">
+    <div><b>Stop using the device</b>New photos or apps can overwrite deleted data. Recover as soon as possible.</div>
+    <div><b>Save to another drive</b>Never save recovered files onto the drive you are recovering from.</div>
+    <div><b>SSD &amp; phones</b>SSD TRIM and phone encryption erase deleted data quickly; backups help most there.</div>
+  </div>
+</section>
+
+<!-- ANDROID -->
+<section class="page" id="p-android">
+  <div class="ph"><div class="ic g1"><svg class="i"><use href="#i-phone"/></svg></div><div><h1>Android phone</h1><p>Copy every photo, video, voice note and document — including files still in the hidden trash.</p></div></div>
+  <div class="cols"><div>
+    <div class="card"><h3><span class="n">1</span>Connect your phone</h3><p class="sub">Use a USB cable and allow USB debugging on the phone.</p>
+      <div class="dev" id="a-dev"><div class="big"><svg class="i"><use href="#i-phone"/></svg></div><div style="flex:1"><b id="a-devt">Not checked yet</b><small id="a-devs">Click “Detect phone”.</small></div>
+        <button class="btn" id="a-detect"><svg class="i"><use href="#i-refresh"/></svg>Detect phone</button>
+        <button class="btn pri hide" id="a-adb"><svg class="i"><use href="#i-download"/></svg>Install ADB</button></div>
+      <ol class="steps"><li><span>On the phone open <b>Settings → About phone</b> and tap <b>Build number</b> 7 times.</span></li>
+        <li><span>Open <b>Settings → Developer options</b> and turn on <b>USB debugging</b>.</span></li>
+        <li><span>Connect the cable, choose <b>File transfer</b>, then tap <b>Allow</b> on the phone.</span></li></ol>
+    </div>
+    <div class="card"><h3><span class="n">2</span>What to recover</h3><p class="sub">Choose the kinds of files you want back.</p><div class="chips" data-types="android"></div>
+      <label class="chk"><input type="checkbox" id="a-thumbs" checked> Also save thumbnails (small copies of deleted photos)</label></div>
+    <div class="card"><h3><span class="n">3</span>Save to</h3><div data-out="android"></div></div>
+    <div class="startrow"><span style="color:var(--muted)">Files are copied — nothing on the phone is changed.</span><button class="btn pri big" id="a-start"><svg class="i"><use href="#i-play"/></svg>Start recovery</button></div>
+  </div><div class="side">
+    <div class="card"><h4>You will get</h4><ul><li>All photos &amp; videos (DCIM, Pictures, Movies)</li><li>WhatsApp images, videos &amp; voice notes</li><li>Music, recordings &amp; downloads</li><li><b>Deleted files still in the trash</b>, with names</li><li>Thumbnails of deleted photos</li></ul></div>
+    <div class="note info"><svg class="i"><use href="#i-info"/></svg><span>Files deleted <b>after</b> the trash was emptied can’t be read from modern phones’ encrypted storage. If the phone has an SD card, scan it under <b>SD card / USB</b>.</span></div>
+  </div></div>
+</section>
+
+<!-- IPHONE -->
+<section class="page" id="p-ios">
+  <div class="ph"><div class="ic g2"><svg class="i"><use href="#i-iphone"/></svg></div><div><h1>iPhone</h1><p>Extract photos, videos, voice memos, WhatsApp media and documents from an iPhone backup.</p></div></div>
+  <div class="cols"><div>
+    <div class="card"><h3><span class="n">1</span>Choose a backup</h3><p class="sub">Backups made with Finder, iTunes or the Apple Devices app on this computer.</p>
+      <div class="list" id="i-list"></div>
+      <div class="row" style="margin-top:12px"><button class="btn sm" id="i-refresh"><svg class="i"><use href="#i-refresh"/></svg>Search again</button><button class="btn sm" id="i-browse"><svg class="i"><use href="#i-folder"/></svg>Choose another folder…</button></div>
+      <div id="i-pw" class="hide"><label class="lbl"><svg class="i" style="width:14px;height:14px;vertical-align:-2px"><use href="#i-lock"/></svg> This backup is encrypted — backup password</label><input class="txt" type="password" id="i-pass" placeholder="Password you set for iPhone backups"></div>
+    </div>
+    <div class="card"><h3><span class="n">2</span>What to recover</h3><div class="chips" data-types="ios"></div></div>
+    <div class="card"><h3><span class="n">3</span>Save to</h3><div data-out="ios"></div></div>
+    <div class="startrow"><span style="color:var(--muted)">The backup is only read, never changed.</span><button class="btn pri big" id="i-start"><svg class="i"><use href="#i-play"/></svg>Start recovery</button></div>
+  </div><div class="side">
+    <div class="card"><h4>No backup yet?</h4><ol class="steps"><li><span>Connect the iPhone and tap <b>Trust</b>.</span></li><li><span>Open <b>Finder</b> (Mac) or <b>iTunes / Apple Devices</b> (Windows).</span></li><li><span>Choose <b>Back up all data to this computer</b> → <b>Back Up Now</b>.</span></li><li><span>Tip: tick <b>Encrypt local backup</b> — it includes more data.</span></li></ol></div>
+  </div></div>
+</section>
+
+<!-- DRIVE -->
+<section class="page" id="p-drive">
+  <div class="ph"><div class="ic g3"><svg class="i"><use href="#i-hdd"/></svg></div><div><h1>Hard drive / SSD / NVMe</h1><p>Find deleted files on a computer drive — with their original names and folders.</p></div></div>
+  <div id="d-admin"></div>
+  <div class="cols"><div>
+    <div class="card"><h3><span class="n">1</span>Select the drive</h3><p class="sub">Choose the drive where the files were deleted.</p><div class="list" data-drives="drive"></div>
+      <div class="row" style="margin-top:12px"><button class="btn sm" data-refresh-drives><svg class="i"><use href="#i-refresh"/></svg>Refresh</button></div></div>
+    <div class="card"><h3><span class="n">2</span>Scan type</h3>
+      <div class="seg" id="d-mode">
+        <button data-mode="quick" class="on"><b><svg class="i"><use href="#i-zap"/></svg>Quick scan</b><small>Deleted files with original names &amp; folders (NTFS). Minutes.</small></button>
+        <button data-mode="deep"><b><svg class="i"><use href="#i-scan"/></svg>Deep scan</b><small>Searches every free sector by file signature. Can take hours.</small></button>
+        <button data-mode="both"><b><svg class="i"><use href="#i-layers"/></svg>Both</b><small>Most complete result. Some files may appear twice.</small></button></div></div>
+    <div class="card"><h3><span class="n">3</span>What to recover</h3><div class="chips" data-types="drive"></div></div>
+    <div class="card"><h3><span class="n">4</span>Save to <span class="badge amber" style="margin-left:4px">must be a different drive</span></h3><div data-out="drive"></div></div>
+    <div class="startrow"><span style="color:var(--muted)">The drive is only read. Nothing is written to it.</span><button class="btn pri big" id="d-start"><svg class="i"><use href="#i-play"/></svg>Start scan</button></div>
+  </div><div class="side">
+    <div class="card"><h4>Chances of recovery</h4><div class="kv"><span>HDD</span><b style="color:var(--ok)">Very good</b></div><div class="kv"><span>USB / external disk</span><b style="color:var(--ok)">Good</b></div><div class="kv"><span>SSD / NVMe</span><b style="color:var(--warn)">Low (TRIM)</b></div></div>
+    <div class="note warn"><svg class="i"><use href="#i-alert"/></svg><span>Don’t install programs or save files on the drive you want to recover.</span></div>
+  </div></div>
+</section>
+
+<!-- SD CARD -->
+<section class="page" id="p-sdcard">
+  <div class="ph"><div class="ic g4"><svg class="i"><use href="#i-sd"/></svg></div><div><h1>SD card / USB flash drive</h1><p>Deep-scan a memory card or flash drive for deleted photos, videos, audio and documents.</p></div></div>
+  <div id="s-admin"></div>
+  <div class="cols"><div>
+    <div class="card"><h3><span class="n">1</span>Insert the card and select it</h3><p class="sub">Put the SD card in a card reader. Phones’ SD cards work too.</p><div class="list" data-drives="sdcard"></div>
+      <div class="row" style="margin-top:12px"><button class="btn sm" data-refresh-drives><svg class="i"><use href="#i-refresh"/></svg>Refresh</button><button class="btn sm" id="s-makeimg"><svg class="i"><use href="#i-disc"/></svg>Make a safety copy (image) first…</button></div></div>
+    <div class="card"><h3><span class="n">2</span>What to recover</h3><div class="chips" data-types="sdcard"></div></div>
+    <div class="card"><h3><span class="n">3</span>Save to</h3><div data-out="sdcard"></div></div>
+    <div class="startrow"><span style="color:var(--muted)">Works even after the card was formatted.</span><button class="btn pri big" id="s-start"><svg class="i"><use href="#i-play"/></svg>Start deep scan</button></div>
+  </div><div class="side"><div class="card"><h4>Finds</h4><ul><li>JPG, PNG, HEIC, GIF, WEBP</li><li>MP4, MOV, 3GP, AVI</li><li>MP3, M4A, OPUS, AMR, WAV</li><li>PDF, Word, Excel, PowerPoint</li></ul></div>
+    <div class="note info"><svg class="i"><use href="#i-info"/></svg><span>Recovered files get new names (e.g. <i>jpg_0004A3C00.jpg</i>), because names are not stored with deleted data on cards.</span></div></div></div>
+</section>
+
+<!-- IMAGE -->
+<section class="page" id="p-image">
+  <div class="ph"><div class="ic g7"><svg class="i"><use href="#i-disc"/></svg></div><div><h1>Disk image file</h1><p>Scan a saved copy (.img, .dd, .raw) of a card or drive.</p></div></div>
+  <div class="cols"><div>
+    <div class="card"><h3><span class="n">1</span>Choose the image file</h3><div class="field"><svg class="i"><use href="#i-file"/></svg><span class="path none" id="g-file">No file chosen</span><button class="btn sm" id="g-pick">Browse…</button></div></div>
+    <div class="card"><h3><span class="n">2</span>What to recover</h3><div class="chips" data-types="image"></div></div>
+    <div class="card"><h3><span class="n">3</span>Save to</h3><div data-out="image"></div></div>
+    <div class="startrow"><span></span><button class="btn pri big" id="g-start"><svg class="i"><use href="#i-play"/></svg>Start scan</button></div>
+  </div><div class="side"><div class="card"><h4>Why use an image?</h4><ul><li>The original card is read only once</li><li>You can scan the copy again and again safely</li><li>Make one under <b>SD card / USB</b></li></ul></div></div></div>
+</section>
+
+<!-- WHATSAPP -->
+<section class="page" id="p-whatsapp">
+  <div class="ph"><div class="ic g5"><svg class="i"><use href="#i-chat"/></svg></div><div><h1>WhatsApp backup</h1><p>Decrypt your own backup and read every chat with photos, videos and voice notes.</p></div></div>
+  <div class="tabs" id="w-tabs"><button class="on" data-tab="open">Open a backup</button><button data-tab="pull">Copy from Android phone</button></div>
+  <div class="cols"><div>
+    <div id="w-open">
+      <div class="card"><h3><span class="n">1</span>Backup file</h3><p class="sub"><i>msgstore.db.crypt15</i> / <i>.crypt14</i> (Android) or <i>ChatStorage.sqlite</i> (iPhone).</p>
+        <div class="field"><svg class="i"><use href="#i-file"/></svg><span class="path none" id="w-file">No file chosen</span><button class="btn sm" id="w-pickf">File…</button><button class="btn sm" id="w-pickd">Folder…</button></div></div>
+      <div class="card" id="w-keycard"><h3><span class="n">2</span>Encryption key</h3><p class="sub">The 64-digit key from WhatsApp, or the key file from a rooted phone.</p>
+        <input class="txt" id="w-key" placeholder="e.g. 1a2b 3c4d 5e6f … (64 digits, spaces allowed)" spellcheck="false" style="font-family:Consolas,monospace">
+        <div class="row" style="margin-top:8px"><button class="btn sm" id="w-keyfile"><svg class="i"><use href="#i-key"/></svg>Choose key file instead…</button><span class="badge" id="w-keystate">not needed for iPhone / msgstore.db</span></div></div>
+      <div class="card"><h3><span class="n">3</span>Media folder <span class="badge">optional</span></h3><p class="sub">The <i>WhatsApp/Media</i> folder, so photos and voice notes show inside chats.</p>
+        <div class="field"><svg class="i"><use href="#i-folder"/></svg><span class="path none" id="w-media">Not chosen</span><button class="btn sm" id="w-pickm">Browse…</button></div></div>
+      <div class="card"><h3><span class="n">4</span>Save to</h3><div data-out="whatsapp"></div></div>
+      <div class="startrow"><span style="color:var(--muted)">Works offline — your chats never leave this computer.</span><button class="btn pri big" id="w-start"><svg class="i"><use href="#i-play"/></svg>Open chats</button></div>
+    </div>
+    <div id="w-pull" class="hide">
+      <div class="card"><h3><span class="n">1</span>Connect your Android phone</h3><p class="sub">USB debugging must be on (see Android page).</p>
+        <div class="dev" id="w-dev"><div class="big"><svg class="i"><use href="#i-phone"/></svg></div><div style="flex:1"><b id="w-devt">Not checked yet</b><small id="w-devs">Click “Detect phone”.</small></div><button class="btn" id="w-detect"><svg class="i"><use href="#i-refresh"/></svg>Detect phone</button></div></div>
+      <div class="card"><h3><span class="n">2</span>Save to</h3><div data-out="wa_pull"></div></div>
+      <div class="startrow"><span style="color:var(--muted)">Copies Databases, Backups and Media. Rooted phones: key file too.</span><button class="btn pri big" id="w-pullstart"><svg class="i"><use href="#i-download"/></svg>Copy backup</button></div>
+    </div>
+  </div><div class="side">
+    <div class="card"><h4>Where is my key?</h4><ol class="steps"><li><span>WhatsApp → <b>Settings → Chats → Chat backup</b></span></li><li><span><b>End-to-end encrypted backup</b> → <b>Use 64-digit encryption key</b></span></li><li><span>Save the key and make a new backup.</span></li></ol></div>
+    <div class="note warn"><svg class="i"><use href="#i-alert"/></svg><span>Backups protected only with a <b>password</b> can’t be opened offline — the key is kept on WhatsApp’s servers. Switch to a 64-digit key.</span></div>
+  </div></div>
+</section>
+
+<!-- SNAPCHAT -->
+<section class="page" id="p-snapchat">
+  <div class="ph"><div class="ic g6"><svg class="i"><use href="#i-ghost"/></svg></div><div><h1>Snapchat data</h1><p>Read your saved chats and download all Memories from Snapchat’s “My Data” export.</p></div></div>
+  <div class="cols"><div>
+    <div class="card"><h3><span class="n">1</span>Your export</h3><p class="sub">The <i>mydata~….zip</i> file(s) from Snapchat’s e-mail, or the unzipped folder.</p>
+      <div class="field"><svg class="i"><use href="#i-archive"/></svg><span class="path none" id="c-exp">Nothing chosen</span><button class="btn sm" id="c-pickz">Zip file…</button><button class="btn sm" id="c-pickd">Folder…</button></div>
+      <label class="chk"><input type="checkbox" id="c-mem" checked> Download all Memories (photos &amp; videos) too</label></div>
+    <div class="card"><h3><span class="n">2</span>Save to</h3><div data-out="snapchat"></div></div>
+    <div class="startrow"><span style="color:var(--muted)">Download links expire a few days after Snapchat’s e-mail.</span><button class="btn pri big" id="c-start"><svg class="i"><use href="#i-play"/></svg>Open my data</button></div>
+  </div><div class="side">
+    <div class="card"><h4>Get your export</h4><ol class="steps"><li><span>Snapchat → <b>Settings → Privacy Controls → My Data</b></span></li><li><span>Tick <b>Memories, Chat Media, Chat History, Friends</b></span></li><li><span>Turn on <b>Export JSON Files</b> (important)</span></li><li><span>Submit, then download the zip from the e-mail</span></li></ol></div>
+    <div class="note info"><svg class="i"><use href="#i-info"/></svg><span>Snapchat only exports <b>saved</b> chats. Opened snaps are deleted by Snapchat itself.</span></div>
+  </div></div>
+</section>
+
+<!-- ABOUT / UPDATE -->
+<section class="page" id="p-about">
+  <div class="ph"><div class="ic g8"><svg class="i"><use href="#i-sparkle"/></svg></div><div><h1>Updates &amp; about</h1><p>Keep the app up to date with one click.</p></div></div>
+  <div class="about">
+    <div class="card"><h3>Software update</h3><p class="sub" id="u-text">Checking…</p>
+      <div class="row"><button class="btn" id="u-check"><svg class="i"><use href="#i-refresh"/></svg>Check again</button><button class="btn pri hide" id="u-go"><svg class="i"><use href="#i-download"/></svg>Update now</button></div>
+      <div id="u-note"></div></div>
+    <div class="card"><h3>About</h3>
+      <div class="kv"><span>Version</span><b id="a-ver">—</b></div>
+      <div class="kv"><span>Administrator</span><b id="a-admin">—</b></div>
+      <div class="kv"><span>Recovered files are saved in</span><b id="a-out" style="max-width:60%;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</b></div>
+      <div class="row" style="margin-top:12px"><button class="btn sm" id="a-gh"><svg class="i"><use href="#i-ext"/></svg>Project on GitHub</button><button class="btn sm" id="a-openout"><svg class="i"><use href="#i-folder"/></svg>Open output folder</button></div></div>
+  </div>
+  <div class="note info"><svg class="i"><use href="#i-shield"/></svg><span>Use this software only on your own devices and accounts, or with the owner’s permission. It works completely offline except for updates, ADB download and Snapchat memory downloads.</span></div>
+</section>
+
+<!-- PROGRESS -->
+<section class="page" id="p-progress">
+  <div class="prog">
+    <h2 id="r-title">Working…</h2>
+    <div class="ring" id="r-ring"><svg viewBox="0 0 210 210"><circle class="bgc" cx="105" cy="105" r="90"/><circle class="fg" id="r-fg" cx="105" cy="105" r="90" stroke-dasharray="565.5" stroke-dashoffset="565.5"/></svg><div class="pct"><div><span id="r-pct">0%</span><small id="r-pctl">progress</small></div></div></div>
+    <div class="status" id="r-status">Starting…</div>
+    <div class="meta"><div><b id="r-time">0:00</b>elapsed</div><div><b id="r-where" style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</b>saving to</div></div>
+    <button class="btn danger" id="r-stop"><svg class="i"><use href="#i-stop"/></svg>Stop</button>
+    <details><summary>Show details</summary><pre class="log" id="r-log"></pre></details>
+  </div>
+</section>
+
+<!-- RESULTS -->
+<section class="page" id="p-results">
+  <div class="reshead"><div class="okc" id="x-icon"><svg class="i" style="width:26px;height:26px"><use href="#i-check"/></svg></div>
+    <div><h2 id="x-title">Recovery complete</h2><p id="x-sub">—</p></div>
+    <div class="acts"><button class="btn pri hide" id="x-view"><svg class="i"><use href="#i-chat"/></svg>Open chats</button><button class="btn" id="x-folder"><svg class="i"><use href="#i-folder"/></svg>Open folder</button><button class="btn" id="x-new"><svg class="i"><use href="#i-back"/></svg>New recovery</button></div></div>
+  <div id="x-err"></div>
+  <div class="cats" id="x-cats"></div>
+  <div class="files" id="x-files"></div>
+  <div class="more" id="x-more"></div>
+</section>
+</main>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const ico=(n,st="")=>`<svg class="i" ${st?`style="${st}"`:""}><use href="#i-${n}"/></svg>`;
+const size=b=>{if(b==null)return"";const u=["B","KB","MB","GB","TB"];let i=0;while(b>=1024&&i<4){b/=1024;i++}return(i?b.toFixed(1):b)+" "+u[i]};
+const api=()=>window.pywebview.api;
+function toast(t){const e=$("#toast");e.textContent=t;e.classList.add("on");clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove("on"),2600)}
+
+const TYPES=[["Photos","image","JPG, PNG, HEIC"],["Videos","video","MP4, MOV, 3GP"],["Audio","music","MP3, voice notes"],["Documents","doc","PDF, Word, Excel"],["Archives","archive","ZIP, APK"]];
+const S={info:null,page:"home",types:{},out:null,drive:{drive:null,sdcard:null},drives:null,mode:"quick",backup:null,backups:[],wafile:null,wakey:null,wamedia:null,scexp:null,imgfile:null,polling:null,lastJob:null,resultCat:null};
+
+/* ---------- navigation ---------- */
+function go(p){
+  if(p==="progress"&&!S.polling&&!S.lastJob)p="home";
+  S.page=p;$$(".page").forEach(e=>e.classList.toggle("on",e.id==="p-"+p));
+  $$(".nitem").forEach(e=>e.classList.toggle("on",e.dataset.go===p));
+  $("#main").scrollTop=0;
+  if(p==="ios"&&!S.backupsLoaded)loadBackups();
+  if((p==="drive"||p==="sdcard")&&!S.drives)loadDrives();
+  if(p==="about")checkUpdate();
+}
+document.addEventListener("click",e=>{const g=e.target.closest("[data-go]");if(g){go(g.dataset.go)}});
+
+/* ---------- shared widgets ---------- */
+function renderChips(){
+  $$("[data-types]").forEach(box=>{
+    const k=box.dataset.types;S.types[k]=S.types[k]||new Set(TYPES.filter(t=>t[0]!=="Archives").map(t=>t[0]));
+    box.innerHTML=TYPES.map(([n,i,sub])=>`<button class="chip ${S.types[k].has(n)?"on":""}" data-t="${n}"><span class="dot">${ico(i)}</span><span><b>${n}</b><small>${sub}</small></span><span class="tick">${ico("check")}</span></button>`).join("");
+    box.querySelectorAll(".chip").forEach(c=>c.onclick=()=>{const s=S.types[k];s.has(c.dataset.t)?s.delete(c.dataset.t):s.add(c.dataset.t);if(!s.size){s.add(c.dataset.t);toast("Choose at least one type")}renderChips()});
+  });
+}
+function renderOut(){
+  $$("[data-out]").forEach(box=>{
+    box.innerHTML=`<div class="field">${ico("folder")}<span class="path">${esc(S.out)}</span><button class="btn sm">Change…</button><button class="btn sm" title="Open">${ico("ext")}</button></div><div class="sub" style="margin:6px 0 0;font-size:12px">A new dated folder is created inside for each recovery.</div>`;
+    const [chg,opn]=box.querySelectorAll("button");
+    chg.onclick=async()=>{const f=await api().pick_folder(S.out);if(f){S.out=f;renderOut()}};
+    opn.onclick=()=>api().open_path(S.out).then(ok=>ok||toast("Folder will be created when you start"));
+  });
+}
+function adminBanner(){
+  const need=S.info&&S.info.os==="windows"&&!S.info.admin;
+  ["#d-admin","#s-admin"].forEach(id=>{$(id).innerHTML=need?`<div class="note warn" style="margin:0 0 16px;align-items:center">${ico("shield")}<span style="flex:1">Reading drives directly needs <b>Administrator</b> rights.</span><button class="btn sm" data-admin>Restart as Administrator</button></div>`:""});
+  $$("[data-admin]").forEach(b=>b.onclick=async()=>{if(!await api().relaunch_admin())toast("Administrator permission was not given")});
+}
+
+/* ---------- android ---------- */
+async function detect(prefix){
+  const dev=$(`#${prefix}-dev`),t=$(`#${prefix}-devt`),s=$(`#${prefix}-devs`);
+  t.textContent="Looking for phone…";s.textContent="";dev.className="dev";
+  const st=await api().android_status();
+  const adbBtn=$("#a-adb");
+  if(!st.adb){t.textContent="ADB is not installed";s.textContent="ADB is Google’s free tool for talking to Android phones (about 10 MB).";dev.className="dev wait";if(prefix==="a")adbBtn.classList.remove("hide");else s.textContent+=" Install it on the Android page.";return null}
+  adbBtn.classList.add("hide");
+  const ok=(st.devices||[]).filter(d=>d.state==="device");
+  if(ok.length){const d=ok[0];t.textContent=(d.model||"Android phone")+" connected";s.textContent="Serial "+d.serial+(ok.length>1?` · ${ok.length} phones connected, the first one is used`:"");dev.className="dev okd";return d}
+  if((st.devices||[]).some(d=>d.state==="unauthorized")){t.textContent="Tap “Allow” on the phone";s.textContent="The phone is connected but USB debugging was not allowed yet. Unlock it and tap Allow, then Detect again.";dev.className="dev wait";return null}
+  t.textContent="No phone found";s.textContent=st.error||"Check the cable, USB debugging and the “File transfer” mode.";dev.className="dev";return null;
+}
+$("#a-detect").onclick=()=>detect("a");$("#w-detect").onclick=()=>detect("w");
+$("#a-adb").onclick=()=>run("install_adb",{},{after:()=>{go("android");detect("a")}});
+$("#a-start").onclick=async()=>{const d=await detect("a");if(!d)return toast("Connect the phone first");run("android",{serial:d.serial,types:[...S.types.android],thumbnails:$("#a-thumbs").checked,out:S.out})};
+
+/* ---------- iphone ---------- */
+async function loadBackups(path){
+  S.backupsLoaded=true;$("#i-list").innerHTML=`<div class="empty">Searching for backups…</div>`;
+  S.backups=await api().ios_backups(path||null);S.backup=S.backups[0]||null;renderBackups();
+}
+function renderBackups(){
+  const L=$("#i-list");
+  if(!S.backups.length){L.innerHTML=`<div class="empty">No iPhone backup found on this computer.<br>Make one with Finder / iTunes (see the right), or choose the folder.</div>`;$("#i-pw").classList.add("hide");return}
+  L.innerHTML=S.backups.map((b,i)=>`<button class="opt ${S.backup===b?"on":""}" data-i="${i}"><span class="oi">${ico("iphone")}</span><span class="ot"><b>${esc(b.desc)}</b><small>${esc(b.dir)}</small></span>${b.encrypted?`<span class="badge amber">${ico("lock","width:12px;height:12px;vertical-align:-2px")} encrypted</span>`:""}<span class="radio"></span></button>`).join("");
+  L.querySelectorAll(".opt").forEach(o=>o.onclick=()=>{S.backup=S.backups[+o.dataset.i];renderBackups()});
+  $("#i-pw").classList.toggle("hide",!(S.backup&&S.backup.encrypted));
+}
+$("#i-refresh").onclick=()=>loadBackups();
+$("#i-browse").onclick=async()=>{const f=await api().pick_folder();if(f)loadBackups(f)};
+$("#i-start").onclick=()=>{if(!S.backup)return toast("Choose a backup first");if(S.backup.encrypted&&!$("#i-pass").value)return toast("Enter the backup password");run("ios",{backup:S.backup.dir,password:$("#i-pass").value,types:[...S.types.ios],out:S.out})};
+
+/* ---------- drives ---------- */
+const KIND_ICON={"HDD":"hdd","SSD":"hdd","NVMe SSD":"hdd","USB":"usb","Disk":"hdd"};
+const KIND_BADGE={"HDD":"green","USB":"green","SSD":"amber","NVMe SSD":"amber"};
+async function loadDrives(){
+  $$("[data-drives]").forEach(b=>b.innerHTML=`<div class="empty">Reading drives…</div>`);
+  const r=await api().drives();S.drives=r.drives||[];renderDrives();
+}
+function renderDrives(){
+  $$("[data-drives]").forEach(box=>{
+    const k=box.dataset.drives;
+    let list=S.drives.slice();if(k==="sdcard")list.sort((a,b)=>(b.kind==="USB")-(a.kind==="USB"));
+    if(!list.length){box.innerHTML=`<div class="empty">No drives found. ${S.info&&S.info.os==="windows"&&!S.info.admin?"Restart as Administrator to see them.":"Try Refresh."}</div>`;return}
+    if(!S.drive[k])S.drive[k]=k==="sdcard"?(list.find(d=>d.kind==="USB")||null):null;
+    box.innerHTML=list.map((d,i)=>`<button class="opt ${S.drive[k]&&S.drive[k].path===d.path?"on":""}" data-p="${esc(d.path)}"><span class="oi">${ico(KIND_ICON[d.kind]||"hdd")}</span><span class="ot"><b>${esc(d.name||"Drive")} </b><small>${esc(d.path)}</small></span><span class="badge ${KIND_BADGE[d.kind]||""}">${esc(d.kind)}</span><span class="badge blue">${size(d.size)}</span><span class="radio"></span></button>`).join("");
+    box.querySelectorAll(".opt").forEach(o=>o.onclick=()=>{S.drive[k]=S.drives.find(d=>d.path===o.dataset.p);renderDrives()});
+  });
+}
+document.addEventListener("click",e=>{if(e.target.closest("[data-refresh-drives]")){S.drives=null;loadDrives()}});
+$$("#d-mode button").forEach(b=>b.onclick=()=>{S.mode=b.dataset.mode;$$("#d-mode button").forEach(x=>x.classList.toggle("on",x===b))});
+$("#d-start").onclick=()=>{const d=S.drive.drive;if(!d)return toast("Select a drive first");run("drive",{device:d.path,mode:S.mode,types:[...S.types.drive],out:S.out})};
+$("#s-start").onclick=()=>{const d=S.drive.sdcard;if(!d)return toast("Select the SD card / USB drive first");run("sdcard",{device:d.path,mode:"deep",types:[...S.types.sdcard],out:S.out})};
+$("#s-makeimg").onclick=()=>{const d=S.drive.sdcard;if(!d)return toast("Select the card first");run("makeimage",{device:d.path,out:S.out},{after:st=>{toast("Image saved - scan it on the Disk image page");go("image")}})};
+
+/* ---------- image ---------- */
+$("#g-pick").onclick=async()=>{const f=await api().pick_file("image");if(f){S.imgfile=f;$("#g-file").textContent=f;$("#g-file").classList.remove("none")}};
+$("#g-start").onclick=()=>{if(!S.imgfile)return toast("Choose an image file first");run("image",{file:S.imgfile,types:[...S.types.image],out:S.out})};
+
+/* ---------- whatsapp ---------- */
+$$("#w-tabs button").forEach(b=>b.onclick=()=>{$$("#w-tabs button").forEach(x=>x.classList.toggle("on",x===b));$("#w-open").classList.toggle("hide",b.dataset.tab!=="open");$("#w-pull").classList.toggle("hide",b.dataset.tab!=="pull")});
+function setWaFile(f){S.wafile=f;$("#w-file").textContent=f;$("#w-file").classList.remove("none");const enc=/\.crypt\d+$/i.test(f);$("#w-keystate").textContent=enc?"required for this file":"not needed for this file";$("#w-keystate").className="badge "+(enc?"amber":"green")}
+$("#w-pickf").onclick=async()=>{const f=await api().pick_file("whatsapp");if(f)setWaFile(f)};
+$("#w-pickd").onclick=async()=>{const f=await api().pick_folder();if(f)setWaFile(f)};
+$("#w-keyfile").onclick=async()=>{const f=await api().pick_file("key");if(f){$("#w-key").value=f;toast("Key file selected")}};
+$("#w-pickm").onclick=async()=>{const f=await api().pick_folder();if(f){S.wamedia=f;$("#w-media").textContent=f;$("#w-media").classList.remove("none")}};
+$("#w-start").onclick=()=>{if(!S.wafile)return toast("Choose the backup file first");if(/\.crypt\d+$/i.test(S.wafile)&&!$("#w-key").value.trim())return toast("Enter the 64-digit key or choose the key file");run("wa_view",{file:S.wafile,key:$("#w-key").value.trim(),media:S.wamedia,out:S.out})};
+$("#w-pullstart").onclick=async()=>{const d=await detect("w");if(!d)return toast("Connect the phone first");run("wa_pull",{out:S.out})};
+
+/* ---------- snapchat ---------- */
+function setExp(f){S.scexp=f;$("#c-exp").textContent=f;$("#c-exp").classList.remove("none")}
+$("#c-pickz").onclick=async()=>{const f=await api().pick_file("zip");if(f)setExp(f)};
+$("#c-pickd").onclick=async()=>{const f=await api().pick_folder();if(f)setExp(f)};
+$("#c-start").onclick=()=>{if(!S.scexp)return toast("Choose your Snapchat export first");run("sc_view",{export:S.scexp,download:$("#c-mem").checked,out:S.out})};
+
+/* ---------- update / about ---------- */
+async function checkUpdate(){
+  $("#u-text").textContent="Checking…";$("#u-go").classList.add("hide");
+  const r=await api().check_update();
+  if(r.error){$("#u-text").innerHTML=`You have version <b>${esc(r.current)}</b>. Could not reach GitHub right now.`;return r}
+  if(r.newer){$("#u-text").innerHTML=`Version <b>${esc(r.latest)}</b> is available (you have ${esc(r.current)}).`;$("#u-go").classList.remove("hide");$("#updpill").style.display="inline-block";$("#homeupd").innerHTML=`<b style="color:var(--ok)">Version ${esc(r.latest)} is available</b>`}
+  else $("#u-text").innerHTML=`You have the latest version (<b>${esc(r.current)}</b>).`;
+  return r;
+}
+$("#u-check").onclick=checkUpdate;
+$("#u-go").onclick=()=>run("update",{},{after:st=>{go("about");$("#u-note").innerHTML=st.error?`<div class="note bad">${ico("alert")}<span>${esc(st.error)}</span></div>`:`<div class="note okn" style="align-items:center">${ico("check")}<span style="flex:1">Update installed. Restart the app to use the new version.</span><button class="btn sm ok" id="u-restart">Restart now</button></div>`;const b=$("#u-restart");if(b)b.onclick=()=>api().restart()}});
+$("#a-gh").onclick=()=>api().open_url("https://github.com/kashif55505/my-apps/tree/main/phone-data-recovery");
+$("#a-openout").onclick=()=>api().open_path(S.out).then(ok=>ok||toast("Nothing recovered yet"));
+
+/* ---------- running a task ---------- */
+let afterHook=null;
+async function run(kind,params,opts={}){
+  const r=await api().start(kind,params);
+  if(r.error)return toast(r.error);
+  afterHook=opts.after||null;S.lastJob={kind};
+  $("#r-log").textContent="";$("#r-stop").disabled=false;$("#r-stop").innerHTML=ico("stop")+"Stop";
+  go("progress");poll();clearInterval(S.polling);S.polling=setInterval(poll,400);
+  $("#runpill").style.display="block";
+}
+function fmtTime(s){const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return(h?h+":"+String(m).padStart(2,"0"):m)+":"+String(x).padStart(2,"0")}
+async function poll(){
+  const st=await api().poll();if(st.idle)return;
+  $("#r-title").textContent=st.title+"…";$("#r-status").textContent=st.status||"";$("#r-time").textContent=fmtTime(st.elapsed||0);$("#r-where").textContent=st.out||"—";$("#r-where").title=st.out||"";
+  const ring=$("#r-ring"),fg=$("#r-fg");
+  if(st.percent==null){ring.classList.add("ind");$("#r-pct").textContent="";$("#r-pctl").textContent="working"}
+  else{ring.classList.remove("ind");fg.style.strokeDashoffset=565.5*(1-st.percent/100);$("#r-pct").textContent=st.percent+"%";$("#r-pctl").textContent="progress"}
+  $("#runpill .bar i").style.width=(st.percent||5)+"%";
+  const log=$("#r-log"),atEnd=log.scrollTop+log.clientHeight>=log.scrollHeight-10;log.textContent=(st.log||[]).join("\n");if(atEnd)log.scrollTop=log.scrollHeight;
+  if(st.done){clearInterval(S.polling);S.polling=null;$("#runpill").style.display="none";finish(st)}
+}
+$("#r-stop").onclick=async()=>{await api().cancel();$("#r-stop").disabled=true;$("#r-stop").innerHTML="Stopping…"};
+
+async function finish(st){
+  if(afterHook){const h=afterHook;afterHook=null;if(!st.error)return h(st);}
+  go("results");
+  const err=!!st.error;
+  $("#x-icon").className="okc"+(err?" badc":"");$("#x-icon").innerHTML=ico(err?"alert":"check","width:26px;height:26px");
+  $("#x-err").innerHTML=err?`<div class="note bad" style="margin:0 0 16px">${ico("alert")}<span style="white-space:pre-wrap">${esc(st.error)}</span></div>`:"";
+  const viewer=st.open&&/\.html$/.test(st.open);
+  $("#x-view").classList.toggle("hide",!viewer||err);$("#x-view").onclick=()=>api().open_viewer(st.open).then(ok=>ok||toast("Viewer not found"));
+  $("#x-folder").onclick=()=>api().open_path(st.out).then(ok=>ok||toast("Nothing was saved"));
+  $("#x-new").onclick=()=>go(({android:"android",ios:"ios",drive:"drive",sdcard:"sdcard",image:"image",wa_view:"whatsapp",wa_pull:"whatsapp",sc_view:"snapchat",sc_memories:"snapchat"})[st.kind]||"home");
+  const res=await api().results(st.out);S.res=res;
+  const total=res.categories.reduce((a,c)=>a+c.count,0);
+  $("#x-title").textContent=err?(st.error==="Stopped by you."?"Stopped":"Something went wrong"):(viewer?"Your chats are ready":(total?"Recovery complete":"Finished — nothing found"));
+  const folderName=(st.out||"").split(/[\\/]/).pop();
+  $("#x-sub").title=st.out||"";
+  $("#x-sub").textContent=err?"See the message below.":viewer?`Click “Open chats” to read them${total?` · ${total.toLocaleString()} media files`:""} · saved in ${folderName}`:total?`${total.toLocaleString()} files · ${size(res.total_size)} · took ${fmtTime(st.elapsed)} · saved in ${folderName}`:"No matching files were found in this source.";
+  if(viewer&&!err)setTimeout(()=>api().open_viewer(st.open),300);
+  S.resultCat=res.categories[0]?res.categories[0].name:null;renderResults();
+}
+const CAT_ICON={Photos:"image",Videos:"video",Audio:"music",Documents:"doc",Archives:"archive",Other:"file"};
+function renderResults(){
+  const res=S.res;
+  $("#x-cats").innerHTML=res.categories.map(c=>`<button class="${c.name===S.resultCat?"on":""}" data-c="${c.name}">${ico(CAT_ICON[c.name]||"file","width:17px;height:17px")}<b>${c.name}</b><span>${c.count.toLocaleString()} · ${size(c.size)}</span></button>`).join("");
+  $$("#x-cats button").forEach(b=>b.onclick=()=>{S.resultCat=b.dataset.c;renderResults()});
+  const cat=res.categories.find(c=>c.name===S.resultCat);
+  if(!cat){$("#x-files").innerHTML="";$("#x-more").textContent="";return}
+  $("#x-files").innerHTML=cat.files.map((f,i)=>`<button class="file" data-i="${i}" title="${esc(f.rel)}"><div class="th">${ico(CAT_ICON[cat.name]||"file")}${f.damaged?`<span class="b badge red">may be damaged</span>`:f.deleted?`<span class="b badge blue">deleted</span>`:""}</div><div class="fn"><b>${esc(f.name)}</b><small>${size(f.size)}</small></div></button>`).join("");
+  $("#x-more").textContent=cat.count>cat.files.length?`Showing ${cat.files.length} of ${cat.count.toLocaleString()} — open the folder to see all.`:"";
+  $$("#x-files .file").forEach(el=>el.onclick=()=>api().open_path(cat.files[+el.dataset.i].path));
+  if(cat.name==="Photos"){
+    const io=new IntersectionObserver(ents=>ents.forEach(async en=>{if(!en.isIntersecting)return;io.unobserve(en.target);const f=cat.files[+en.target.dataset.i];const u=await api().thumb(f.path);if(u){const th=en.target.querySelector(".th");const b=th.querySelector(".b");th.innerHTML=`<img src="${u}" alt="">`;if(b)th.appendChild(b)}}),{root:$("#main"),rootMargin:"200px"});
+    $$("#x-files .file").forEach(el=>io.observe(el));
+  }
+}
+
+/* ---------- start ---------- */
+async function init(){
+  S.info=await api().info();S.out=S.info.default_out;
+  $("#ver").textContent="Version "+S.info.version;$("#a-ver").textContent=S.info.version;$("#a-admin").textContent=S.info.admin?"Yes":"No";$("#a-out").textContent=S.out;$("#a-out").title=S.out;
+  renderChips();renderOut();adminBanner();
+  checkUpdate();
+  const st=await api().poll();if(!st.idle&&!st.done){S.lastJob={kind:st.kind};go("progress");S.polling=setInterval(poll,400);$("#runpill").style.display="block"}
+}
+if(window.pywebview&&window.pywebview.api)init();else window.addEventListener("pywebviewready",init);
+</script>
+</body>
+</html>
