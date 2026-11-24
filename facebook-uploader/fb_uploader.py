@@ -258,6 +258,8 @@ def add_account(name, email, password, page_name, proxy="", ix_profile="", folde
     }
     if old.get("pages"):
         rec["pages"] = old["pages"]      # detect kiye pages + ticks mehfooz
+    if old.get("ix_key"):
+        rec["ix_key"] = old["ix_key"]    # ixBrowser free-mode link mehfooz
     accounts.append(rec)
     save_accounts(accounts)
     return acc_id
@@ -301,6 +303,140 @@ def set_page_enabled(acc_id, key, enabled):
         if (p.get("url") or p.get("name")) == key:
             p["enabled"] = bool(enabled)
     update_account(acc_id, pages=pages)
+
+
+# ============ ixBrowser FREE mode (bina Local API) ============
+# ixBrowser profile ko jab aap khud kholte ho, to uski poori launch command
+# (fingerprint settings samet) Windows process se parh kar save kar lete hain.
+# Baad mein app wahi command + debugging port laga kar profile khud kholti hai.
+def _ix_api_up(port=53200):
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=1.5):
+            return True
+    except Exception:
+        return False
+
+
+def _split_cmdline(cl):
+    try:
+        import ctypes
+        from ctypes import wintypes
+        f = ctypes.windll.shell32.CommandLineToArgvW
+        f.restype = ctypes.POINTER(wintypes.LPWSTR)
+        f.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+        n = ctypes.c_int()
+        ptr = f(cl, ctypes.byref(n))
+        args = [ptr[i] for i in range(n.value)]
+        ctypes.windll.kernel32.LocalFree(ptr)
+        return args
+    except Exception:
+        import shlex
+        return shlex.split(cl, posix=False)
+
+
+def _argval(argv, name):
+    for a in argv:
+        if a.startswith(name + "="):
+            return a.split("=", 1)[1].strip('"')
+    return ""
+
+
+def _ix_udd_key(udd):
+    return os.path.basename(os.path.normpath(udd.replace("\\\\", "\\"))).lower()
+
+
+def _ix_profile_fb_user(udd):
+    """Profile folder ki choti files mein 'name,url,username,password' wali list hoti hai."""
+    try:
+        d = udd.replace("\\\\", "\\")
+        for fn in os.listdir(d):
+            fp = os.path.join(d, fn)
+            if not os.path.isfile(fp) or os.path.getsize(fp) > 5000:
+                continue
+            with open(fp, "r", encoding="utf-8", errors="ignore") as fh:
+                txt = fh.read()
+            if not txt.startswith("name,url,username,password"):
+                continue
+            for line in txt.splitlines()[1:]:
+                parts = line.split(",")
+                if len(parts) >= 3 and "facebook" in (parts[0] + parts[1]).lower() and parts[2].strip():
+                    return parts[2].strip()
+    except Exception:
+        pass
+    return ""
+
+
+def ix_running_profiles():
+    """Abhi khule ixBrowser profiles: [{pid, argv, key, fb_user}]"""
+    if os.name != "nt":
+        return []
+    try:
+        cmd = ("Get-CimInstance Win32_Process -Filter \"name='chrome.exe'\" | "
+               "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress")
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True,
+                             text=True, timeout=40, creationflags=0x08000000).stdout.strip()
+        rows = json.loads(out) if out else []
+        if isinstance(rows, dict):
+            rows = [rows]
+    except Exception:
+        return []
+    res = []
+    for r in rows:
+        cl = (r or {}).get("CommandLine") or ""
+        if "ixbrowser" not in cl.lower() or "--type=" in cl or "--user-data-dir" not in cl:
+            continue
+        argv = _split_cmdline(cl)
+        udd = _argval(argv, "--user-data-dir")
+        if not udd:
+            continue
+        res.append({"pid": r.get("ProcessId"), "argv": argv, "key": _ix_udd_key(udd),
+                    "fb_user": _ix_profile_fb_user(udd)})
+    return res
+
+
+def ix_saved_cmds():
+    return load_settings().get("ix_cmds", {})
+
+
+def ix_save_cmd(key, argv):
+    s = load_settings()
+    s.setdefault("ix_cmds", {})[key] = argv
+    save_settings(s)
+
+
+def ix_capture_open_profiles():
+    """Khule profiles ki command save karo aur email se IDs ke sath jor do.
+    Return (matched[(acc_name, key)], unmatched[profile dict])"""
+    accs = load_accounts()
+    matched, unmatched = [], []
+    for pr in ix_running_profiles():
+        ix_save_cmd(pr["key"], pr["argv"])
+        acc = None
+        fu = (pr["fb_user"] or "").lower()
+        for a in accs:
+            if a.get("ix_key") == pr["key"] or (fu and a.get("email", "").strip().lower() == fu):
+                acc = a; break
+        if acc:
+            update_account(acc["id"], ix_key=pr["key"])
+            matched.append((acc["name"], pr["key"]))
+        else:
+            unmatched.append(pr)
+    return matched, unmatched
+
+
+def _kill_pid_tree(pid):
+    try:
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
+                       timeout=20, creationflags=0x08000000)
+    except Exception:
+        pass
+
+
+def _free_port():
+    import socket
+    s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close()
+    return p
 
 
 def parse_account_line(line):
@@ -1390,8 +1526,16 @@ class Automation:
         # ---- ixBrowser mode: profile ixBrowser kholega (apna IP + fingerprint) ----
         cfg = self.browser_cfg or {}
         if cfg.get("use_ixbrowser") or cfg.get("browser") == "ixbrowser":
-            if self._start_ixbrowser(account):
+            api_ok = _ix_api_up()
+            if api_ok and self._start_ixbrowser(account):
                 return
+            if self._start_ix_free(account):
+                return
+            if not api_ok:
+                self.log(T(f"[{account['name']}] ixBrowser API is off (free plan). Open this ID's profile once in ixBrowser, "
+                           f"then press 'Capture open ixBrowser profiles' in Accounts.",
+                           f"[{account['name']}] ixBrowser API band hai (free plan). Is ID ka profile ek dafa ixBrowser mein kholein, "
+                           f"phir Accounts mein 'Capture open ixBrowser profiles' dabayein."))
             self.log(T(f"[{account['name']}] Could not connect to ixBrowser — using normal browser.", f"[{account['name']}] ixBrowser se connect nahi hua — normal browser par chal rahe hain."))
 
         user_dir = session_dir_for(account["id"])
@@ -1531,8 +1675,73 @@ class Automation:
             self.log(T(f"[{account['name']}] ixBrowser error: {e}", f"[{account['name']}] ixBrowser error: {e}"))
             return False
 
+    def _start_ix_free(self, account):
+        """Free plan: saved launch command + debugging port se profile khud kholo."""
+        key = (account.get("ix_key") or "").strip()
+        running = ix_running_profiles()
+        if not key:
+            fu = account.get("email", "").strip().lower()
+            for pr in running:
+                if fu and pr["fb_user"].lower() == fu:
+                    key = pr["key"]; ix_save_cmd(key, pr["argv"])
+                    update_account(account["id"], ix_key=key); break
+        if not key:
+            return False
+        argv = None
+        for pr in running:
+            if pr["key"] == key:
+                argv = pr["argv"]; ix_save_cmd(key, argv)
+                self.log(T(f"[{account['name']}] Profile is open in ixBrowser — reopening it with control...",
+                           f"[{account['name']}] Profile ixBrowser mein khula hai — control ke sath dobara khol rahe hain..."))
+                _kill_pid_tree(pr["pid"]); time.sleep(3)
+                break
+        if argv is None:
+            argv = ix_saved_cmds().get(key)
+        if not argv:
+            return False
+        port = _free_port()
+        new = [a for a in argv if not a.startswith("--remote-debugging-port")
+               and not a.startswith("--remote-allow-origins")]
+        new = [(f"--protected-starttime={int(time.time())}" if a.startswith("--protected-starttime=") else a) for a in new]
+        new += [f"--remote-debugging-port={port}", "--remote-allow-origins=*"]
+        try:
+            self._ix_proc = subprocess.Popen(new, creationflags=0x08000000)
+        except Exception as e:
+            self.log(f"[{account['name']}] ixBrowser (free) launch error: {e}")
+            return False
+        import urllib.request
+        ok = False
+        for _ in range(40):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2).read()
+                ok = True; break
+            except Exception:
+                time.sleep(1)
+        if not ok:
+            self.log(T(f"[{account['name']}] ixBrowser profile opened but control port did not answer.",
+                       f"[{account['name']}] ixBrowser profile khula lekin control port ne jawab nahi diya."))
+            return False
+        browser = self._pw.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+        self._ix_browser = browser
+        self.context = browser.contexts[0] if browser.contexts else browser.new_context()
+        self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
+        ix_mark_open(account["id"])
+        self.log(T(f"[{account['name']}] Connected to ixBrowser profile (free mode).",
+                   f"[{account['name']}] ixBrowser profile se connect (free mode)."))
+        return True
+
     def stop(self):
         try:
+            # ixBrowser free mode: apna khola hua process band karo
+            if getattr(self, "_ix_proc", None):
+                try:
+                    if self._ix_browser:
+                        self._ix_browser.close()
+                except Exception:
+                    pass
+                self._ix_browser = None
+                _kill_pid_tree(self._ix_proc.pid)
+                self._ix_proc = None
             # ixBrowser mode: profile band karo
             if getattr(self, "_ix_profile_id", None) and getattr(self, "_ix_client", None):
                 try:
@@ -2660,7 +2869,7 @@ class AccountPanel:
     def refresh(self):
         self.tree.delete(*self.tree.get_children())
         for i, a in enumerate(load_accounts(), 1):
-            mode = a.get("ix_profile") or (a.get("proxy") and "proxy") or "-"
+            mode = a.get("ix_profile") or (a.get("ix_key") and "ix (free)") or (a.get("proxy") and "proxy") or "-"
             img = self.app.img_check if a["id"] in self.checked else self.app.img_empty
             self.tree.insert("", "end", iid=a["id"], image=img,
                              values=(i, a["name"], a["email"], self._pages_summary(a),
@@ -2965,6 +3174,10 @@ class App(tk.Tk):
         lb = ttk.Frame(lg); lb.pack(fill="x", padx=8, pady=3)
         ttk.Button(lb, text=T("LOGIN selected IDs", "LOGIN selected IDs"), command=self._login_selected).pack(side="left")
         ttk.Button(lb, text="STOP", command=self._stop_all).pack(side="left", padx=4)
+        lc = ttk.Frame(lg); lc.pack(fill="x", padx=8, pady=3)
+        ttk.Button(lc, text=T("Capture open ixBrowser profiles (free plan)",
+                              "Khule ixBrowser profiles capture (free plan)"),
+                   command=self._ix_capture_click).pack(side="left")
 
         form = ttk.LabelFrame(left, text=T("Add / edit ID", "ID add / edit karein"))
         form.pack(fill="y")
@@ -3054,6 +3267,51 @@ class App(tk.Tk):
                          f"=== LOGIN START: {len(accs)} IDs, aik waqt {threads} ==="))
         mgr = threading.Thread(target=self._run_login_pool, args=(list(accs), threads, detect), daemon=True)
         mgr.start(); self.workers.append(mgr)
+
+    def _ix_capture_click(self):
+        self.log_q.put(T("Reading open ixBrowser profiles...", "Khule ixBrowser profiles parh rahe hain..."))
+        def work():
+            matched, unmatched = ix_capture_open_profiles()
+            self.after(0, lambda: self._ix_capture_done(matched, unmatched))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _ix_capture_done(self, matched, unmatched):
+        for name, key in matched:
+            self.log_q.put(T(f"ixBrowser profile linked: {name}", f"ixBrowser profile jur gaya: {name}"))
+        if not matched and not unmatched:
+            messagebox.showinfo("ixBrowser", T(
+                "No open ixBrowser profile found.\nOpen the profiles in ixBrowser first (Open / Open in Batches), then press Capture again.",
+                "Koi khula ixBrowser profile nahi mila.\nPehle ixBrowser mein profiles kholein (Open / Open in Batches), phir dobara Capture dabayein."))
+            return
+        if unmatched:
+            self._ix_assign_dialog(unmatched)
+        else:
+            messagebox.showinfo("ixBrowser", T(f"{len(matched)} profile(s) linked. You can close them now — the app will open them itself.",
+                                               f"{len(matched)} profile jur gaye. Ab inhe band kar sakte ho — app khud kholegi."))
+        self._refresh_all_panels()
+
+    def _ix_assign_dialog(self, unmatched):
+        accs = load_accounts()
+        names = [f"{a['name']}  <{a['email']}>" for a in accs]
+        win = tk.Toplevel(self); win.title(T("Link ixBrowser profiles", "ixBrowser profiles jorein"))
+        ttk.Label(win, text=T("These open profiles have no matching email. Choose the ID for each:",
+                              "In khule profiles ka email match nahi hua. Har ek ke liye ID chunein:")).pack(anchor="w", padx=10, pady=8)
+        vars_ = []
+        for pr in unmatched:
+            row = ttk.Frame(win); row.pack(fill="x", padx=10, pady=3)
+            lbl = pr["fb_user"] or T("(no username saved in profile)", "(profile mein username nahi)")
+            ttk.Label(row, text=f"{pr['key'][:8]}…  {lbl}", width=42).pack(side="left")
+            v = tk.StringVar(); vars_.append((pr, v))
+            ttk.Combobox(row, textvariable=v, values=names, width=40, state="readonly").pack(side="left", padx=4)
+        def save():
+            n = 0
+            for pr, v in vars_:
+                if v.get() in names:
+                    a = accs[names.index(v.get())]
+                    update_account(a["id"], ix_key=pr["key"]); n += 1
+            win.destroy(); self._refresh_all_panels()
+            self.log_q.put(T(f"{n} ixBrowser profile(s) linked.", f"{n} ixBrowser profile jur gaye."))
+        ttk.Button(win, text=T("Save", "Save"), command=save).pack(pady=10)
 
     def _set_status_all(self, acc_id, text):
         for p in self._panels:
@@ -3842,6 +4100,10 @@ LOGIN SELECTED IDs (top-left box):
  2. "Open at once": how many browsers open together (5 or 10 etc.).
  3. Press LOGIN selected IDs. Each ID opens in its OWN ixBrowser profile
     (created automatically if missing), logs in, types the 2FA code itself.
+ FREE ixBrowser plan (no API): open the profiles in ixBrowser yourself
+    (Open in Batches), press "Capture open ixBrowser profiles". Profiles whose
+    saved username = ID email link automatically; others you pick in a list.
+    After that the app opens those profiles itself (same fingerprint).
  4. With "Detect pages after login" ON, the app finds all Facebook pages
     of that ID and saves them. STOP stops the queue.
 
