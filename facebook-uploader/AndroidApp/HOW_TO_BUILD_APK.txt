@@ -1,0 +1,52 @@
+FACEBOOK UPLOADER — ANDROID APP (Android Studio project)
+=========================================================
+
+Is folder ko Android Studio me kholein (Open -> is "AndroidApp" folder ko
+select karein). Gradle sync hone ke baad:
+   Build -> Build Bundle(s)/APK(s) -> Build APK(s)
+APK yahan milega:  app/build/outputs/apk/debug/app-debug.apk
+Us APK ko phone me install karein.
+
+App me 3 tabs hain:
+-----------------------------------------------------------------
+1) REMOTE  — aap ke PC par chalte software ko control karein
+   - Pehle PC app me: Settings -> Generate key (key copy karein).
+   - PC app ek address dikhata hai jaise:  http://192.168.1.10:8700
+   - Phone app ke "Settings" tab me wo Server URL aur API Key daalein, Save.
+   - Phone aur PC SAME WiFi par hone chahiyein.
+   - "Remote" tab: Connect/Refresh -> IDs ki list aayegi. IDs tick karein,
+     kind (reel/video/photo) + threads chunein, phir START POST / START ACTIVE.
+     STOP se ruk jata hai. Neeche PC ka live log bhi dikhta hai.
+   NOTE: Asli automation (ixBrowser/posting) PC karta hai — phone sirf remote.
+
+2) GRAPH API  — Facebook ki official API se page par post
+   - Page ID + Page Access Token daalein (Facebook Developers se milta hai).
+   - Photo/Video chunein, media ka PUBLIC URL + caption daalein -> POST.
+   - Ye official tareeqa hai (aik account/page, no multi-account/active).
+     Token banane ke liye developers.facebook.com par app + page token chahiye.
+
+3) SETTINGS  — server URL + API key save/test (Remote ke liye).
+-----------------------------------------------------------------
+
+GHAR SE BAHAR (same WiFi na ho) — 2 tareeqe:
+ A) TELEGRAM (sab se asaan, kahin se bhi):
+    - PC app -> Settings -> Telegram Bot Token daalein (Telegram par @BotFather
+      se bot banayein, token lein), Save, app restart.
+    - Apne bot ko /start bhejein (chat khud link ho jata hai).
+    - Phir kahin se bhi commands: /status  /log  /accounts
+      /post all reel 5     (sab IDs par reel, 5 threads)
+      /active all 5        (sab IDs active)
+      /stop
+    - Kaam shuru/khatam/error par notification bhi aata hai.
+ B) PUBLIC TUNNEL (phone app kahin se chale):
+    - cloudflared.exe (free, single file) PC app ke paas rakhein.
+    - PC app -> Settings -> "Public tunnel" tick karke Save, restart.
+    - Log me ek public link aayega jaise https://xxxx.trycloudflare.com
+    - Phone app -> Settings -> Server URL me wahi link daalein (API key same).
+      Ab mobile data par bhi, kahin se bhi, Remote tab kaam karega.
+
+ZAROORI:
+ - Remote tab ke liye PC software chalu hona chahiye aur usme kam az kam
+   ek API key bani ho (phir PC app ko ek dafa restart karein taake server chale).
+ - Android par ixBrowser/Playwright nahi chalta, isi liye heavy automation
+   PC hi karta hai; phone us ko control karta hai.

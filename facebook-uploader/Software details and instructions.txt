@@ -1,0 +1,231 @@
+================================================================
+        FACEBOOK UPLOADER — SOFTWARE DETAILS & INSTRUCTIONS
+                   (Roman Urdu mein mukammal guide)
+================================================================
+
+Ye software aap ki apni group IDs se Facebook par Reels, Videos aur
+Photos AUTOMATIC post karta hai, IDs ko ACTIVE rakhta hai, aur ye sab
+aik hi waqt kai IDs par kar sakta hai. Neeche har tab aur har option
+ki tafseel hai.
+
+
+----------------------------------------------------------------
+0) SHURU KARNE SE PEHLE (ZAROORI)
+----------------------------------------------------------------
+- ixBrowser app PC par chalu ho aur uska "Local API" ON ho.
+- ixBrowser me har ID ki aik profile bana lein (profile ka NAAM yaad
+  rakhein). IP + fingerprint ixBrowser khud deta hai — alag proxy ki
+  zaroorat nahi.
+- Sab se behtar: har ID aik dafa ixBrowser me KHUD Facebook par login
+  kar lein. Is se captcha/2FA aik dafa nikal jata hai aur software ko
+  baar baar login nahi karna parta.
+
+
+----------------------------------------------------------------
+1) ACCOUNT MANAGEMENT (Accounts tab)
+----------------------------------------------------------------
+Yahan aap apni IDs add/edit/delete karte hain.
+
+LEFT FORM — "Add / edit ID":
+  - Name:            ID ki pehchaan ke liye koi naam.
+  - Email / Phone:   Facebook login email ya number.
+  - Password:        Us ID ka password.
+  - Page ka naam:    Jis page par post karni hai uska naam (bilkul wahi).
+  - ixBrowser Profile (naam/ID): ixBrowser me us profile ka NAAM (ya ID
+                     number). Software isi profile ko khol kar kaam karta hai.
+  - Proxy (optional): ixBrowser mode me khali chhor dein (zaroorat nahi).
+  - 2FA secret key (optional): Agar ID par 2-factor (2FA) ON hai to us ki
+    SECRET KEY yahan daal dein (wahi key jo Google Authenticator / 2fa.live
+    me daalte hain). Software login ke waqt us se khud OTP bana kar daal
+    deta hai — 2fa.live ki zaroorat nahi, internet bhi nahi chahiye.
+    (Facebook: Settings -> Security -> 2FA -> Authenticator app -> jo letters/
+    numbers ki key milti hai wahi secret hai.)
+  - Videos folder:   "..." se wo folder chunein jahan us ID ki videos
+                     pari hain. Neeche us folder ki videos ki list aa jati hai.
+  - DAILY max videos (0=unlimited): Is page par AIK DIN me zyada se
+                     zyada kitni videos post hon. 0 = koi limit nahi.
+  - Hashtags:        Is page ke hashtags (aik dafa likhein; har post par
+                     khud lag jayenge).
+
+BUTTONS:
+  - Save ID:         ID save/update karta hai.
+  - New / clear form: Form khali karta hai nayi ID ke liye.
+  - Bulk import from file (.txt): Notepad text file se kai IDs aik saath
+                     add karta hai. Har line me email aur password (name/
+                     page optional). Separator koi bhi: |  ,  ;  :  space ya tab.
+  - IP check (selected): ✔ ki hui ID ka asli IP log me dikhata hai
+                     (proxy/profile sahi hai ya nahi — confirm ke liye).
+  - Page History:    Har page par kaun si video, kis time, success ya fail
+                     (fail ho to wajah) — sab record.
+  - ID History:      Har ID ka login/error record (jaise login kyun nahi hua).
+
+TABLE (right side):
+  - Pick (✔) column par click karke ID select hoti hai (tick lagta hai).
+  - Select all / Unselect all se sab ✔ ya saaf.
+  - Delete selected: ✔ ki hui IDs delete. Ghalti se delete ho jaye to
+    Ctrl+Z dabane se WAPAS aa jati hai.
+  - Status column: kaam ke dauran "Live" (login theek) ya "Die" (login fail).
+
+
+----------------------------------------------------------------
+2) POST (Reels / Video / Photo)  — POSTING
+----------------------------------------------------------------
+Ye tab POSTING ke liye hai. Left sidebar se chunein:
+  - Post Reels / Post Video / Post Photo  (jo karna ho).
+
+CONFIGURE POST options:
+  - Concurrent threads (aik waqt IDs): Aik hi waqt kitni IDs khulein aur
+    saath post karein (jaise 5). Baqi qatar me, aik khatam ho to agli.
+  - Interval between 2 posts: Do videos ke beech kitni der (sec/min/hour
+    unit choose kar sakte hain).
+  - During the gap between posts, keep the ID active (scroll feed):
+    Ye tick karein to gap ke dauran wahi ID feed scroll karti rahegi
+    (active dikhane ke liye). Tick na karein to bas intezaar.
+  - Enable rotation + Times: Rotation on karein to saari videos itni dafa
+    repeat hongi. Off = aik dafa.
+  - Before rotation stops: Do rotation ke beech ka waqfa.
+  - Allow duplicate video posting: By default jo video pehle post ho
+    chuki ya folder me duplicate ho, wo SKIP hoti hai. Ye tick karein to
+    duplicate bhi post hogi.
+  - Delete posted video from device: Tick karein to jo video SAHI post ho
+    jaye wo computer se delete ho jati hai. Jo post na ho wo delete nahi hoti.
+
+Videos har ID ke apne FOLDER se khud uthti hain (Accounts me set).
+Caption = us page ke hashtags (Accounts me). Daily limit bhi page ki apni.
+
+TABLE + START/STOP:
+  - IDs ✔ karein, phir START — posting shuru.
+  - STOP — chalta kaam abhi wali post ke baad ruk jayega.
+
+
+----------------------------------------------------------------
+3) INTERACT (ACTIVE)  — SIRF ACTIVE, KOI POSTING NAHI
+----------------------------------------------------------------
+Ye tab IDs ko ACTIVE/warm-up rakhne ke liye hai. Yahan ki IDs par
+SIRF ye activities hoti hain — KOI POSTING NAHI.
+
+ACTIVITIES (jo chahein tick karein + count/time):
+  - Check Notification (count)
+  - Scroll New Feed (X to Y minutes)
+  - Check Stories (minutes)
+  - Scroll Videos (minutes)
+  - Scroll Reels (minutes)
+  - Confirm Friends (count)
+  - Reaction on Post (count) — Like
+  - Check message + Reply: message check kare, aur Reply on ho to jawab
+    de. Reply text me {Hi|Hey|Holla} jaisa likh sakte hain (har dafa
+    random chunta hai).
+  - Comments on Post (count + text)
+  - Loops: saari activities kitni dafa repeat hon.
+  - Threads: aik waqt kitni IDs active hon.
+
+ISTEMAAL:
+  - Table me jin IDs ko sirf ACTIVE rakhna hai unhe ✔ karein.
+  - START ACTIVE dabayein — ye IDs sirf scroll/like/comment karengi,
+    POST kuch nahi hoga.
+  - STOP se ruk jayega.
+  - Save settings: activity settings yaad rakhta hai.
+
+FAIDA: Jo IDs nayi hain ya posting nahi karni, unhe is tab se rozana
+thori der active rakhein — is se ID healthy rehti hai aur block/checkpoint
+ka khatra kam hota hai.
+
+
+----------------------------------------------------------------
+3b) LDPLAYER  — Android emulator control (NAYA, stage 1)
+----------------------------------------------------------------
+Bomb Prime ki tarah ye software LDPlayer (Android emulator) ko bhi
+control kar sakta hai. Stage 1 (abhi):
+  - "Detect instances": aap ke LDPlayer ke saare players (instances) list
+    me aa jate hain (index + naam + running/stopped).
+  - Select karke: Start / Stop / Open Facebook / Screenshot / Test tap.
+  - ldconsole.exe khud mil jata hai; na mile to Settings -> LDPlayer me
+    uska path dein.
+NOTE: FB app ke andar ki poori posting/comment automation dheere dheere
+add ho rahi hai (ye bara kaam hai). Abhi bunyaad (control + screenshot +
+tap + app launch + file push) tayyar hai.
+
+----------------------------------------------------------------
+4) SCHEDULE  — WAQT PAR KHUD CHALE
+----------------------------------------------------------------
+  - Action: Post ya Active — kaunsa kaam schedule karna hai.
+  - Post kind: Reels / Videos / Photos.
+  - Time (for all IDs): Sab IDs ke liye aik hi waqt (ghanta/minute + AM/PM).
+  - DIFFERENT time per ID: Tick karein to har ID ka ALAG time set kar
+    sakte hain (neeche list me).
+  - Threads: aik waqt kitni IDs.
+  - SCHEDULE START: diye waqt par kaam khud shuru ho jayega.
+
+
+----------------------------------------------------------------
+5) SETTINGS
+----------------------------------------------------------------
+LANGUAGE:
+  - English (default) ya Roman Urdu. Tabdeeli restart ke baad.
+
+BROWSER:
+  - ixBrowser (recommended) — har profile apna IP + fingerprint.
+  - Google Chrome / Custom browser (path) — agar ixBrowser na ho.
+  - ixBrowser roz ki limit: on karein to roz sirf itni profiles chalengi
+    (rotation se baqi agle din). Off = koi limit nahi.
+
+CAPTCHA SOLVER:
+  - "Enter the characters you see" wala captcha: built-in OCR se FREE
+    solve hota hai (Tesseract OCR aik dafa install karna hota hai, free).
+    Galat parhe to khud "Generate new" se dobara koshish karta hai.
+  - 2captcha API key: sirf reCAPTCHA (tasveer chunne wale) captcha ke
+    liye backup — optional, uski website par balance chahiye.
+
+YOUR OCR API KEYS (doosre software me use karne ke liye):
+  - Generate key: nayi key banata hai (copy ho jati hai).
+  - App aik dafa restart karein — aik local server chalu ho jata hai:
+        http://127.0.0.1:8700/solve
+  - Doosra software us par captcha image POST kare (header X-API-Key:
+    aap ki key) to jawab me JSON {"text": "solved"} milta hai.
+
+DAILY AUTO-UPLOAD:
+  - "Auto-upload on all IDs every day at this time" + Time + Kind:
+    on karein to software (khula hua) roz usi waqt sab IDs par khud
+    posting shuru kar deta hai.
+  - Daily ACTIVE (warm-up) auto + time: isi tarah rozana active bhi
+    khud chal jati hai apne waqt par.
+  - Auto-start with Windows: on karein to PC on hote hi software khud
+    (tray me) khul jata hai, phir time par kaam shuru. Taskbar ke kone
+    me (wifi/clock ke paas) icon aa jata hai — window band karein to
+    software band nahi hota, tray me chala jata hai (chalta rehta hai).
+
+
+----------------------------------------------------------------
+6) LOGIN / SESSION — AHEM
+----------------------------------------------------------------
+  - Pehli dafa login ke baad baar baar login NAHI hota. Har ID ka
+    session us ke profile me save ho jata hai. Agli dafa software
+    check karta hai "already logged in?" — agar haan to SEEDHA kaam
+    shuru karta hai, login page dhoondta hi nahi.
+  - Aap pehle se KHUD bhi login kar sakte hain (ixBrowser me profile
+    khol kar manually). Ye sab se safe tareeqa hai — captcha/2FA aik
+    dafa khud nikal jata hai.
+  - 2FA aaye to code browser me daalein, software 60 sec khud wait
+    karta hai, phir aage barh jata hai.
+
+
+----------------------------------------------------------------
+7) AHEM MASHWARE (account safe rakhne ke liye)
+----------------------------------------------------------------
+  - Aik waqt bohat zyada IDs tez posting na karein — block ka khatra.
+  - Posting ke beech gap aur warm-up (Active) zaroor use karein.
+  - Har ID ka apna profile/IP (ixBrowser) rakhein, IDs aapas me swap na karein.
+  - Nayi IDs ko pehle kuch din sirf Active rakhein, phir dheere posting.
+
+
+----------------------------------------------------------------
+8) INSTALL / SETUP
+----------------------------------------------------------------
+  - "Facebook Uploader Setup.exe" chalayein -> Install.
+  - Location default C:\Program Files (Browse se badal sakte hain).
+  - Desktop par logo wala shortcut ban jata hai.
+  - Software ka data (accounts/settings/sessions) AppData me save hota
+    hai, is liye kahin bhi install ho, kaam theek chalta hai.
+  - Captcha OCR free ke liye Tesseract aik dafa install karein:
+        https://github.com/UB-Mannheim/tesseract/wiki
+================================================================

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:padding="12dp"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout android:orientation="horizontal"
+        android:layout_width="match_parent" android:layout_height="wrap_content">
+        <Button android:id="@+id/btnConnect" android:text="Connect / Refresh"
+            android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"/>
+        <TextView android:id="@+id/lblStatus" android:text="Not connected"
+            android:gravity="center_vertical" android:paddingStart="8dp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+    </LinearLayout>
+
+    <LinearLayout android:orientation="horizontal"
+        android:layout_width="match_parent" android:layout_height="wrap_content" android:paddingTop="6dp">
+        <Spinner android:id="@+id/spKind"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <TextView android:text="Threads:" android:gravity="center_vertical" android:paddingStart="8dp"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <EditText android:id="@+id/edThreads" android:text="5" android:inputType="number"
+            android:layout_width="56dp" android:layout_height="wrap_content"/>
+        <Button android:id="@+id/btnSelAll" android:text="All"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <Button android:id="@+id/btnSelNone" android:text="None"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+    </LinearLayout>
+
+    <ListView android:id="@+id/lvAccounts"
+        android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"/>
+
+    <LinearLayout android:orientation="horizontal"
+        android:layout_width="match_parent" android:layout_height="wrap_content">
+        <Button android:id="@+id/btnPost" android:text="START POST"
+            android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"/>
+        <Button android:id="@+id/btnActive" android:text="START ACTIVE"
+            android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"/>
+        <Button android:id="@+id/btnStop" android:text="STOP"
+            android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"/>
+    </LinearLayout>
+
+    <TextView android:text="Log:" android:paddingTop="6dp"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+    <ScrollView android:layout_width="match_parent" android:layout_height="140dp"
+        android:background="#111111">
+        <TextView android:id="@+id/tvLog" android:textColor="#17d417" android:padding="6dp"
+            android:layout_width="match_parent" android:layout_height="wrap_content"/>
+    </ScrollView>
+</LinearLayout>

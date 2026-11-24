@@ -1,0 +1,40 @@
+BOMB PRIME (ya koi 2captcha wala software) me apni FREE key use karna
+=====================================================================
+
+Masla: Bomb Prime jo "2captcha" key leta hai wo 2captcha.com par bhejta
+hai. Aap ki generated key sirf humare software ke liye hai, isliye wahan
+reject hoti hai.
+
+Hal: Humara software ab "2captcha jaisa" ban sakta hai (in.php/res.php).
+Bomb Prime ko humari taraf mod dein. Steps:
+
+1) Humare software me:
+   - Settings -> "Your OCR API keys" -> Generate key (copy karein).
+   - Usi niche wala box tick karein:
+     "2captcha-compatible mode on port 80 (for Bomb Prime etc.)"
+   - Save karein.
+   - Software ko ADMINISTRATOR se chalayein (port 80 ke liye zaroori):
+     shortcut par right-click -> Run as administrator.
+   - Log me aana chahiye: "2captcha-compatible server on port 80".
+
+2) Windows hosts file edit karein (2captcha.com ko apne PC par mod dein):
+   - Notepad ko ADMINISTRATOR se kholein.
+   - File -> Open:  C:\Windows\System32\drivers\etc\hosts
+   - Sab se neeche ye line add karein:
+         127.0.0.1   2captcha.com
+   - Save karein.
+
+3) Bomb Prime me:
+   - Captcha = 2captcha chunein.
+   - Key wali jagah apni GENERATED key paste karein.
+   - Ab jab bhi captcha aayega, Bomb Prime "2captcha.com" ko call karega,
+     jo asal me aap ka software hai, aur free OCR se hal mil jayega.
+
+ZAROORI / NOTES:
+ - Tesseract OCR install hona chahiye (free) — captcha OCR isi se chalta hai.
+ - Agar Bomb Prime HTTPS (https://2captcha.com) use karta hai to ye tareeqa
+   nahi chalega (sirf http). Us soorat me asli 2captcha key hi chalegi.
+ - Jab ye kaam khatam ho jaye to hosts file se wo line hata dein, warna
+   aap ka apna 2captcha (agar kabhi asli use karein) kaam nahi karega.
+ - Ye sirf TEXT captcha ("Enter the characters you see") ke liye hai.
+   reCAPTCHA (tasveer chunne wale) is tarah OCR se hal nahi hote.

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent">
+<LinearLayout
+    android:orientation="vertical"
+    android:padding="12dp"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content">
+
+    <TextView android:text="Post to a Facebook Page using the official Graph API."
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+    <TextView android:text="Page ID:" android:paddingTop="8dp"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+    <EditText android:id="@+id/edPageId" android:hint="e.g. 1234567890"
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+    <TextView android:text="Page Access Token:" android:paddingTop="8dp"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+    <EditText android:id="@+id/edToken" android:hint="EAAB..." android:inputType="textMultiLine"
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+    <RadioGroup android:id="@+id/rgType" android:orientation="horizontal" android:paddingTop="8dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content">
+        <RadioButton android:id="@+id/rbPhoto" android:text="Photo" android:checked="true"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+        <RadioButton android:id="@+id/rbVideo" android:text="Video"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+    </RadioGroup>
+
+    <TextView android:text="Media URL (public link to image/video):" android:paddingTop="8dp"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+    <EditText android:id="@+id/edMediaUrl" android:hint="https://..."
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+    <TextView android:text="Caption / description:" android:paddingTop="8dp"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+    <EditText android:id="@+id/edCaption" android:inputType="textMultiLine" android:minLines="2"
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+    <Button android:id="@+id/btnGraphPost" android:text="POST to Page" android:paddingTop="8dp"
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+
+    <TextView android:id="@+id/tvGraphResult" android:paddingTop="10dp" android:textIsSelectable="true"
+        android:layout_width="match_parent" android:layout_height="wrap_content"/>
+</LinearLayout>
+</ScrollView>

@@ -1,0 +1,55 @@
+FACEBOOK UPLOADER — How to build the Setup
+============================================
+
+This folder should contain:
+  - fb_uploader.py      (the software)
+  - installer.py        (setup wizard)
+  - app_icon.ico        (logo)
+  - build_setup.bat     (builds the installer)
+
+-------------------------------------------------
+STEP 1: Install Python (once)
+-------------------------------------------------
+  Download from python.org and tick "Add Python to PATH".
+
+-------------------------------------------------
+STEP 2: Double-click build_setup.bat
+-------------------------------------------------
+  It installs everything and produces:
+       "Facebook Uploader Setup.exe"
+  (first time needs internet, ~10-15 min)
+
+-------------------------------------------------
+STEP 3: Install on any PC
+-------------------------------------------------
+  Copy only "Facebook Uploader Setup.exe" to that PC and run it:
+    - click Install
+    - default location: C:\Program Files\Facebook Uploader
+      (use Browse to pick D: or any other folder)
+    - a desktop shortcut with the logo is created
+    - it is added to the Start Menu too
+  Done — open the software from the shortcut.
+
+NOTES:
+  - If you get a "permission" error installing to C:\Program Files,
+    right-click Setup -> "Run as administrator", or pick another location (D:).
+  - App data (accounts/settings/sessions) is stored in your user AppData,
+    so it works no matter where it is installed.
+  - Built for ixBrowser mode: the ixBrowser app must be running with its Local API ON.
+  - To uninstall: run "uninstall.bat" inside the install folder.
+  - Language (English / Roman Urdu) can be changed inside the app -> Settings.
+    Default is English.
+
+FREE CAPTCHA SOLVER (the "Enter the characters you see" captcha):
+  - The app solves this text captcha for FREE using built-in OCR.
+  - It needs Tesseract OCR installed once (free):
+      Download: https://github.com/UB-Mannheim/tesseract/wiki
+      Install with defaults (it goes to C:\Program Files\Tesseract-OCR).
+    The app finds it automatically. No monthly cost.
+  - 2captcha key (Settings) is only a backup for reCAPTCHA (pick-the-images) captchas.
+
+YOUR OWN OCR API (use in other software):
+  - Settings -> "Your OCR API keys" -> Generate key (it is copied).
+  - Restart the app once; a local server runs at http://127.0.0.1:8700
+  - Other software can POST a captcha image to /solve with header
+    X-API-Key: <your key>  and gets back JSON {"text": "solved"}.
