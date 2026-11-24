@@ -1863,6 +1863,10 @@ class Automation:
             return True
 
         self.log(T(f"[{acc['name']}] Logging in...", f"[{acc['name']}] Login kar rahe hain..."))
+        try:
+            self.page.bring_to_front()
+        except Exception:
+            pass
         self.page.goto(FB_HOME, wait_until="domcontentloaded")
         time.sleep(3)
         if not self._fill_login_form(acc):
@@ -1899,6 +1903,21 @@ class Automation:
             if wait_for_2fa_callback:
                 wait_for_2fa_callback(acc)
             time.sleep(2)
+
+        # Captcha / checkpoint / koi bhi rukawat: browser khula rakho, aap khud hal karein
+        if not self._fb_uid():
+            try:
+                self.page.bring_to_front()
+            except Exception:
+                pass
+            self.log(T(f"[{acc['name']}] Facebook is asking for a check (captcha / verification). "
+                       f"Please complete it in the browser — waiting up to 3 minutes...",
+                       f"[{acc['name']}] Facebook check maang raha hai (captcha / verification). "
+                       f"Browser mein khud complete karein — 3 minute intezaar..."))
+            for _ in range(60):
+                if self._fb_uid() or getattr(self, "stop_event", None) and self.stop_event.is_set():
+                    break
+                time.sleep(3)
 
         if self.is_logged_in():
             self.log(T(f"[{acc['name']}] Login successful. Session saved.", f"[{acc['name']}] Login kamyab. Session save ho gaya."))
