@@ -1,0 +1,8 @@
+Recovered/
+*.img
+__pycache__/
+*.pyc
+platform-tools/
+iphone_backup/
+github_token.txt
+_backup/

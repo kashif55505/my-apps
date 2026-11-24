@@ -1,0 +1,4 @@
+# Optional: WhatsApp backup decryption
+cryptography>=41
+# Optional: encrypted iPhone backups
+iphone_backup_decrypt
