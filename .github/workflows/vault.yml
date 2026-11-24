@@ -82,13 +82,25 @@ jobs:
           ./gradlew --no-daemon assembleRelease
           cp app/build/outputs/apk/release/app-release.apk "../MyVault-v${VERSION_NAME}.apk"
 
-      - name: Laptop server zip
+      - name: Laptop server zip and update bundle
         run: |
-          mkdir -p /tmp/pkg/MyVault-Server/public
-          cp server/server.js server/config.json server/start-windows.bat server/start-mac-linux.sh server/README.md /tmp/pkg/MyVault-Server/
-          cp -r app/src/main/assets/www/. /tmp/pkg/MyVault-Server/public/
-          chmod +x /tmp/pkg/MyVault-Server/start-mac-linux.sh
+          D=/tmp/pkg/MyVault-Server
+          mkdir -p $D/public
+          cp server/server.js server/config.json server/start-windows.bat server/start-mac-linux.sh server/README.md $D/
+          cp -r app/src/main/assets/www/. $D/public/
+          sed -i "s/^const VERSION = 'dev';/const VERSION = '${VERSION_NAME}';/" $D/server.js
+          grep -q "const VERSION = '${VERSION_NAME}';" $D/server.js
+          chmod +x $D/start-mac-linux.sh
           (cd /tmp/pkg && zip -qr "$GITHUB_WORKSPACE/MyVault-Server-v${VERSION_NAME}.zip" MyVault-Server)
+          # What a running laptop server downloads when you tap "Update laptop server"
+          python3 - "$D" "$VERSION_NAME" "$GITHUB_WORKSPACE/server-update.json" <<'PY'
+          import base64, json, os, sys
+          d, v, out = sys.argv[1:4]
+          files = {"server.js": base64.b64encode(open(os.path.join(d, "server.js"), "rb").read()).decode()}
+          for n in sorted(os.listdir(os.path.join(d, "public"))):
+              files["public/" + n] = base64.b64encode(open(os.path.join(d, "public", n), "rb").read()).decode()
+          json.dump({"version": v, "files": files}, open(out, "w"))
+          PY
 
       - name: Publish release
         if: steps.keys.outputs.signed == 'true' && github.event_name != 'pull_request'
@@ -96,7 +108,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           NOTES=$(git log -1 --pretty=%B)
-          gh release create "vault-v${VERSION_NAME}" "../MyVault-v${VERSION_NAME}.apk" "../MyVault-Server-v${VERSION_NAME}.zip" \
+          gh release create "vault-v${VERSION_NAME}" "../MyVault-v${VERSION_NAME}.apk" "../MyVault-Server-v${VERSION_NAME}.zip" ../server-update.json \
             --title "Vault ${VERSION_NAME}" --latest=false \
             --notes "$NOTES" \
             --target "$GITHUB_SHA"
@@ -121,6 +133,7 @@ jobs:
           path: |
             MyVault-v${{ env.VERSION_NAME }}.apk
             MyVault-Server-v${{ env.VERSION_NAME }}.zip
+            server-update.json
 
       - name: Remove keystore
         if: always()

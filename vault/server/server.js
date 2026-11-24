@@ -10,6 +10,9 @@ const path = require('path');
 const crypto = require('crypto');
 
 const ROOT = __dirname;
+const VERSION = 'dev'; // GitHub par build hote waqt asli version (1.<n>) yahan likh di jati hai
+const REPO = 'kashif55505/my-apps';
+const GH_API = process.env.VAULT_GH_API || 'https://api.github.com';
 const cfgPath = path.join(ROOT, 'config.json');
 const cfg = Object.assign({ port: 8080, host: '127.0.0.1', dataDir: './vault-data' },
   fs.existsSync(cfgPath) ? JSON.parse(fs.readFileSync(cfgPath, 'utf8')) : {});
@@ -114,7 +117,10 @@ async function api(req, res, p) {
   const seg = p.split('/').filter(Boolean).slice(1); // after 'api'
 
   if (p === '/api/state' && m === 'GET')
-    return send(res, 200, { setup: !!db.account });
+    return send(res, 200, { setup: !!db.account, version: VERSION });
+
+  if (p === '/api/version' && m === 'GET')
+    return send(res, 200, { version: VERSION });
 
   if (p === '/api/setup' && m === 'POST') {
     if (db.account) return send(res, 409, { error: 'Account pehle se bana hua hai' });
@@ -181,6 +187,40 @@ async function api(req, res, p) {
     let free = null, total = null;
     try { const s = await fsp.statfs(DATA); free = s.bavail * s.bsize; total = s.blocks * s.bsize; } catch {}
     return send(res, 200, { used, free, total });
+  }
+
+  if (p === '/api/update/check' && m === 'GET') {
+    const r = await latestRelease();
+    const cur = verNum(VERSION);
+    return send(res, 200, { current: VERSION, latest: r ? r.name : null, newer: !!(r && verNum(r.name) > cur), notes: r ? r.notes : '' });
+  }
+
+  if (p === '/api/update/apply' && m === 'POST') {
+    if (updating) return send(res, 409, { error: 'Update pehle se chal raha hai' });
+    updating = true;
+    try {
+      const r = await latestRelease();
+      if (!r || !(verNum(r.name) > verNum(VERSION))) { updating = false; return send(res, 200, { ok: true, version: VERSION, already: true }); }
+      const bundle = JSON.parse((await ghGet(r.bundleUrl, 'application/octet-stream')).toString('utf8'));
+      const files = Object.entries(bundle.files || {});
+      if (!files.length || !files.some(([f]) => f === 'server.js')) throw new Error('bad bundle');
+      for (const [rel] of files) if (!/^(server\.js|public\/[A-Za-z0-9._-]+)$/.test(rel)) throw new Error('bad path ' + rel);
+      // pehle sab files .new mein likho, phir ek saath badlo
+      for (const [rel, b64] of files) {
+        const f = path.join(ROOT, rel);
+        await fsp.mkdir(path.dirname(f), { recursive: true });
+        await fsp.writeFile(f + '.new', Buffer.from(b64, 'base64'));
+      }
+      for (const [rel] of files) { const f = path.join(ROOT, rel); await fsp.rename(f + '.new', f); }
+      console.log('  Update ho gaya: ' + VERSION + ' -> ' + bundle.version + '. Dobara chalu ho raha hai…');
+      send(res, 200, { ok: true, version: bundle.version });
+      setTimeout(restart, 400);
+    } catch (e) {
+      updating = false;
+      console.error('Update failed:', e.message);
+      return send(res, 502, { error: 'Update download nahi ho saka. Internet check karein.' });
+    }
+    return;
   }
 
   if (p === '/api/items' && m === 'GET')
@@ -253,6 +293,43 @@ async function api(req, res, p) {
   return send(res, 404, { error: 'not found' });
 }
 
+// ---------- updates (GitHub releases "Vault 1.<n>") ----------
+let updating = false;
+const verNum = v => { const n = parseInt(String(v || '').split('.').pop(), 10); return Number.isFinite(n) ? n : 0; };
+async function ghGet(url, accept) {
+  const h = { 'User-Agent': 'MyVault-Server', Accept: accept };
+  if (cfg.githubToken) h.Authorization = 'Bearer ' + cfg.githubToken; // sirf agar repo private ho
+  const r = await fetch(url, { headers: h });
+  if (!r.ok) throw new Error('GitHub ' + r.status);
+  return Buffer.from(await r.arrayBuffer());
+}
+let relCache = null;
+async function latestRelease() {
+  if (relCache && Date.now() - relCache.t < 60000) return relCache.r;
+  const list = JSON.parse((await ghGet(GH_API + '/repos/' + REPO + '/releases?per_page=50', 'application/vnd.github+json')).toString('utf8'));
+  let best = null;
+  for (const r of list) {
+    if (r.draft || r.prerelease || !String(r.name || '').startsWith('Vault ')) continue;
+    const a = (r.assets || []).find(x => x.name === 'server-update.json');
+    const name = r.name.slice(6).trim();
+    if (a && (!best || verNum(name) > verNum(best.name))) best = { name, bundleUrl: a.url, notes: String(r.body || '').slice(0, 600) };
+  }
+  relCache = { t: Date.now(), r: best };
+  return best;
+}
+// Naya code chalane ke liye server dobara shuru karo. Nayi start script (VAULT_SUPERVISED) khud dobara chalati hai;
+// purani script ke liye yahi process naya server chala kar uske khatam hone ka intezar karta hai.
+function restart() {
+  server.close(() => {
+    save().then(() => {
+      if (process.env.VAULT_SUPERVISED) process.exit(3);
+      const child = require('child_process').spawn(process.execPath, [path.join(ROOT, 'server.js')], { stdio: 'inherit', env: process.env });
+      child.on('exit', code => process.exit(code || 0));
+    });
+  });
+  if (server.closeAllConnections) server.closeAllConnections();
+}
+
 // adhoori uploads saaf karo (24 ghante se purani)
 setInterval(async () => {
   let ch = false;
@@ -263,7 +340,7 @@ setInterval(async () => {
   if (ch) save();
 }, 3600000).unref();
 
-http.createServer(async (req, res) => {
+const server = http.createServer(async (req, res) => {
   try {
     const p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
     if (p.startsWith('/api/')) {
@@ -278,7 +355,7 @@ http.createServer(async (req, res) => {
     if (!e.code) console.error(e);
   }
 }).listen(cfg.port, cfg.host, () => {
-  console.log('\n  My Vault chal raha hai!');
+  console.log('\n  My Vault ' + VERSION + ' chal raha hai!');
   console.log('  Is computer par kholein:  http://localhost:' + cfg.port);
   console.log('  Data yahan save ho raha hai: ' + DATA + '\n');
 });
