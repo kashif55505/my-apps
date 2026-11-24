@@ -2539,7 +2539,7 @@ class App(tk.Tk):
         self.container = ttk.Frame(self)
         self.container.pack(fill="both", expand=True)
         self.pages = {}
-        for name in ("Accounts", "Post", "Interact", "LDPlayer", "Schedule", "Settings"):
+        for name in ("Accounts", "Post", "Interact", "LDPlayer", "Schedule", "Settings", "Guide"):
             fr = ttk.Frame(self.container)
             fr.place(relx=0, rely=0, relwidth=1, relheight=1)
             self.pages[name] = fr
@@ -2549,6 +2549,7 @@ class App(tk.Tk):
         self._build_ldwork_page()      # LDPlayer tab (list + working merged)
         self._build_schedule_page()
         self._build_settings_page()
+        self._build_guide_page()
         self._build_logbar()
         self._show("Post")
         self.bind_all("<Control-z>", lambda e: self._undo_delete())
@@ -2644,7 +2645,7 @@ class App(tk.Tk):
         tabs = [("Accounts", "ACCOUNT MANAGEMENT"), ("Post", "POST (REELS/VIDEO/PHOTO)"),
                 ("Interact", "INTERACT / GROUPS"),
                 ("LDPlayer", "LDPLAYER"),
-                ("Schedule", "SCHEDULE"), ("Settings", "SETTINGS")]
+                ("Schedule", "SCHEDULE"), ("Settings", "SETTINGS"), ("Guide", "GUIDE")]
         for key, label in tabs:
             b = tk.Button(bar, text=label, relief="flat", padx=18, pady=12, bd=0,
                           bg="#16233f", fg="#cfe0ff", activebackground="#2d7de0",
@@ -3410,6 +3411,153 @@ class App(tk.Tk):
                 t = threading.Thread(target=self._run_post, args=(a, files, kind, time_for(a), cfg), daemon=True)
                 t.start(); self.workers.append(t); count += 1
             self.log_q.put(T(f"{count} IDs scheduled.", f"{count} IDs schedule ho gayin."))
+
+    # ---------- Guide page (in-app help, English) ----------
+    GUIDE_TEXT = """FACEBOOK UPLOADER — FEATURES & HOW TO USE
+==========================================================
+
+This app posts to Facebook from many accounts (Reels / Video / Photo),
+keeps accounts active (warm-up), works in Groups, controls LDPlayer
+emulators, solves captchas, handles 2FA, and can be controlled remotely.
+
+----------------------------------------------------------
+GETTING STARTED
+----------------------------------------------------------
+1. ixBrowser (recommended): install ixBrowser, turn ON its Local API,
+   and create one profile per account (remember each profile NAME).
+   ixBrowser gives each profile its own IP + fingerprint — no proxy needed.
+2. Best practice: log in to each account once, by hand, inside its
+   ixBrowser profile. This clears captcha/2FA once; the app then skips login.
+
+----------------------------------------------------------
+1) ACCOUNTS (Account Management tab)
+----------------------------------------------------------
+Add / edit IDs on the left form:
+ - Name: a label for the ID.
+ - Email / Phone, Password: Facebook login.
+ - Page name: the page you post to (exact name).
+ - ixBrowser Profile: the profile NAME (or its ID number).
+ - Proxy: leave empty in ixBrowser mode.
+ - 2FA secret key: if 2-factor is ON, paste the secret key (same one you
+   put in Google Authenticator / 2fa.live). The app makes the OTP itself —
+   no website needed, works offline.
+ - LDPlayer index: set only if this ID runs inside an LDPlayer emulator.
+ - Videos folder: pick once — the folder where this ID's videos are.
+   The folder's videos show below. Daily max: max videos/day for this page.
+ - Hashtags: write once; they attach to every post automatically.
+
+Buttons:
+ - Save ID, New/clear form.
+ - Bulk import from file (.txt): each line = email + password (name/page
+   optional). Separator can be | , ; : space or tab.
+ - IP check (selected): shows that ID's real IP (confirm proxy/profile).
+ - Page History / ID History: every post (date/time, video, success/fail +
+   reason) and every login/error. Export to CSV from the window.
+
+Table (right): tick the ✔ box to select. Select all / Unselect all.
+ Delete selected (Ctrl+Z restores a deleted ID). Status shows Live / Die.
+
+----------------------------------------------------------
+2) POST (Reels / Video / Photo)
+----------------------------------------------------------
+Left sidebar: pick Post Reels / Video / Photo.
+Options:
+ - Concurrent threads: how many IDs run at the same time.
+ - Interval between 2 posts: wait between videos (sec/min/hour).
+ - During the gap, keep the ID active (scroll feed): looks human.
+ - Rotation: repeat all videos N times.
+ - Allow duplicate: by default already-posted / duplicate files are skipped.
+ - Delete posted video from device: removes only successfully posted files.
+Videos come from each ID's own folder (set in Accounts). Caption = that
+page's hashtags. Tick IDs in the table, then START. STOP ends after the
+current post.
+
+----------------------------------------------------------
+3) INTERACT / GROUPS
+----------------------------------------------------------
+Tick the activities on the right, then START. These IDs will NOT post on
+your wall — they only stay active / work in groups.
+Activities: Check Notification, Scroll Feed/Stories/Videos/Reels,
+Confirm Friends, Reaction (Like), Check message + Reply (spintax
+{Hi|Hey} picks one at random), Comments on Post.
+Group activities (also here):
+ - Join trending groups (count): bot auto-joins suggested/trending groups.
+ - Active in groups (min) + Like + Comment: scrolls group feed, likes and
+   writes a RELEVANT comment, and SKIPS hate speech / nudity posts.
+ - Post in groups (text): also posts your text in groups.
+Loops: repeat all activities N times. Threads: how many IDs at once.
+
+----------------------------------------------------------
+4) LDPLAYER (Android emulator)
+----------------------------------------------------------
+Detect instances (auto). Tick the players (Select all / Unselect all).
+Controls: Start / Stop / Open Facebook / Screenshot.
+Working: choose action (Reel/Video/Photo/Active), a Videos folder (saved),
+a Page (for reels), caption, and how many at once. START (work) runs them;
+it is independent from the web Post tab, so both can run together.
+Videos auto-push into each emulator's gallery and auto-select.
+
+----------------------------------------------------------
+5) SCHEDULE
+----------------------------------------------------------
+Pick action (Post or Active), kind, and a time (with AM/PM). Use the same
+time for all IDs, or tick "different time per ID" and set each. Threads sets
+how many at once. SCHEDULE START waits for the time, then runs.
+
+----------------------------------------------------------
+6) SETTINGS
+----------------------------------------------------------
+ - Update: "Check for updates" — one click updates the app from GitHub,
+   no re-download/reinstall.
+ - Language: English (default) or Roman Urdu (applies after restart).
+ - Browser: ixBrowser (recommended), Chrome, or custom. ixBrowser daily
+   limit optional.
+ - AI (smart comments + skip hate/nudity): pick a FREE provider (Groq or
+   Google Gemini), paste its free key. Used by Groups mode.
+   Groq keys: console.groq.com/keys  |  Gemini: aistudio.google.com/apikey
+ - Captcha: free local OCR solves the "Enter the characters" captcha (needs
+   Tesseract OCR installed once, free). 2captcha key = backup for reCAPTCHA.
+   Your own OCR API keys let other software use this solver.
+ - Daily auto-upload / Daily active: run automatically every day at a time.
+ - Auto-start with Windows: opens in the tray on boot.
+ - Remote access: Telegram bot (control + alerts from anywhere) and a public
+   tunnel for the phone app. LDPlayer path if not auto-found.
+
+----------------------------------------------------------
+LOGIN / SESSIONS
+----------------------------------------------------------
+After the first login the app does NOT log in again — each account's
+session is saved in its profile, so next time it starts work directly.
+You can also log in yourself beforehand (safest). If 2FA appears and a
+secret key is set, the app enters the code automatically.
+
+----------------------------------------------------------
+STAYING SAFE
+----------------------------------------------------------
+Don't post too fast from too many IDs at once. Use gaps + warm-up. Keep
+one profile/IP per ID. Warm up new IDs for a few days before posting.
+
+----------------------------------------------------------
+UPDATES
+----------------------------------------------------------
+Settings -> Update -> Check for updates. If a newer version exists it
+downloads and replaces itself, then restarts. No manual download needed.
+"""
+
+    def _build_guide_page(self):
+        f = self.pages["Guide"]
+        bar = ttk.Frame(f); bar.pack(fill="x", padx=10, pady=(8, 0))
+        ttk.Label(bar, text="GUIDE — how everything works",
+                  font=("Segoe UI", 13, "bold")).pack(side="left")
+        wrap = ttk.Frame(f); wrap.pack(fill="both", expand=True, padx=10, pady=8)
+        sb = ttk.Scrollbar(wrap)
+        sb.pack(side="right", fill="y")
+        txt = tk.Text(wrap, wrap="word", yscrollcommand=sb.set,
+                      font=("Consolas", 11), bg="#ffffff", relief="flat", padx=10, pady=8)
+        txt.pack(side="left", fill="both", expand=True)
+        sb.config(command=txt.yview)
+        txt.insert("1.0", self.GUIDE_TEXT)
+        txt.config(state="disabled")
 
     # ---------- Settings page ----------
     def _build_settings_page(self):
