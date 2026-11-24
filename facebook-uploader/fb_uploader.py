@@ -1767,20 +1767,33 @@ class Automation:
         self.context = self.page = self._pw = None
 
     # ---------- Login ----------
-    def is_logged_in(self):
-        self.page.goto(FB_HOME, wait_until="domcontentloaded")
-        time.sleep(3)
-        url = self.page.url
-        if "login" in url or "/checkpoint" in url:
-            return False
+    def _fb_uid(self):
+        """Logged-in Facebook ka user id (c_user cookie). Na ho to ''."""
         try:
-            if self.page.query_selector("[aria-label='Search Facebook']"):
-                return True
-            if self.page.query_selector("[aria-label='Your profile']"):
-                return True
+            for c in self.context.cookies("https://www.facebook.com"):
+                if c.get("name") == "c_user" and c.get("value"):
+                    return c["value"]
         except Exception:
             pass
-        return "login" not in self.page.url
+        return ""
+
+    def is_logged_in(self):
+        self.page.goto(FB_HOME, wait_until="domcontentloaded")
+        for _ in range(8):
+            time.sleep(1.5)
+            url = self.page.url
+            if "login" in url or "/checkpoint" in url:
+                return False
+            try:
+                # Login form nazar aa raha hai = logged in NAHI (zaban koi bhi ho)
+                if self.page.query_selector("input[name='pass']") or \
+                   self.page.query_selector("form[action*='login']"):
+                    return False
+            except Exception:
+                pass
+            if self._fb_uid():
+                return True
+        return bool(self._fb_uid())
 
     def login(self, wait_for_2fa_callback=None):
         acc = self.current_acc
@@ -2552,8 +2565,12 @@ class Automation:
         acc = self.current_acc
         self.log(T(f"[{acc['name']}] Detecting your Facebook pages...",
                    f"[{acc['name']}] Aapke Facebook pages dhoond rahe hain..."))
+        if not self._fb_uid():
+            self.log(T(f"[{acc['name']}] Not logged in — cannot detect pages.",
+                       f"[{acc['name']}] Login nahi — pages nahi dhoond sakte."))
+            return []
         found = {}
-        skip = ("/pages/", "/groups", "/events", "/watch", "/marketplace", "/gaming",
+        skip = ("/pages/", "/recover", "/r.php", "/reg/", "/signup", "/login", "/groups", "/events", "/watch", "/marketplace", "/gaming",
                 "/settings", "/help", "/privacy", "/policies", "/notifications",
                 "/messages", "/friends", "/bookmarks", "/saved", "/reel", "/stories",
                 "/login", "/ads", "/business", "/latest", "/memories", "/hashtag", "/photo",
