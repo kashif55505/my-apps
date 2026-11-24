@@ -1,5 +1,6 @@
 package com.personal.vault;
 
+import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
@@ -9,6 +10,7 @@ import android.os.Environment;
 import android.provider.MediaStore;
 import android.util.Base64;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebView;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -23,6 +25,8 @@ import java.util.Map;
 public class VaultBridge {
 
     private final Context ctx;
+    private final Activity activity;
+    private final WebView web;
     private final Map<Integer, Save> open = new HashMap<>();
     private int next = 1;
 
@@ -32,9 +36,38 @@ public class VaultBridge {
         File file;
     }
 
-    VaultBridge(Context ctx) {
-        this.ctx = ctx.getApplicationContext();
+    VaultBridge(Activity activity, WebView web) {
+        this.ctx = activity.getApplicationContext();
+        this.activity = activity;
+        this.web = web;
     }
+
+    /** Calls window[fn](json) in the page, on the UI thread. json comes only from this app's own code. */
+    private void reply(String fn, String json) {
+        web.post(() -> web.evaluateJavascript("window." + fn + " && window." + fn + "(" + json + ")", null));
+    }
+
+    // ---------- app updates ----------
+
+    @JavascriptInterface
+    public int appVersion() { return Updater.versionCode(ctx); }
+
+    @JavascriptInterface
+    public String appVersionName() { return Updater.versionName(ctx); }
+
+    @JavascriptInterface
+    public void checkUpdate() { Updater.check(ctx, this::reply); }
+
+    @JavascriptInterface
+    public void startUpdate() { Updater.downloadAndInstall(activity, this::reply); }
+
+    @JavascriptInterface
+    public boolean hasGithubToken() { return Updater.token(ctx) != null; }
+
+    @JavascriptInterface
+    public void setGithubToken(String token) { Updater.setToken(ctx, token); }
+
+    // ---------- saving to Downloads ----------
 
     /** Starts a file in Downloads. Returns a handle, or 0 if it could not be created. */
     @JavascriptInterface

@@ -31,6 +31,11 @@ Obtainium mein update ke liye filter `^Vault ` use karein.
 - Upar ka label batata hai: **Synced with laptop**, **Syncing…**, ya **Offline · saved on this device**.
 - Laptop ke bina login bhi phone par hi check hota hai. Password badalne ke liye laptop ka on hona zaroori hai.
 
+## Update
+
+- **Phone app:** nayi version aate hi app mein upar patti aati hai. **Update app** dabayein: app download hogi aur khud install ho jayegi. Pehli dafa Android "install unknown apps" ki ijazat maangta hai. Settings → Updates mein bhi check kar sakte hain.
+- **Laptop server:** isi tarah **Update laptop** dabane se laptop khud update ho kar dobara chalu ho jata hai.
+
 ## Folders
 
 - `app/`: Android app (WebView). Asli app `app/src/main/assets/www/index.html` mein hai. Laptop ka browser bhi yahi page istemal karta hai.

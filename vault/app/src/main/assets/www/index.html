@@ -326,7 +326,7 @@ $('#b-forget').onclick=async()=>{if(!await confirmBox('Remove from this device?'
 // ================= app =================
 let syncTimer=null;
 async function openApp(){show($('#s-lock'),false);show($('#s-app'));resetIdle();paintSync('');await loadLocal();
-  syncNow();clearInterval(syncTimer);syncTimer=setInterval(()=>{if(vk)syncNow()},60000)}
+  syncNow();setTimeout(()=>{if(vk)autoUpdateCheck()},4000);clearInterval(syncTimer);syncTimer=setInterval(()=>{if(vk)syncNow()},60000)}
 async function lock(){if(!vk)return;vk=null;auth=null;const t=token;token=null;clearInterval(syncTimer);
   if(t)fetch(base()+'/api/logout',{method:'POST',headers:{Authorization:'Bearer '+t}}).catch(()=>{});
   closeLb();show($('#ov'),false);$('#panel').replaceChildren();for(const u of urls.values())URL.revokeObjectURL(u);urls.clear();metaCache.clear();items=[];$('#grid').replaceChildren();
@@ -489,6 +489,62 @@ function editNote(it){modal((p,close)=>{const t=el('input',{type:'text',placehol
   row.append(el('button',{'data-x':'',text:'Cancel',onclick:()=>close()}),el('button',{class:'pri',text:'Save note',onclick:save}));
   p.append(el('h2',{text:it?'Edit note':'New note'}),el('p',{class:'muted small',text:'Encrypted before it is saved.'}),t,el('div',{style:'height:10px'}),x,row)})}
 
+// ================= updates =================
+// Phone app: Android checks GitHub and installs. Laptop server: it downloads its own update and restarts.
+let appUpd=null,srvUpd=null,updUi=null;
+const APP=NATIVE?window.AndroidVault:null;
+function appCheck(){return new Promise(res=>{window.__updResult=r=>{appUpd=r;try{localStorage.setItem('updT',Date.now())}catch{}res(r)};APP.checkUpdate()})}
+const appNewer=()=>appUpd&&!appUpd.error&&appUpd.latest>appUpd.current;
+function appInstall(onMsg){window.__updProgress=p=>{
+    if(p.error)onMsg(p.error,true);
+    else if(p.installing)onMsg('Installing… the app will close and open updated.');
+    else onMsg('Downloading update… '+(p.total?Math.round(p.done/p.total*100)+'%':fmtSize(p.done)))};
+  onMsg('Starting download…');APP.startUpdate()}
+async function srvCheck(){if(!token&&!(await serverLogin()))throw Object.assign(new Error('offline'),{offline:true});srvUpd=await api('update/check');return srvUpd}
+async function srvApply(onMsg){onMsg('Laptop is downloading the update…');
+  const r=await api('update/apply',{method:'POST',timeout:120000});if(r.already)return onMsg('Laptop server is already up to date.');
+  onMsg('Laptop server is restarting…');token=null;
+  for(let i=0;i<45;i++){await new Promise(s=>setTimeout(s,2000));try{const v=await api('version',{timeout:4000});if(v.version===r.version){srvUpd=null;hideBanner();onMsg('Laptop server updated to '+v.version+'.');if(SAME)setTimeout(()=>location.reload(),1200);else syncNow();return}}catch{}}
+  onMsg('The laptop server has not come back yet. If its window closed, start it again.',true)}
+function hideBanner(){document.querySelector('#upd-banner')?.remove()}
+function showBanner(text,btn,run){hideBanner();const msg=el('span',{text});
+  const b=el('div',{id:'upd-banner',class:'qi',style:'position:relative;margin-bottom:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap'},msg,
+    el('button',{class:'pri',text:btn,style:'margin-left:auto',onclick:async e=>{e.target.disabled=true;try{await run((t,bad)=>{msg.textContent=t;if(bad){msg.style.color='var(--bad)';e.target.disabled=false}})}catch(x){msg.textContent=x.offline?'Laptop is not reachable.':'Update failed. Try again.';e.target.disabled=false}}}),
+    el('button',{text:'Later',onclick:hideBanner}));
+  $('main').prepend(b)}
+async function autoUpdateCheck(){
+  let last=0;try{last=+localStorage.getItem('updT')||0}catch{}
+  if(Date.now()-last<6*3600000)return;
+  try{if(NATIVE){await appCheck();if(appNewer())return showBanner(`A new version of the app is ready (${appUpd.latestName}).`,'Update app',appInstall)}}catch{}
+  try{const r=await srvCheck();if(r.newer)showBanner(`A new version of the laptop server is ready (${r.latest}).`,'Update laptop',srvApply)}catch{}
+}
+function updatesSection(){
+  const box=el('div',{});const out=el('p',{class:'small',role:'status',style:'min-height:20px;margin:8px 0 0'});
+  const say=(t,bad)=>{out.textContent=t;out.style.color=bad?'var(--bad)':''};
+  box.append(el('h3',{text:'Updates',style:'margin:22px 0 6px;font-size:18px'}));
+  if(NATIVE){const row=el('div',{class:'row',style:'justify-content:flex-start;margin-top:4px;align-items:center'});
+    const label=el('span',{class:'small',text:'Phone app: '+(APP.appVersionName()||'?')});
+    const btn=el('button',{text:'Check for app update'});
+    btn.onclick=async()=>{if(btn.dataset.ready){btn.disabled=true;return appInstall((t,bad)=>{say(t,bad);if(bad)btn.disabled=false})}
+      say('Checking…');const r=await appCheck();
+      if(r.error==='auth'){say('GitHub needs a read-only token (the repository is private). Paste it below.',true);tok.classList.remove('hide');return}
+      if(r.error)return say('Could not check. Check your internet.',true);
+      if(appNewer()){say(`Version ${r.latestName} is ready.`);btn.textContent='Update app to '+r.latestName;btn.dataset.ready=1;btn.className='pri'}
+      else say('The app is up to date ('+r.currentName+').')};
+    const tok=el('div',{class:'hide'});const ti=el('input',{type:'password',placeholder:'github_pat_…','aria-label':'GitHub token'});
+    tok.append(ti,el('div',{class:'row',style:'justify-content:flex-start;margin-top:8px'},el('button',{text:'Save token',onclick:()=>{APP.setGithubToken(ti.value);ti.value='';tok.classList.add('hide');say('Token saved. Tap Check again.')}})));
+    row.append(label,btn);box.append(row,tok)}
+  const srow=el('div',{class:'row',style:'justify-content:flex-start;margin-top:8px;align-items:center'});
+  const slabel=el('span',{class:'small',text:'Laptop server: …'});const sbtn=el('button',{text:'Check for laptop update'});
+  sbtn.onclick=async()=>{try{if(sbtn.dataset.ready){sbtn.disabled=true;await srvApply((t,bad)=>{say(t,bad);if(bad)sbtn.disabled=false});return}
+      say('Checking…');const r=await srvCheck();slabel.textContent='Laptop server: '+r.current;
+      if(r.newer){say(`Laptop server ${r.latest} is ready.`);sbtn.textContent='Update laptop to '+r.latest;sbtn.dataset.ready=1;sbtn.className='pri'}
+      else say('The laptop server is up to date.')}
+    catch(e){sbtn.disabled=false;say(e.offline?'The laptop is not reachable right now.':e.status===404?'This laptop server is too old to update itself. Download MyVault-Server.zip once from GitHub.':'Could not check. Check the laptop\'s internet.',true)}};
+  srow.append(slabel,sbtn);box.append(srow,out);
+  api('version',{timeout:5000}).then(v=>slabel.textContent='Laptop server: '+v.version).catch(()=>slabel.textContent='Laptop server: not reachable');
+  return box}
+
 // ================= settings =================
 $('#b-set').onclick=()=>modal((p,close)=>{
   const sel=el('select',{id:'al'});for(const[v,l]of[[1,'1 minute'],[5,'5 minutes'],[15,'15 minutes'],[60,'1 hour'],[0,'Never']]){const o=el('option',{value:v,text:l});if(settings.al==v)o.selected=true;sel.append(o)}
@@ -500,7 +556,7 @@ $('#b-set').onclick=()=>modal((p,close)=>{
     el('div',{class:'row',style:'justify-content:flex-start;margin-top:6px'},el('button',{text:'Sync now',onclick:()=>{syncNow();toast('Syncing…')}})),
     el('label',{class:'check'},keep,el('span',{text:'Keep a copy of everything on this device (works without the laptop)'})));
   if(!SAME)p.append(el('label',{for:'srv',text:'Laptop vault address'}),srv);
-  p.append(el('label',{for:'al',text:'Lock automatically after'}),sel,
+  p.append(el('label',{for:'al',text:'Lock automatically after'}),sel,updatesSection(),
     el('h3',{text:'Change password',style:'margin:22px 0 0;font-size:18px'}),el('p',{class:'muted small',text:'Needs the laptop to be reachable.'}),
     el('label',{for:'cp0',text:'Current password'}),p0,el('label',{for:'cp1',text:'New password'}),p1,el('label',{for:'cp2b',text:'New password again'}),p2,msg,
     el('div',{class:'row'},el('button',{class:'danger',style:'margin-right:auto',text:'Remove from this device',onclick:async()=>{close();if(await confirmBox('Remove from this device?','Everything saved on this device is erased. Files already on the laptop stay safe. Items not yet sent to the laptop will be lost.','Remove')){await idb.wipe();location.reload()}}}),

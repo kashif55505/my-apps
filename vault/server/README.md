@@ -29,6 +29,13 @@ Har file phone ya browser mein hi password se **lock (encrypt)** ho kar aati hai
 
 **Sirf ghar ke Wi-Fi par chalana ho (bina Tailscale):** `config.json` mein `"host": "0.0.0.0"` kar dein aur server dobara chalayein. Phir app mein laptop ka Wi-Fi address daalein, masalan `http://192.168.1.5:8080`. Laptop ka address Command Prompt mein `ipconfig` likh kar dekh sakte hain.
 
+## Update
+
+Nayi version aane par app mein upar ek patti aati hai: **"A new version of the laptop server is ready"**. **Update laptop** dabayein. Laptop khud nayi version download kar ke dobara chalu ho jayega, aur aap ka data waisa hi rahega.
+Yahi kaam **Settings → Updates → Check for laptop update** se bhi hota hai, chahe phone se karein ya laptop ke browser se.
+
+> Version 1.3 wala server khud update nahi ho sakta. Use ek dafa naya `MyVault-Server.zip` download kar ke badal dein (`vault-data` folder aur `config.json` ko mat chhedein). Is ke baad har update button se ho jayega.
+
 ## Achi aadatein
 
 - **Laptop on hote hi vault chalu ho:** `Win + R` dabayein, `shell:startup` likhein, aur `start-windows.bat` ka **shortcut** us folder mein rakh dein.

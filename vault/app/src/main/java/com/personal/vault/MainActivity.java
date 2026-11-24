@@ -175,7 +175,7 @@ public class MainActivity extends ComponentActivity {
             }
         });
 
-        web.addJavascriptInterface(new VaultBridge(this), "AndroidVault");
+        web.addJavascriptInterface(new VaultBridge(this, web), "AndroidVault");
         web.loadUrl(START_URL);
     }
 
