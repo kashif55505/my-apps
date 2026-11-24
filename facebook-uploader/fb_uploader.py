@@ -241,8 +241,10 @@ def save_accounts(accounts):
 def add_account(name, email, password, page_name, proxy="", ix_profile="", folder="", twofa="", ld_index=""):
     accounts = load_accounts()
     acc_id = email.strip().lower()
+    old = next((a for a in accounts if a.get("id") == acc_id), {})
     accounts = [a for a in accounts if a.get("id") != acc_id]
-    accounts.append({
+    ix_profile = ix_profile or old.get("ix_profile", "")
+    rec = {
         "id": acc_id,
         "name": name.strip(),
         "email": email.strip(),
@@ -253,9 +255,102 @@ def add_account(name, email, password, page_name, proxy="", ix_profile="", folde
         "folder": (folder or "").strip(),
         "twofa": (twofa or "").strip(),
         "ld_index": str(ld_index or "").strip(),
-    })
+    }
+    if old.get("pages"):
+        rec["pages"] = old["pages"]      # detect kiye pages + ticks mehfooz
+    accounts.append(rec)
     save_accounts(accounts)
     return acc_id
+
+
+def update_account(acc_id, **fields):
+    """Account ke kuch fields update karo (baqi waise hi)."""
+    accounts = load_accounts()
+    for a in accounts:
+        if a.get("id") == acc_id:
+            a.update(fields)
+    save_accounts(accounts)
+
+
+def get_account(acc_id):
+    for a in load_accounts():
+        if a.get("id") == acc_id:
+            return a
+    return None
+
+
+def set_account_pages(acc_id, pages):
+    """Detect kiye hue pages save karo — pehle se enabled pages ka tick yaad rakho."""
+    acc = get_account(acc_id) or {}
+    old = {p.get("url") or p.get("name"): p.get("enabled", False) for p in acc.get("pages", [])}
+    out = []
+    for p in pages:
+        key = p.get("url") or p.get("name")
+        out.append({"name": p.get("name", ""), "url": p.get("url", ""),
+                    "enabled": old.get(key, False)})
+    update_account(acc_id, pages=out)
+    return out
+
+
+def set_page_enabled(acc_id, key, enabled):
+    acc = get_account(acc_id)
+    if not acc:
+        return
+    pages = acc.get("pages", [])
+    for p in pages:
+        if (p.get("url") or p.get("name")) == key:
+            p["enabled"] = bool(enabled)
+    update_account(acc_id, pages=pages)
+
+
+def parse_account_line(line):
+    """Ek line se (login, password, twofa, extra[]) nikalo.
+    Formats: email|pass|2FA , email:pass:2FA , email pass 2FA (2FA me spaces bhi chal jaate hain)."""
+    import re as _re
+    line = (line or "").strip().lstrip("\ufeff")
+    if not line or line.startswith("#"):
+        return None
+    if _re.search(r"[|;,\t]", line):
+        parts = [p.strip() for p in _re.split(r"[|;,\t]+", line) if p.strip()]
+    elif ":" in line and " " not in line:
+        parts = [p for p in line.split(":") if p]
+    else:
+        parts = line.split()
+    if len(parts) < 2:
+        return None
+    if "@" in parts[0] or _re.match(r"^\+?[\d\s-]{7,}$", parts[0]):
+        li = 0                              # pehla token hi email/phone hai
+    else:
+        li = next((i for i, p in enumerate(parts) if "@" in p), 0)
+    login = parts[li]
+    rest = parts[:li] + parts[li + 1:]
+    password = rest.pop(0) if rest else ""
+    b32 = _re.compile(r"^[A-Za-z2-7]+$")
+    twofa = ""
+    for i, p in enumerate(rest):            # poora secret ek token me
+        q = p.replace(" ", "")
+        if len(q) >= 16 and b32.match(q):
+            twofa = q.upper(); rest.pop(i); break
+    if not twofa:                           # "ABCD EFGH IJKL MNOP" (4-4 ke group)
+        i = 0
+        while i < len(rest):
+            j = i
+            while j < len(rest) and len(rest[j]) == 4 and b32.match(rest[j]):
+                j += 1
+            if j - i >= 4:
+                twofa = "".join(rest[i:j]).upper(); del rest[i:j]; break
+            i = j + 1 if j == i else j
+    return login, password, twofa, rest
+
+
+def posting_targets(acc):
+    """Is ID ke wo pages jin par posting ON hai. Koi tick nahi to purana 'page_name'."""
+    on = [p for p in acc.get("pages", []) if p.get("enabled")]
+    if on:
+        return on
+    if acc.get("page_name"):
+        return [{"name": acc["page_name"], "url": ""}]
+    return [{"name": "", "url": ""}]   # apni profile/feed par
 
 
 # Folder se media files nikalna (kind ke hisaab se)
@@ -1286,6 +1381,7 @@ class Automation:
         self.current_acc = None
         self.upload_wait = None   # (min,max) seconds; None = default
         self.last_error = ""
+        self.target_page = None   # {name,url} — jis page par post karni hai
 
     def start(self, account):
         self.current_acc = account
@@ -1353,12 +1449,44 @@ class Automation:
             self.log(T(f"Could not get profile list: {e}", f"Profile list nahi mili: {e}"))
         return None
 
+    def _ix_auto_create(self, account):
+        """ixBrowser me is ID ke naam se naya profile banao aur uska ID save karo."""
+        try:
+            from ixbrowser_local_api.entities import Profile
+            name = account.get("name") or account.get("email")
+            # Pehle se isi naam ka profile ho to wahi use karo
+            existing = self._resolve_ix_profile(self._ix_client, name)
+            if existing:
+                update_account(account["id"], ix_profile=str(existing))
+                return str(existing)
+            p = Profile()
+            p.name = name
+            p.site_url = "https://www.facebook.com/"
+            p.username = account.get("email", "")
+            p.password = account.get("password", "")
+            if account.get("twofa"):
+                p.tfa_secret = account.get("twofa")
+            res = self._ix_client.create_profile(p)
+            pid = None
+            if isinstance(res, dict):
+                pid = res.get("profile_id") or res.get("id")
+            elif res:
+                pid = res
+            if pid:
+                update_account(account["id"], ix_profile=str(pid))
+                account["ix_profile"] = str(pid)
+                self.log(T(f"[{account['name']}] New ixBrowser profile created: {pid}",
+                           f"[{account['name']}] Naya ixBrowser profile bana: {pid}"))
+                return str(pid)
+            msg = getattr(self._ix_client, "message", "")
+            self.log(f"ixBrowser create_profile: {msg}")
+        except Exception as e:
+            self.log(f"ixBrowser create error: {e}")
+        return None
+
     def _start_ixbrowser(self, account):
         """ixBrowser local API se profile kholo aur CDP par connect karo."""
         pid = account.get("ix_profile", "").strip()
-        if not pid:
-            self.log(T(f"[{account['name']}] ixBrowser Profile name/ID not set (add it in Accounts).", f"[{account['name']}] ixBrowser Profile naam/ID nahi diya (Accounts mein dalein)."))
-            return False
         try:
             from ixbrowser_local_api import IXBrowserClient
         except Exception:
@@ -1366,6 +1494,13 @@ class Automation:
             return False
         try:
             self._ix_client = IXBrowserClient()
+            if not pid:
+                # Profile set nahi — is ID ke liye ixBrowser me khud naya profile banao
+                pid = self._ix_auto_create(account)
+                if not pid:
+                    self.log(T(f"[{account['name']}] Could not create an ixBrowser profile automatically.",
+                               f"[{account['name']}] ixBrowser profile khud nahi ban saka."))
+                    return False
             resolved = self._resolve_ix_profile(self._ix_client, pid)
             if not resolved:
                 self.log(T(f"[{account['name']}] No ixBrowser profile found with name/ID '{pid}'.", f"[{account['name']}] ixBrowser mein '{pid}' naam/ID ki profile nahi mili."))
@@ -2199,12 +2334,75 @@ class Automation:
         else:
             time.sleep(default)
 
+    # ---------- Pages: auto-detect ----------
+    def detect_pages(self):
+        """Is ID ke saare Facebook pages khud dhoondo. Return [{name,url}]."""
+        acc = self.current_acc
+        self.log(T(f"[{acc['name']}] Detecting your Facebook pages...",
+                   f"[{acc['name']}] Aapke Facebook pages dhoond rahe hain..."))
+        found = {}
+        skip = ("/pages/", "/groups", "/events", "/watch", "/marketplace", "/gaming",
+                "/settings", "/help", "/privacy", "/policies", "/notifications",
+                "/messages", "/friends", "/bookmarks", "/saved", "/reel", "/stories",
+                "/login", "/ads", "/business", "/latest", "/memories", "/hashtag", "/photo",
+                "/search", "/profile.php?id=" + "0")
+        for url in ["https://www.facebook.com/pages/?category=your_pages",
+                    "https://www.facebook.com/bookmarks/pages/"]:
+            try:
+                self.page.goto(url, wait_until="domcontentloaded")
+                time.sleep(5)
+                for _ in range(3):
+                    self.page.mouse.wheel(0, 900); time.sleep(1.5)
+                links = self.page.evaluate("""() => {
+                    const root = document.querySelector('[role="main"]') || document.body;
+                    return Array.from(root.querySelectorAll('a[href]')).map(a => [
+                        a.href, (a.innerText || a.getAttribute('aria-label') || '').trim()]);
+                }""")
+                for href, text in links:
+                    if not href or "facebook.com" not in href:
+                        continue
+                    h = href.split("?")[0] if "profile.php" not in href else href.split("&")[0]
+                    h = h.rstrip("/")
+                    if any(s in h for s in skip) or h.endswith("facebook.com"):
+                        continue
+                    name = (text or "").split("\n")[0].strip()
+                    if not name or len(name) > 80 or name.lower() in (
+                            "see all", "create new page", "create", "invites", "your pages",
+                            "pages", "discover", "liked pages", "followed pages"):
+                        continue
+                    if h not in found:
+                        found[h] = name
+            except Exception as e:
+                self.log(f"  page detect error: {e}")
+            if found:
+                break
+        pages = [{"name": n, "url": u} for u, n in found.items()]
+        self.log(T(f"[{acc['name']}] Found {len(pages)} page(s).",
+                   f"[{acc['name']}] {len(pages)} page mile."))
+        return pages
+
     # ---------- Navigation ----------
-    def _go_to_page(self, page_name):
-        self.page.goto(FB_HOME, wait_until="domcontentloaded")
-        time.sleep(2)
-        self.log(T(f"Opening page: {page_name}", f"Page khol rahe hain: {page_name}"))
-        # Agar page ka direct URL pata ho to account me 'page_url' add karke yahan use karein.
+    def _go_to_page(self, page_name=None):
+        """Target page kholo aur us page par switch karo (taake post page ki taraf se ho)."""
+        tgt = getattr(self, "target_page", None) or {}
+        url = tgt.get("url") or ""
+        name = tgt.get("name") or page_name or ""
+        if not url and name:
+            url = name if name.startswith("http") else ""
+        if not url:
+            self.page.goto(FB_HOME, wait_until="domcontentloaded")
+            time.sleep(2)
+            return
+        self.log(T(f"Opening page: {name or url}", f"Page khol rahe hain: {name or url}"))
+        self.page.goto(url, wait_until="domcontentloaded")
+        time.sleep(4)
+        # Page par switch (admin ke taur par)
+        if self._click_button(["Switch now", "Switch Now", "Switch", "Switch profile"]):
+            time.sleep(3)
+            self._click_button(["Switch", "Switch now", "Continue"])
+            time.sleep(4)
+            self.page.goto(url, wait_until="domcontentloaded")
+            time.sleep(4)
 
     # ---------- Public upload methods ----------
     def upload_reel(self, video_path, caption):
@@ -2247,6 +2445,8 @@ class Automation:
         self.log(T(f"[{acc['name']}] {kind} upload started: {video_path}", f"[{acc['name']}] {kind} upload shuru: {video_path}"))
         try:
             if is_reel:
+                if getattr(self, "target_page", None):
+                    self._go_to_page()
                 self.page.goto("https://www.facebook.com/reels/create/", wait_until="domcontentloaded")
             else:
                 self._go_to_page(acc.get("page_name", ""))
@@ -2397,8 +2597,10 @@ class TimePicker:
 class AccountPanel:
     """Account table: checkbox select + Total + buttons (configurable)."""
     def __init__(self, parent, app, on_start=None, start_label="START",
-                 show_startstop=True, show_delete=False, on_pick=None):
+                 show_startstop=True, show_delete=False, on_pick=None, show_pages=True):
         self.app = app
+        self.show_pages = show_pages
+        self.cur_acc_id = None
         self.on_start = on_start
         self.on_pick = on_pick
         self.checked = set()
@@ -2420,16 +2622,37 @@ class AccountPanel:
                 ttk.Button(head, text="STOP", command=self.app._stop_all).pack(side="right", padx=2)
 
         cols = ("no", "name", "email", "page", "mode", "status")
-        self.tree = ttk.Treeview(wrap, columns=cols, show="tree headings", height=14, selectmode="none")
+        self.tree = ttk.Treeview(wrap, columns=cols, show="tree headings",
+                                 height=(7 if show_pages else 14), selectmode="none")
         self.tree.column("#0", width=46, anchor="center", stretch=False)
         self.tree.heading("#0", text=T("Pick", "Pick"))
         widths = {"no": 34, "name": 130, "email": 160, "page": 150, "mode": 110, "status": 90}
         heads = {"no": "No", "name": "Account", "email": "Email",
-                 "page": "Page", "mode": "Profile/Proxy", "status": "Status"}
+                 "page": "Pages (ticked)", "mode": "Profile/Proxy", "status": "Status"}
         for c in cols:
             self.tree.heading(c, text=heads[c]); self.tree.column(c, width=widths[c], anchor="w")
         self.tree.pack(fill="both", expand=True, padx=6, pady=4)
         self.tree.bind("<Button-1>", self._on_click)
+
+        if show_pages:
+            pb = ttk.LabelFrame(wrap, text=T("PAGES OF CLICKED ID  (✔ = post on this page)",
+                                             "CLICK KI GAYI ID KE PAGES  (✔ = is page par post)"))
+            pb.pack(fill="both", expand=True, padx=6, pady=4)
+            ph = ttk.Frame(pb); ph.pack(fill="x", padx=4, pady=2)
+            self.lbl_pages = ttk.Label(ph, text=T("Click an ID row above to see its pages.",
+                                                  "Upar kisi ID ki row par click karein, pages yahan aayenge."))
+            self.lbl_pages.pack(side="left")
+            ttk.Button(ph, text=T("Detect pages", "Pages dhoondo"), command=self._detect_cur).pack(side="right", padx=2)
+            ttk.Button(ph, text=T("Untick all", "Sab untick"), command=lambda: self._tick_all_pages(False)).pack(side="right", padx=2)
+            ttk.Button(ph, text=T("Tick all", "Sab tick"), command=lambda: self._tick_all_pages(True)).pack(side="right", padx=2)
+            self.ptree = ttk.Treeview(pb, columns=("pname", "purl"), show="tree headings", height=4, selectmode="none")
+            self.ptree.column("#0", width=46, anchor="center", stretch=False)
+            self.ptree.heading("#0", text="Post")
+            self.ptree.heading("pname", text=T("Page name", "Page ka naam"))
+            self.ptree.heading("purl", text="Link")
+            self.ptree.column("pname", width=240, anchor="w"); self.ptree.column("purl", width=320, anchor="w")
+            self.ptree.pack(fill="both", expand=True, padx=4, pady=2)
+            self.ptree.bind("<Button-1>", self._on_page_click)
 
         self.app._panels.append(self)
         self.refresh()
@@ -2440,15 +2663,78 @@ class AccountPanel:
             mode = a.get("ix_profile") or (a.get("proxy") and "proxy") or "-"
             img = self.app.img_check if a["id"] in self.checked else self.app.img_empty
             self.tree.insert("", "end", iid=a["id"], image=img,
-                             values=(i, a["name"], a["email"], a.get("page_name", ""),
+                             values=(i, a["name"], a["email"], self._pages_summary(a),
                                      mode, self.status.get(a["id"], "")))
         accs = load_accounts()
         self.lbl_total.config(text=f"Total {len(accs)}  |  Selected {len(self.checked)}")
+        if self.show_pages:
+            self._render_pages()
+
+    @staticmethod
+    def _pages_summary(a):
+        pg = a.get("pages") or []
+        if pg:
+            on = [p["name"] for p in pg if p.get("enabled")]
+            first = (": " + on[0]) if on else ""
+            return f"{len(on)}/{len(pg)} ✔{first}"
+        return a.get("page_name", "") or T("(auto)", "(auto)")
+
+    def _render_pages(self):
+        self.ptree.delete(*self.ptree.get_children())
+        a = get_account(self.cur_acc_id) if self.cur_acc_id else None
+        if not a:
+            return
+        pg = a.get("pages") or []
+        if not pg:
+            self.lbl_pages.config(text=T(f"{a['name']}: no pages yet — press 'Detect pages' (or LOGIN with detect on).",
+                                         f"{a['name']}: abhi pages nahi — 'Pages dhoondo' dabayein (ya LOGIN detect ke sath)."))
+            return
+        on = sum(1 for p in pg if p.get("enabled"))
+        self.lbl_pages.config(text=T(f"{a['name']}: {len(pg)} pages, {on} ticked",
+                                     f"{a['name']}: {len(pg)} pages, {on} tick"))
+        for i, p in enumerate(pg):
+            img = self.app.img_check if p.get("enabled") else self.app.img_empty
+            self.ptree.insert("", "end", iid=str(i), image=img, values=(p.get("name", ""), p.get("url", "")))
+
+    def show_pages_of(self, acc_id):
+        if self.show_pages:
+            self.cur_acc_id = acc_id
+            self._render_pages()
+
+    def _on_page_click(self, e):
+        row = self.ptree.identify_row(e.y)
+        a = get_account(self.cur_acc_id) if self.cur_acc_id else None
+        if not row or not a:
+            return
+        pg = a.get("pages") or []
+        i = int(row)
+        if i >= len(pg):
+            return
+        p = pg[i]
+        set_page_enabled(a["id"], p.get("url") or p.get("name"), not p.get("enabled"))
+        self.app._refresh_all_panels()
+
+    def _tick_all_pages(self, val):
+        a = get_account(self.cur_acc_id) if self.cur_acc_id else None
+        if not a or not a.get("pages"):
+            return
+        for p in a["pages"]:
+            p["enabled"] = val
+        update_account(a["id"], pages=a["pages"])
+        self.app._refresh_all_panels()
+
+    def _detect_cur(self):
+        a = get_account(self.cur_acc_id) if self.cur_acc_id else None
+        if not a:
+            messagebox.showwarning(T("Wait", "Ruko"), T("Click an ID row first.", "Pehle kisi ID ki row par click karein."))
+            return
+        self.app._start_login_job([a], threads=1, detect=True)
 
     def _on_click(self, e):
         row = self.tree.identify_row(e.y); col = self.tree.identify_column(e.x)
         if not row:
             return
+        self.show_pages_of(row)
         if col == "#0":
             self.checked.discard(row) if row in self.checked else self.checked.add(row)
             self.tree.item(row, image=(self.app.img_check if row in self.checked else self.app.img_empty))
@@ -2664,14 +2950,29 @@ class App(tk.Tk):
     # ---------- Accounts page ----------
     def _build_accounts_page(self):
         f = self.pages["Accounts"]
-        left = ttk.Frame(f); left.pack(side="left", fill="y", padx=8, pady=8)
+        left = self._scroll_area(f, width=470)
+        lg = ttk.LabelFrame(left, text=T("LOGIN SELECTED IDs  (auto 2FA + own ixBrowser profile)",
+                                         "LOGIN SELECTED IDs  (auto 2FA + alag ixBrowser profile)"))
+        lg.pack(fill="x", pady=(0, 6))
+        lr = ttk.Frame(lg); lr.pack(fill="x", padx=8, pady=3)
+        ttk.Label(lr, text=T("Open at once:", "Aik waqt khulein:")).pack(side="left")
+        self.login_threads = tk.StringVar(value="5")
+        ttk.Combobox(lr, textvariable=self.login_threads, values=("1", "2", "3", "5", "10", "15", "20"),
+                     width=5).pack(side="left", padx=4)
+        self.login_detect = tk.IntVar(value=1)
+        ttk.Checkbutton(lr, text=T("Detect pages after login", "Login ke baad pages dhoondo"),
+                        variable=self.login_detect).pack(side="left", padx=6)
+        lb = ttk.Frame(lg); lb.pack(fill="x", padx=8, pady=3)
+        ttk.Button(lb, text=T("LOGIN selected IDs", "LOGIN selected IDs"), command=self._login_selected).pack(side="left")
+        ttk.Button(lb, text="STOP", command=self._stop_all).pack(side="left", padx=4)
+
         form = ttk.LabelFrame(left, text=T("Add / edit ID", "ID add / edit karein"))
         form.pack(fill="y")
 
         self.a_name = self._row(form, T("Name:", "Name:"))
         self.a_email = self._row(form, T("Email / Phone:", "Email / Phone:"))
         self.a_pass = self._row(form, T("Password:", "Password:"), show="*")
-        self.a_page = self._row(form, T("Page name:", "Page ka naam:"))
+        self.a_page = self._row(form, T("Page name (optional):", "Page ka naam (optional):"))
         self.a_ix = self._row(form, T("ixBrowser Profile (name/ID):", "ixBrowser Profile (naam/ID):"))
         self.a_proxy = self._row(form, T("Proxy (optional):", "Proxy (optional):"))
         self.a_twofa = self._row(form, T("2FA secret key (optional):", "2FA secret key (optional):"))
@@ -2702,10 +3003,10 @@ class App(tk.Tk):
 
         ib = ttk.Frame(form); ib.pack(fill="x", padx=8, pady=4)
         ttk.Button(ib, text=T("Bulk import from file (.txt)", "File se bulk import (.txt)"), command=self._import_accounts_file).pack(side="left")
-        ttk.Label(form, text=T("Text file: each line has email and password (name optional).\n"
-                               "Separator can be any of: |  ,  ;  :  space or tab.",
-                               "Text file: har line me email aur password (name optional).\n"
-                               "Alag karne ke liye koi bhi: |  ,  ;  :  space ya tab."),
+        ttk.Label(form, text=T("Text file, one ID per line:  email|password|2FA secret\n"
+                               "(also works with :  ,  ;  space or tab — 2FA optional)",
+                               "Text file, har line me aik ID:  email|password|2FA secret\n"
+                               "(:  ,  ;  space ya tab bhi chalega — 2FA optional)"),
                   foreground="#555").pack(anchor="w", padx=8)
 
         hb = ttk.Frame(left); hb.pack(fill="x", pady=6)
@@ -2714,6 +3015,91 @@ class App(tk.Tk):
         ttk.Button(hb, text=T("ID History", "ID History"), command=self._show_id_history).pack(side="left")
 
         self.acc_table = AccountPanel(f, self, on_start=None, show_delete=True, on_pick=self._load_account_into_form)
+
+    def _scroll_area(self, parent, width=470):
+        """Left side ko scroll wala banao (chhoti screen par sab nazar aaye)."""
+        outer = ttk.Frame(parent); outer.pack(side="left", fill="y", padx=8, pady=8)
+        cv = tk.Canvas(outer, width=width, highlightthickness=0, bd=0)
+        sb = ttk.Scrollbar(outer, orient="vertical", command=cv.yview)
+        inner = ttk.Frame(cv)
+        inner.bind("<Configure>", lambda e: cv.configure(scrollregion=cv.bbox("all")))
+        win = cv.create_window((0, 0), window=inner, anchor="nw")
+        cv.bind("<Configure>", lambda e: cv.itemconfigure(win, width=e.width))
+        cv.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y"); cv.pack(side="left", fill="y", expand=False)
+        def _wheel(e):
+            try:
+                cv.yview_scroll(int(-e.delta / 120) or (-1 if e.delta > 0 else 1), "units")
+            except Exception:
+                pass
+        cv.bind("<Enter>", lambda e: cv.bind_all("<MouseWheel>", _wheel))
+        cv.bind("<Leave>", lambda e: cv.unbind_all("<MouseWheel>"))
+        return inner
+
+    # ---------- Login selected IDs (pool) ----------
+    def _login_selected(self):
+        accs = self.acc_table.checked_accounts()
+        if not accs:
+            messagebox.showwarning(T("Wait", "Ruko"), T("Select IDs with ✔ in the table.", "Table mein ✔ se IDs chunein."))
+            return
+        try:
+            n = max(1, int(self.login_threads.get().strip() or "5"))
+        except ValueError:
+            n = 5
+        self._start_login_job(accs, n, bool(self.login_detect.get()))
+
+    def _start_login_job(self, accs, threads=5, detect=True):
+        self.stop_flag.clear()
+        self.log_q.put(T(f"=== LOGIN START: {len(accs)} IDs, {threads} at once ===",
+                         f"=== LOGIN START: {len(accs)} IDs, aik waqt {threads} ==="))
+        mgr = threading.Thread(target=self._run_login_pool, args=(list(accs), threads, detect), daemon=True)
+        mgr.start(); self.workers.append(mgr)
+
+    def _set_status_all(self, acc_id, text):
+        for p in self._panels:
+            try:
+                p.set_status(acc_id, text)
+            except Exception:
+                pass
+
+    def _run_login_pool(self, accs, limit, detect):
+        log = lambda m: self.log_q.put(m)
+        if not ensure_runtime(log=log):
+            return
+        active, pending = [], list(accs)
+        while (pending or active) and not self.stop_flag.is_set():
+            active = [t for t in active if t.is_alive()]
+            while pending and len(active) < limit and not self.stop_flag.is_set():
+                acc = pending.pop(0)
+                t = threading.Thread(target=self._run_login_one, args=(acc, detect), daemon=True)
+                t.start(); active.append(t); self.workers.append(t)
+                time.sleep(2)
+            time.sleep(2)
+        log(T("=== LOGIN finished ===", "=== LOGIN khatam ==="))
+        self.after(0, self._refresh_all_panels)
+
+    def _run_login_one(self, acc, detect):
+        log = lambda m: self.log_q.put(m)
+        bot = Automation(log=log, headless=False, browser_cfg=load_settings())
+        self.after(0, lambda: self._set_status_all(acc["id"], "Login..."))
+        try:
+            bot.start(acc)
+            if not bot.login(wait_for_2fa_callback=self._wait_2fa):
+                self.after(0, lambda: self._set_status_all(acc["id"], "Die"))
+                add_id_history(acc["id"], "login failed", bot.last_error or "login failed")
+                return
+            self.after(0, lambda: self._set_status_all(acc["id"], "Live"))
+            add_id_history(acc["id"], "login ok", "")
+            if detect and not self.stop_flag.is_set():
+                pages = bot.detect_pages()
+                if pages:
+                    set_account_pages(acc["id"], pages)
+                self.after(0, self._refresh_all_panels)
+        except Exception as e:
+            log(T(f"[{acc['name']}] Login error: {e}", f"[{acc['name']}] Login error: {e}"))
+            self.after(0, lambda: self._set_status_all(acc["id"], "Error"))
+        finally:
+            time.sleep(3); bot.stop()
 
     def _pick_account_folder(self):
         d = filedialog.askdirectory(title=T("Videos folder", "Videos folder"))
@@ -2809,27 +3195,18 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror("Error", T(f"Could not open file: {e}", f"File nahi khuli: {e}"))
             return
-        import re
         added = 0; skipped = 0
         for raw in lines:
-            line = raw.strip()
-            if not line:
+            r = parse_account_line(raw)
+            if not r or not r[1]:
+                if raw.strip():
+                    skipped += 1
                 continue
-            parts = [p for p in re.split(r"[|,;:\t ]+", line) if p]
-            # email = jisme @ ho
-            email = next((p for p in parts if "@" in p), None)
-            if not email:
-                skipped += 1; continue
-            idx = parts.index(email)
-            rest = parts[:idx] + parts[idx + 1:]
-            password = rest[0] if rest else ""
-            name = rest[1] if len(rest) > 1 else email.split("@")[0]
-            page = rest[2] if len(rest) > 2 else ""
-            ixp = rest[3] if len(rest) > 3 else ""
-            proxy = rest[4] if len(rest) > 4 else ""
-            twofa = rest[5] if len(rest) > 5 else ""
-            if not password:
-                skipped += 1; continue
+            email, password, twofa, rest = r
+            name = rest[0] if rest else (email.split("@")[0] if "@" in email else email)
+            page = rest[1] if len(rest) > 1 else ""
+            ixp = rest[2] if len(rest) > 2 else ""
+            proxy = rest[3] if len(rest) > 3 else ""
             add_account(name, email, password, page, proxy, ixp, "", twofa)
             added += 1
         self._refresh_all_panels()
@@ -2987,7 +3364,7 @@ class App(tk.Tk):
         body = ttk.Frame(f); body.pack(side="left", fill="both", expand=True)
         self._build_active_config(body)
         self.interact_panel = AccountPanel(f, self, on_start=self._start_active_batch,
-                                           start_label="START")
+                                           start_label="START", show_pages=False)
 
     def _build_active_config(self, f):
         grid = ttk.LabelFrame(f, text=T("ACTIVITIES", "ACTIVITIES")); grid.pack(side="left", fill="y", padx=8, pady=8)
@@ -3356,7 +3733,7 @@ class App(tk.Tk):
         self.sch_threads = tk.StringVar(value="5")
         tk.Spinbox(pr, from_=1, to=50, textvariable=self.sch_threads, width=5).pack(side="left", padx=4)
 
-        self.schedule_panel = AccountPanel(f, self, on_start=self._start_schedule_batch, start_label="SCHEDULE START")
+        self.schedule_panel = AccountPanel(f, self, on_start=self._start_schedule_batch, start_label="SCHEDULE START", show_pages=False)
 
     def _toggle_sch_diff(self):
         if self.sch_diff.get():
@@ -3435,8 +3812,9 @@ GETTING STARTED
 Add / edit IDs on the left form:
  - Name: a label for the ID.
  - Email / Phone, Password: Facebook login.
- - Page name: the page you post to (exact name).
- - ixBrowser Profile: the profile NAME (or its ID number).
+ - Page name (optional): not needed — pages are detected automatically.
+ - ixBrowser Profile: optional. Leave empty and the app CREATES a separate
+   ixBrowser profile for this ID by itself (email, password, 2FA saved in it).
  - Proxy: leave empty in ixBrowser mode.
  - 2FA secret key: if 2-factor is ON, paste the secret key (same one you
    put in Google Authenticator / 2fa.live). The app makes the OTP itself —
@@ -3448,14 +3826,32 @@ Add / edit IDs on the left form:
 
 Buttons:
  - Save ID, New/clear form.
- - Bulk import from file (.txt): each line = email + password (name/page
-   optional). Separator can be | , ; : space or tab.
+ - Bulk import from file (.txt): one ID per line:
+       email|password|2FA secret
+   (also works with : , ; space or tab; 2FA optional; a 2FA secret with
+   spaces like "ABCD EFGH IJKL MNOP" is fine; phone number instead of email ok).
  - IP check (selected): shows that ID's real IP (confirm proxy/profile).
  - Page History / ID History: every post (date/time, video, success/fail +
    reason) and every login/error. Export to CSV from the window.
 
 Table (right): tick the ✔ box to select. Select all / Unselect all.
  Delete selected (Ctrl+Z restores a deleted ID). Status shows Live / Die.
+
+LOGIN SELECTED IDs (top-left box):
+ 1. Import your .txt, tick the IDs in the table (or Select all).
+ 2. "Open at once": how many browsers open together (5 or 10 etc.).
+ 3. Press LOGIN selected IDs. Each ID opens in its OWN ixBrowser profile
+    (created automatically if missing), logs in, types the 2FA code itself.
+ 4. With "Detect pages after login" ON, the app finds all Facebook pages
+    of that ID and saves them. STOP stops the queue.
+
+PAGES (under the table, also on the POST tab):
+ - Click any ID row → its pages appear below.
+ - Tick ✔ the pages you want to post on (Tick all / Untick all).
+ - Posting goes ONLY to the ticked pages of the ticked IDs. Nothing is
+   posted to unticked IDs or unticked pages.
+ - "Detect pages" refreshes the page list of the clicked ID (your ticks stay).
+ - No page ticked → old behaviour (Page name field, else the profile itself).
 
 ----------------------------------------------------------
 2) POST (Reels / Video / Photo)
@@ -4143,65 +4539,75 @@ downloads and replaces itself, then restarts. No manual download needed.
                 return
             if panel: panel.set_status(account["id"], "Live")
             add_id_history(account["id"], "login ok", "")
-            tags = get_hashtags_for_page(page)
-
-            allow_dup = cfg.get("allow_dup")
-            remaining_daily = page_daily_remaining(page)
-            seen, todo = set(), []
-            for path in files:
-                if not os.path.exists(path):
-                    continue
-                h = file_hash(path)
-                if not allow_dup and (is_uploaded(page, h) or h in seen):
-                    continue
-                seen.add(h); todo.append((path, h))
-                if len(todo) >= remaining_daily:
-                    log(T(f"[{account['name']}] page daily limit reached.", f"[{account['name']}] page daily limit poori."))
-                    break
-            if not todo:
-                log(T(f"[{account['name']}] no new file / daily limit.", f"[{account['name']}] koi nayi file nahi / daily limit."))
-                return
-
-            rotation = max(1, cfg.get("rotation", 1))
-            imn, imx = cfg.get("interval", (40, 90))
-            for lp in range(1, rotation + 1):
+            targets = posting_targets(account)
+            if len(targets) > 1 or targets[0].get("url"):
+                log(T(f"[{account['name']}] Posting to {len(targets)} ticked page(s).",
+                      f"[{account['name']}] {len(targets)} tick kiye pages par post hogi."))
+            for tgt in targets:
                 if self.stop_flag.is_set():
                     break
-                for i, (path, h) in enumerate(todo, 1):
+                bot.target_page = tgt if (tgt.get("url") or tgt.get("name")) else None
+                page = tgt.get("name") or tgt.get("url") or account.get("page_name", "")
+                tags = get_hashtags_for_page(page) or get_hashtags_for_page(account.get("page_name", ""))
+                if tgt.get("name"):
+                    log(T(f"[{account['name']}] >>> Page: {tgt['name']}", f"[{account['name']}] >>> Page: {tgt['name']}"))
+                allow_dup = cfg.get("allow_dup")
+                remaining_daily = page_daily_remaining(page)
+                seen, todo = set(), []
+                for path in files:
+                    if not os.path.exists(path):
+                        continue
+                    h = file_hash(path)
+                    if not allow_dup and (is_uploaded(page, h) or h in seen):
+                        continue
+                    seen.add(h); todo.append((path, h))
+                    if len(todo) >= remaining_daily:
+                        log(T(f"[{account['name']}] page daily limit reached.", f"[{account['name']}] page daily limit poori."))
+                        break
+                if not todo:
+                    log(T(f"[{account['name']}] no new file / daily limit.", f"[{account['name']}] koi nayi file nahi / daily limit."))
+                    continue
+
+                rotation = max(1, cfg.get("rotation", 1))
+                imn, imx = cfg.get("interval", (40, 90))
+                for lp in range(1, rotation + 1):
                     if self.stop_flag.is_set():
                         break
-                    log(T(f"[{account['name']}] {i}/{len(todo)}: {os.path.basename(path)}", f"[{account['name']}] {i}/{len(todo)}: {os.path.basename(path)}"))
-                    try:
-                        if kind == "reel":
-                            ok = bot.upload_reel(path, tags)
-                        elif kind == "photo":
-                            ok = bot.upload_photo(path, tags)
+                    for i, (path, h) in enumerate(todo, 1):
+                        if self.stop_flag.is_set():
+                            break
+                        log(T(f"[{account['name']}] {i}/{len(todo)}: {os.path.basename(path)}", f"[{account['name']}] {i}/{len(todo)}: {os.path.basename(path)}"))
+                        try:
+                            if kind == "reel":
+                                ok = bot.upload_reel(path, tags)
+                            elif kind == "photo":
+                                ok = bot.upload_photo(path, tags)
+                            else:
+                                ok = bot.upload_video(path, tags)
+                        except Exception as e:
+                            ok = False; bot.last_error = str(e)
+                        if ok:
+                            if not allow_dup:
+                                mark_uploaded(page, h)
+                            inc_page_posted(page)
+                            add_page_history(page, path, "success", "")
+                            if cfg.get("delete_after") and tgt is targets[-1]:
+                                try:
+                                    os.remove(path); log(T(f"[{account['name']}] deleted from device: {os.path.basename(path)}", f"[{account['name']}] device se delete: {os.path.basename(path)}"))
+                                except Exception as e:
+                                    log(T(f"delete failed: {e}", f"delete fail: {e}"))
                         else:
-                            ok = bot.upload_video(path, tags)
-                    except Exception as e:
-                        ok = False; bot.last_error = str(e)
-                    if ok:
-                        if not allow_dup:
-                            mark_uploaded(page, h)
-                        inc_page_posted(page)
-                        add_page_history(page, path, "success", "")
-                        if cfg.get("delete_after"):
-                            try:
-                                os.remove(path); log(T(f"[{account['name']}] deleted from device: {os.path.basename(path)}", f"[{account['name']}] device se delete: {os.path.basename(path)}"))
-                            except Exception as e:
-                                log(T(f"delete failed: {e}", f"delete fail: {e}"))
-                    else:
-                        add_page_history(page, path, "fail", bot.last_error or T("post did not happen", "post nahi hui"))
-                    if i < len(todo):
-                        gap = random.randint(min(imn, imx), max(imn, imx)) if (imn or imx) else random.randint(40, 90)
-                        if cfg.get("scroll_between"):
-                            bot.warm_scroll(gap)
-                        elif gap > 120:
-                            bot.warm_scroll(gap)
-                        else:
-                            time.sleep(gap)
-                if lp < rotation:
-                    time.sleep(max(0, cfg.get("rot_gap", 0)))
+                            add_page_history(page, path, "fail", bot.last_error or T("post did not happen", "post nahi hui"))
+                        if i < len(todo):
+                            gap = random.randint(min(imn, imx), max(imn, imx)) if (imn or imx) else random.randint(40, 90)
+                            if cfg.get("scroll_between"):
+                                bot.warm_scroll(gap)
+                            elif gap > 120:
+                                bot.warm_scroll(gap)
+                            else:
+                                time.sleep(gap)
+                    if lp < rotation:
+                        time.sleep(max(0, cfg.get("rot_gap", 0)))
             log(T(f"[{account['name']}] Done.", f"[{account['name']}] Ho gaya."))
         except Exception as e:
             log(T(f"[{account['name']}] Error: {e}", f"[{account['name']}] Error: {e}"))
