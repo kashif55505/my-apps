@@ -1,0 +1,122 @@
+name: My Vault – build and release
+
+# Every change under vault/ builds a signed APK plus the laptop server zip, and publishes them
+# as a GitHub Release tagged vault-v1.<n> and titled "Vault 1.<n>". Obtainium filters releases by that title.
+# The "vault-latest" release always holds the newest files under fixed names.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'vault/**'
+      - '.github/workflows/vault.yml'
+      - '!vault/**.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vault-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vault
+    env:
+      BUILD: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Version
+        run: |
+          echo "VERSION_CODE=$BUILD" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=1.$BUILD" >> "$GITHUB_ENV"
+
+      - name: Check the server and web app
+        run: |
+          node --check server/server.js
+          python3 - <<'PY'
+          import re
+          s = open("app/src/main/assets/www/index.html", encoding="utf-8").read()
+          open("/tmp/app.js", "w").write(re.findall(r"<script>(.*?)</script>", s, re.S)[0])
+          PY
+          node --check /tmp/app.js
+
+      - name: Signing key
+        id: keys
+        env:
+          KS: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          # Uses the KEYSTORE_* secrets if they are set, otherwise the repo's own key in .signing/.
+          if [ -n "$KS" ]; then
+            echo "$KS" | base64 -d > "$RUNNER_TEMP/release.jks"
+          else
+            cp "$GITHUB_WORKSPACE/.signing/release.jks" "$RUNNER_TEMP/release.jks"
+            cat "$GITHUB_WORKSPACE/.signing/key.env" >> "$GITHUB_ENV"
+          fi
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build APK
+        env:
+          KEYSTORE_FILE: ${{ steps.keys.outputs.signed == 'true' && format('{0}/release.jks', runner.temp) || '' }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || env.SIGN_PW }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS || env.SIGN_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || env.SIGN_PW }}
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk "../MyVault-v${VERSION_NAME}.apk"
+
+      - name: Laptop server zip
+        run: |
+          mkdir -p /tmp/pkg/MyVault-Server/public
+          cp server/server.js server/config.json server/start-windows.bat server/start-mac-linux.sh server/README.md /tmp/pkg/MyVault-Server/
+          cp -r app/src/main/assets/www/. /tmp/pkg/MyVault-Server/public/
+          chmod +x /tmp/pkg/MyVault-Server/start-mac-linux.sh
+          (cd /tmp/pkg && zip -qr "$GITHUB_WORKSPACE/MyVault-Server-v${VERSION_NAME}.zip" MyVault-Server)
+
+      - name: Publish release
+        if: steps.keys.outputs.signed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES=$(git log -1 --pretty=%B)
+          gh release create "vault-v${VERSION_NAME}" "../MyVault-v${VERSION_NAME}.apk" "../MyVault-Server-v${VERSION_NAME}.zip" \
+            --title "Vault ${VERSION_NAME}" --latest=false \
+            --notes "$NOTES" \
+            --target "$GITHUB_SHA"
+          # Fixed links that always give the newest files:
+          #   .../releases/download/vault-latest/MyVault.apk
+          #   .../releases/download/vault-latest/MyVault-Server.zip
+          cp "../MyVault-v${VERSION_NAME}.apk" ../MyVault.apk
+          cp "../MyVault-Server-v${VERSION_NAME}.zip" ../MyVault-Server.zip
+          if ! gh release view vault-latest >/dev/null 2>&1; then
+            gh release create vault-latest --title "My Vault (latest download links)" \
+              --notes "Always the newest My Vault. Phone app: MyVault.apk · Laptop server: MyVault-Server.zip" \
+              --latest=false --target "$GITHUB_SHA"
+          fi
+          gh release upload vault-latest ../MyVault.apk ../MyVault-Server.zip --clobber
+          gh release edit vault-latest --title "My Vault (latest: ${VERSION_NAME})"
+
+      - name: Keep the test build
+        if: steps.keys.outputs.signed != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyVault-test-build
+          path: |
+            MyVault-v${{ env.VERSION_NAME }}.apk
+            MyVault-Server-v${{ env.VERSION_NAME }}.zip
+
+      - name: Remove keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"

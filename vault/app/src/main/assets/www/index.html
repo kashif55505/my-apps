@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#24163a">
+<title>My Vault</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{color-scheme:light dark;
+--bg:light-dark(#efecf4,#120d1b);--card:light-dark(#fff,#1d1629);--ink:light-dark(#1b1426,#f1ecf8);
+--mute:light-dark(#6a6079,#a99fba);--line:light-dark(#dcd5e6,#2f2541);--deep:#24163a;--acc:#ff7a3d;--acc-ink:#2a1100;--bad:light-dark(#c0283c,#ff7d8c)}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 Archivo,system-ui,sans-serif;overflow-x:clip;min-height:100vh;padding-bottom:env(safe-area-inset-bottom)}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer;border-radius:12px;min-height:44px;padding:0 18px;font-weight:600;background:var(--card);border:1px solid var(--line)}
+button:disabled{opacity:.6;cursor:default}
+:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.pri{background:var(--acc);color:var(--acc-ink);border-color:var(--acc)}
+.danger{color:var(--bad)}
+input,textarea,select{width:100%;font-size:16px;min-height:48px;padding:10px 14px;border-radius:12px;border:1px solid var(--line);background:var(--card)}
+label{display:block;font-size:14px;font-weight:600;margin:14px 0 6px}
+.hide{display:none!important}.muted{color:var(--mute)}.small{font-size:14px}
+.lock{min-height:100vh;display:grid;place-items:center;padding:calc(24px + env(safe-area-inset-top)) max(5vw,16px) 24px;background:var(--deep);color:#f1ecf8}
+.lock .box{width:min(420px,100%);text-align:center}
+.lock h1{font-size:clamp(30px,6vw,44px);line-height:1.05;margin:16px 0 8px;font-weight:800}
+.lock p{color:#c9bddc;margin:0 0 14px}
+.lock form{text-align:start}
+.lock input{background:#1a0f2b;border-color:#4b3870;color:#fff}
+.lock label{color:#e4dcf0}
+.lock .pri{width:100%;margin-top:18px;font-size:17px}
+.dial{width:min(200px,52vw);aspect-ratio:1;margin:0 auto;display:block}
+.knob{transform-origin:120px 120px;transition:transform 1s cubic-bezier(.3,1.4,.5,1)}
+.err{color:#ffb3bd;min-height:24px;margin-top:10px;font-size:15px}
+.warn{background:#3a2560;border-radius:12px;padding:12px 14px;font-size:14px;color:#e9e0f6;margin-top:14px}
+.bar{position:sticky;top:0;z-index:5;background:var(--deep);color:#f1ecf8;padding:calc(10px + env(safe-area-inset-top)) max(5vw,16px) 10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.brand{font-weight:800;font-size:20px;display:flex;align-items:center;gap:10px;margin-inline-end:auto}
+.bar button{background:#36245a;border-color:#4b3870;color:#fff}
+.bar .pri{background:var(--acc);color:var(--acc-ink);border-color:var(--acc)}
+main{max-width:1240px;margin:0 auto;padding:20px max(5vw,16px) 80px}
+.top{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{min-height:40px;border-radius:999px;padding:0 16px;background:transparent}
+.chip[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.top input{flex:1 1 200px;max-width:340px;min-height:42px}
+.stats{font-size:14px;color:var(--mute);margin-inline-start:auto}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(160px,44vw),1fr));gap:10px}
+.tile{position:relative;aspect-ratio:1;border-radius:14px;overflow:hidden;background:var(--card);border:1px solid var(--line);padding:0;display:block;text-align:start}
+.tile img{width:100%;height:100%;object-fit:cover;display:block}
+.cap{position:absolute;inset:auto 0 0 0;padding:22px 10px 8px;font-size:13px;color:#fff;background:linear-gradient(transparent,rgba(10,5,18,.8));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.badge{position:absolute;top:8px;left:8px;background:rgba(10,5,18,.7);color:#fff;font-size:12px;padding:2px 8px;border-radius:999px}
+.tile.note,.tile.file{padding:14px;display:flex;flex-direction:column;gap:6px}
+.tile.note{background:light-dark(#fff4d6,#2e2614)}
+.tile b{font-size:16px;line-height:1.25;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.tile.note span{font-size:13px;color:var(--mute);overflow:hidden;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical}
+.ph{width:100%;height:100%;display:grid;place-items:center;color:var(--mute);font-size:13px}
+.ico{font-size:30px;font-weight:800;color:var(--acc)}
+.empty{border:2px dashed var(--line);border-radius:18px;padding:44px 20px;text-align:center}
+.empty h2{margin:0 0 6px;font-size:24px}
+.drop{outline:3px dashed var(--acc);outline-offset:-10px}
+.queue{position:fixed;right:16px;bottom:16px;z-index:20;width:min(340px,calc(100vw - 32px));display:flex;flex-direction:column;gap:8px}
+.qi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.18);overflow-wrap:anywhere}
+.pb{height:6px;border-radius:9px;background:var(--line);margin-top:6px;overflow:hidden}.pb i{display:block;height:100%;background:var(--acc);width:0}
+.ov{position:fixed;inset:0;z-index:30;background:rgba(10,5,18,.72);display:grid;place-items:center;padding:16px}
+.panel{background:var(--card);border-radius:18px;padding:22px;width:min(560px,100%);max-height:calc(100vh - 32px);overflow:auto}
+.panel h2{margin:0 0 4px;font-size:24px}
+.row{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;margin-top:18px}
+.lb{position:fixed;inset:0;z-index:25;background:#0b0712;color:#fff;display:grid;grid-template-rows:auto minmax(0,1fr) auto;padding-top:env(safe-area-inset-top)}
+.lb header,.lb footer{display:flex;gap:8px;align-items:center;padding:10px 14px;flex-wrap:wrap}
+.lb header b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1 1 140px}
+.lb button{background:#24163a;border-color:#3d2b5e;color:#fff}
+.stage{display:grid;place-items:center;padding:8px;position:relative;overflow:hidden}
+.stage img,.stage video{max-width:100%;max-height:100%;object-fit:contain;border-radius:6px}
+.nav{position:absolute;top:50%;translate:0 -50%;width:48px;padding:0;font-size:22px}
+.prev{left:10px}.next{right:10px}
+.lb footer{font-size:14px;color:#b8acd0}
+textarea{min-height:44vh;resize:vertical;line-height:1.6}
+.toast{position:fixed;left:50%;translate:-50% 0;bottom:20px;z-index:40;background:var(--ink);color:var(--bg);padding:12px 18px;border-radius:12px;font-size:15px;max-width:calc(100vw - 32px)}
+.spin{width:28px;height:28px;border:3px solid #ffffff44;border-top-color:var(--acc);border-radius:50%;animation:sp .9s linear infinite;margin:0 auto}
+.pill{font-size:13px;padding:4px 10px;border-radius:999px;background:#36245a;color:#e4dcf0;white-space:nowrap}.pill.off{background:#5a2433}.pill.ok{background:#1f4a3a}
+.link{background:none;border:0;color:#c9bddc;text-decoration:underline;font-weight:500;min-height:40px;padding:0 6px}
+.check{display:flex;gap:10px;align-items:center;margin-top:14px;font-size:15px}.check input{width:22px;min-height:22px}
+.pct{text-align:center;margin-top:10px;font-size:14px;color:#b8acd0}
+@keyframes sp{to{transform:rotate(1turn)}}
+@media(max-width:600px){.lbl{display:none}.bar button{padding:0 12px}.brand{font-size:17px;flex:1 1 100%}.stats{width:100%;margin:0}.top input{max-width:none}}
+@media(prefers-reduced-motion:reduce){.knob{transition:none}.spin{animation:none}}
+</style>
+</head>
+<body>
+<section class="lock" id="s-lock">
+  <div class="box">
+    <svg class="dial" viewBox="0 0 240 240" aria-hidden="true">
+      <circle cx="120" cy="120" r="116" fill="#1a0f2b"/><circle cx="120" cy="120" r="108" fill="#2f1f4c" stroke="#4b3870" stroke-width="2"/>
+      <g class="knob" id="knob"><g id="ticks"></g><circle cx="120" cy="120" r="64" fill="#3d2b5e"/><circle cx="120" cy="120" r="58" fill="#24163a" stroke="#5b4785" stroke-width="2"/>
+      <rect x="114" y="66" width="12" height="108" rx="6" fill="#4b3870"/><circle cx="120" cy="120" r="14" fill="#ff7a3d"/></g>
+      <path d="M120 2 l9 14 h-18z" fill="#ff7a3d"/>
+    </svg>
+    <div id="v-boot"><h1>My Vault</h1><p>Opening…</p><div class="spin"></div></div>
+    <div id="v-off" class="hide"><h1>Can't open</h1><p id="off-msg"></p><button class="pri" onclick="location.reload()">Try again</button></div>
+
+    <div id="v-connect" class="hide">
+      <h1 id="c-title">Connect your vault</h1>
+      <p id="c-sub">Enter your laptop's vault address and your login.</p>
+      <form id="f-connect" autocomplete="off">
+        <div id="c-server-wrap"><label for="cs">Vault address</label><input id="cs" type="url" inputmode="url" placeholder="https://my-laptop.tail1234.ts.net" autocapitalize="none"></div>
+        <label for="cu">Username</label><input id="cu" required autocomplete="username" autocapitalize="none">
+        <label for="cp">Password</label><input id="cp" type="password" required autocomplete="current-password">
+        <div id="c-new" class="hide">
+          <label for="cp2">Type the password again</label><input id="cp2" type="password" autocomplete="new-password">
+          <div class="warn">Nobody can reset this password. If you forget it, your files can never be opened again. Write it down somewhere safe.</div>
+        </div>
+        <button class="pri" type="submit" id="b-connect">Connect</button>
+        <div class="err" id="e-connect" role="alert"></div>
+      </form>
+    </div>
+
+    <div id="v-unlock" class="hide">
+      <h1>Vault locked</h1><p id="u-sub">Enter your password to open your vault.</p>
+      <form id="f-unlock">
+        <input id="uu" autocomplete="username" class="hide" tabindex="-1" aria-hidden="true">
+        <label for="up">Password</label><input id="up" type="password" required autocomplete="current-password">
+        <button class="pri" type="submit" id="b-unlock">Unlock</button>
+        <div class="err" id="e-unlock" role="alert"></div>
+      </form>
+      <button class="link" id="b-forget">Remove this vault from this device</button>
+    </div>
+  </div>
+</section>
+
+<section id="s-app" class="hide">
+  <div class="bar">
+    <div class="brand"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="3" fill="#ff7a3d"/><path d="M8 10V7a4 4 0 0 1 8 0v3" stroke="#f1ecf8" stroke-width="2.4" fill="none"/></svg>My Vault <span class="pill" id="sync" role="status"></span></div>
+    <button class="pri" id="b-add">+ Add<span class="lbl"> photos / videos</span></button>
+    <button id="b-note">+ Note</button>
+    <button id="b-set">Settings</button>
+    <button id="b-lock">Lock</button>
+    <input type="file" id="fi" multiple class="hide">
+  </div>
+  <main>
+    <div class="top">
+      <div class="chips" role="group" aria-label="Filter">
+        <button class="chip" data-f="all" aria-pressed="true">All</button><button class="chip" data-f="photo" aria-pressed="false">Photos</button>
+        <button class="chip" data-f="video" aria-pressed="false">Videos</button><button class="chip" data-f="note" aria-pressed="false">Notes</button>
+        <button class="chip" data-f="file" aria-pressed="false">Files</button>
+      </div>
+      <input id="q" type="search" placeholder="Search names and notes" aria-label="Search">
+      <div class="stats" id="stats"></div>
+    </div>
+    <div id="grid" class="grid"></div>
+    <div id="empty" class="empty hide"><h2>Your vault is empty</h2>
+      <p class="muted">Add photos, videos or any file, or write a private note.</p>
+      <div class="row" style="justify-content:center"><button class="pri" id="b-add2">Add photos / videos</button><button id="b-note2">Write a note</button></div></div>
+  </main>
+</section>
+
+<div class="queue" id="queue"></div>
+<div class="lb hide" id="lb" role="dialog" aria-modal="true" aria-label="Viewer">
+  <header><b id="lb-name"></b><button id="lb-dl">Download</button><button id="lb-ren">Rename</button><button id="lb-del" class="danger">Delete</button><button id="lb-x">Close</button></header>
+  <div class="stage" id="stage"></div>
+  <footer id="lb-meta"></footer>
+</div>
+<div class="ov hide" id="ov"><div class="panel" id="panel" role="dialog" aria-modal="true"></div></div>
+
+<script>
+{
+const $=s=>document.querySelector(s);
+const show=(e,on=true)=>e.classList.toggle('hide',!on);
+const enc=new TextEncoder(),dec=new TextDecoder();
+const CHUNK=8*1024*1024,ITER=310000;
+const NATIVE=!!window.AndroidVault;                       // Android app ke andar
+const SAME=!NATIVE; // browser mein hamesha laptop server se hi khulti hai
+let acct=null,settings={al:5,keep:NATIVE},vk=null,auth=null,token=null,online=false;
+let items=[],filter='all',q='',view=[],cur=-1,idleT=null,hiddenAt=0,busyUp=0,localFails=0,waitUntil=0;
+const metaCache=new Map(),urls=new Map();
+
+$('#ticks').innerHTML=Array.from({length:60},(_,i)=>{const a=i*6*Math.PI/180,r1=i%5?96:90,r2=104;
+  return `<line x1="${120+r1*Math.sin(a)}" y1="${120-r1*Math.cos(a)}" x2="${120+r2*Math.sin(a)}" y2="${120-r2*Math.cos(a)}" stroke="${i%5?'#6d5a93':'#e4dcf0'}" stroke-width="${i%5?1.5:3}"/>`}).join('');
+let turn=0;const spinDial=d=>{turn+=d;$('#knob').style.transform=`rotate(${turn}deg)`};
+
+// ================= crypto (sirf isi device par) =================
+const rnd=n=>crypto.getRandomValues(new Uint8Array(n));
+function toB64(u){let s='';for(let i=0;i<u.length;i+=0x8000)s+=String.fromCharCode.apply(null,u.subarray(i,i+0x8000));return btoa(s)}
+function fromB64(b){const s=atob(b),u=new Uint8Array(s.length);for(let i=0;i<s.length;i++)u[i]=s.charCodeAt(i);return u}
+async function derive(pw,saltB64,iter){
+  const base=await crypto.subtle.importKey('raw',enc.encode(pw),'PBKDF2',false,['deriveBits']);
+  const bits=new Uint8Array(await crypto.subtle.deriveBits({name:'PBKDF2',salt:fromB64(saltB64),iterations:iter,hash:'SHA-256'},base,512));
+  return{kek:await crypto.subtle.importKey('raw',bits.slice(0,32),'AES-GCM',false,['encrypt','decrypt']),auth:toB64(bits.slice(32))}}
+async function seal(key,u8){const iv=rnd(12),ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,u8));const o=new Uint8Array(12+ct.length);o.set(iv);o.set(ct,12);return o}
+async function unseal(key,u8){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:u8.subarray(0,12)},key,u8.subarray(12)))}
+const sealObj=async o=>toB64(await seal(vk,enc.encode(JSON.stringify(o))));
+const openObj=async b=>JSON.parse(dec.decode(await unseal(vk,fromB64(b))));
+async function makeCreds(pw,raw){const salt=toB64(rnd(16));const d=await derive(pw,salt,ITER);return{salt,iter:ITER,authHash:d.auth,wk:toB64(await seal(d.kek,raw))}}
+const newId=()=>Date.now().toString(36)+[...rnd(6)].map(b=>b.toString(16).padStart(2,'0')).join('');
+
+// ================= phone/device storage (IndexedDB) =================
+const idb={db:null,
+  open(){return new Promise((res,rej)=>{const r=indexedDB.open('myvault',1);
+    r.onupgradeneeded=()=>{const d=r.result;d.createObjectStore('kv');d.createObjectStore('items',{keyPath:'id'});d.createObjectStore('chunks')};
+    r.onsuccess=()=>{this.db=r.result;res()};r.onerror=()=>rej(r.error)})},
+  tx(st,mode,fn){return new Promise((res,rej)=>{const t=this.db.transaction(st,mode),s=t.objectStore(st);let out;const r=fn(s);if(r)r.onsuccess=()=>out=r.result;
+    t.oncomplete=()=>res(out);t.onerror=t.onabort=()=>rej(t.error||new Error('idb'))})},
+  get(st,k){return this.tx(st,'readonly',s=>s.get(k))},
+  put(st,v,k){return this.tx(st,'readwrite',s=>s.put(v,k))},
+  del(st,k){return this.tx(st,'readwrite',s=>s.delete(k))},
+  all(st){return this.tx(st,'readonly',s=>s.getAll())},
+  // ek hi transaction mein padh kar badlo, taa ke purani copy nayi tabdeeli ko overwrite na kare
+  upd(id,fn){return new Promise((res,rej)=>{const t=this.db.transaction('items','readwrite'),s=t.objectStore('items'),g=s.get(id);let out=null;
+    g.onsuccess=()=>{const r=g.result;if(r&&fn(r)!==false){s.put(r);out=r}};t.oncomplete=()=>res(out);t.onerror=t.onabort=()=>rej(t.error||new Error('idb'))})},
+  dropChunks(id){return this.tx('chunks','readwrite',s=>s.delete(IDBKeyRange.bound(id+':',id+':￿')))},
+  wipe(){return Promise.all(['kv','items','chunks'].map(st=>this.tx(st,'readwrite',s=>s.clear())))}};
+const ck=(id,i)=>id+':'+i;
+const saveAcct=()=>idb.put('kv',acct,'account');
+const saveSettings=()=>idb.put('kv',settings,'settings');
+
+// ================= laptop server =================
+const base=()=>SAME?'':(acct&&acct.server||'');
+async function api(path,opt={}){
+  const h=Object.assign({},opt.headers||{});if(token)h.Authorization='Bearer '+token;
+  if(opt.json!==undefined){h['Content-Type']='application/json';opt.body=JSON.stringify(opt.json)}
+  const ac=new AbortController(),tm=setTimeout(()=>ac.abort(),opt.timeout||20000);
+  let r;try{r=await fetch((opt.base??base())+'/api/'+path,{method:opt.method||'GET',headers:h,body:opt.body,signal:ac.signal})}
+  catch(e){clearTimeout(tm);setOnline(false);throw Object.assign(new Error('offline'),{offline:true})}
+  clearTimeout(tm);
+  if(r.status===401&&token&&!opt.noRelogin){token=null;if(await serverLogin())return api(path,{...opt,noRelogin:true});throw Object.assign(new Error('login'),{status:401})}
+  if(opt.raw){if(!r.ok)throw Object.assign(new Error('http '+r.status),{status:r.status});return new Uint8Array(await r.arrayBuffer())}
+  const j=await r.json().catch(()=>({}));if(!r.ok)throw Object.assign(new Error(j.error||'http '+r.status),{status:r.status,body:j});return j}
+function normServer(s){s=(s||'').trim().replace(/\/+$/,'');if(s&&!/^https?:\/\//i.test(s))s='https://'+s;return s}
+
+// login to laptop using the key we already derived at unlock
+async function serverLogin(){if(!auth||!acct)return false;
+  try{const pre=await api('prelogin',{method:'POST',json:{username:acct.username},noRelogin:true});
+    let a=auth;
+    if(pre.salt!==acct.salt||pre.iter!==acct.iter){ // password badla gaya tha doosre device se
+      if(!auth.pw)return false;const d=await derive(auth.pw,pre.salt,pre.iter);a={...auth,auth:d.auth,kek:d.kek}}
+    const r=await api('login',{method:'POST',json:{username:acct.username,authHash:a.auth},noRelogin:true});
+    if(r.wk!==acct.wk||pre.salt!==acct.salt){const raw=await unseal(a.kek,fromB64(r.wk));raw.fill(0);acct.wk=r.wk;acct.salt=pre.salt;acct.iter=pre.iter;auth=a;await saveAcct()}
+    token=r.token;setOnline(true);return true}
+  catch(e){if(!e.offline)setOnline(false,e.status===429?'Too many tries on laptop':'Laptop login failed');return false}}
+
+// ================= ui helpers =================
+function toast(t,ms=3200){const d=document.createElement('div');d.className='toast';d.textContent=t;document.body.append(d);setTimeout(()=>d.remove(),ms)}
+const fmtSize=n=>n<1024?n+' B':n<1048576?(n/1024).toFixed(0)+' KB':n<1073741824?(n/1048576).toFixed(1)+' MB':(n/1073741824).toFixed(2)+' GB';
+const fmtDate=t=>new Date(t).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'});
+const fmtDur=s=>{s=Math.round(s);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')};
+function el(tag,props={},...kids){const e=document.createElement(tag);for(const k in props){if(k==='text')e.textContent=props[k];else if(k.startsWith('on'))e.addEventListener(k.slice(2),props[k]);else e.setAttribute(k,props[k])}e.append(...kids);return e}
+function modal(build){const p=$('#panel');p.replaceChildren();show($('#ov'));return new Promise(res=>{const close=v=>{show($('#ov'),false);p.replaceChildren();res(v)};build(p,close);setTimeout(()=>p.querySelector('input:not([type=checkbox]),textarea,.pri')?.focus(),30)})}
+$('#ov').addEventListener('click',e=>{if(e.target.id==='ov')$('#panel [data-x]')?.click()});
+const confirmBox=(t,msg,ok='Delete')=>modal((p,close)=>p.append(el('h2',{text:t}),el('p',{class:'muted',text:msg}),el('div',{class:'row'},el('button',{'data-x':'',text:'Cancel',onclick:()=>close(false)}),el('button',{class:'pri',text:ok,onclick:()=>close(true)}))));
+const promptBox=(t,val)=>modal((p,close)=>{const i=el('input',{type:'text','aria-label':t});i.value=val;p.append(el('h2',{text:t}),el('form',{onsubmit:e=>{e.preventDefault();close(i.value.trim()||null)}},i,el('div',{class:'row'},el('button',{type:'button','data-x':'',text:'Cancel',onclick:()=>close(null)}),el('button',{class:'pri',type:'submit',text:'Save'}))))});
+function lockView(w){show($('#s-lock'));show($('#s-app'),false);for(const v of['boot','off','connect','unlock'])show($('#v-'+v),v===w)}
+let syncMsg='',offMsg='';
+function setOnline(on,msg){online=on;if(!on)offMsg=msg||'';paintSync(on?msg:undefined)}
+function paintSync(msg){const p=$('#sync');if(msg!==undefined)syncMsg=msg;
+  const pend=items.filter(i=>i.st!=='ok').length+deletedPending;
+  if(!online){p.className='pill off';p.textContent=offMsg||'Offline · saved on this device'}
+  else if(syncing||pend){p.className='pill';p.textContent=syncMsg||'Syncing…'}
+  else{p.className='pill ok';p.textContent='Synced with laptop'}}
+// Android back button
+window.__back=()=>{if(!$('#ov').classList.contains('hide')){$('#panel [data-x]')?.click();return true}if(!$('#lb').classList.contains('hide')){closeLb();return true}return false};
+
+// ================= start =================
+(async()=>{
+  if(!window.isSecureContext||!crypto.subtle){lockView('off');$('#off-msg').textContent='Open this over HTTPS (your Tailscale address) or at http://localhost on the laptop. Encryption does not work over plain http.';return}
+  if(SAME&&'serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  try{await idb.open()}catch{lockView('off');$('#off-msg').textContent='This device does not allow local storage for the vault.';return}
+  if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{});
+  acct=await idb.get('kv','account')||null;settings=Object.assign(settings,await idb.get('kv','settings')||{});
+  // laptop par khula ho aur account kisi aur server ka ho to naya shuru karo
+  if(acct&&SAME&&acct.server!==location.origin){await idb.wipe();acct=null}
+  if(acct)return showUnlock();
+  showConnect();
+})();
+
+let createMode=false;
+async function showConnect(){lockView('connect');show($('#c-server-wrap'),!SAME);$('#cs').required=!SAME;
+  if(SAME){try{const s=await api('state',{base:''});setCreate(!s.setup)}catch{lockView('off');$('#off-msg').textContent='The vault server is not responding.';return}}
+  else setCreate(false);
+  ($('#cs').required&&!$('#cs').value?$('#cs'):$('#cu')).focus()}
+function setCreate(on){createMode=on;show($('#c-new'),on);$('#cp2').required=on;
+  $('#c-title').textContent=on?'Create your vault':'Connect your vault';
+  $('#c-sub').textContent=on?'Choose a username and password. This is your only login, and everything is encrypted with it.':(SAME?'Log in to your vault.':'Enter your laptop\'s vault address and your login.');
+  $('#b-connect').textContent=on?'Create vault':'Connect';$('#cp').autocomplete=on?'new-password':'current-password'}
+
+$('#f-connect').addEventListener('submit',async e=>{e.preventDefault();const er=$('#e-connect'),btn=$('#b-connect');
+  const server=SAME?location.origin:normServer($('#cs').value),u=$('#cu').value.trim().toLowerCase(),pw=$('#cp').value;
+  const b=SAME?'':server;er.textContent='Connecting…';btn.disabled=true;
+  try{
+    const st=await api('state',{base:b});
+    if(!st.setup&&!createMode){setCreate(true);er.textContent='No vault on this laptop yet. Choose a password to create one.';return}
+    if(createMode){
+      if(pw.length<8)return er.textContent='Use at least 8 characters.';
+      if(pw!==$('#cp2').value)return er.textContent='The two passwords do not match.';
+      const raw=rnd(32),c=await makeCreds(pw,raw);raw.fill(0);
+      await api('setup',{base:b,method:'POST',json:{username:u,...c}})}
+    const pre=await api('prelogin',{base:b,method:'POST',json:{username:u}});const d=await derive(pw,pre.salt,pre.iter);
+    const r=await api('login',{base:b,method:'POST',json:{username:u,authHash:d.auth}});
+    const raw=await unseal(d.kek,fromB64(r.wk));
+    vk=await crypto.subtle.importKey('raw',raw,'AES-GCM',false,['encrypt','decrypt']);raw.fill(0);
+    acct={server,username:u,salt:pre.salt,iter:pre.iter,wk:r.wk};await saveAcct();
+    auth={auth:d.auth,kek:d.kek,pw};token=r.token;online=true;
+    $('#cp').value=$('#cp2').value='';er.textContent='';spinDial(360);setTimeout(openApp,600)}
+  catch(x){spinDial(-40);er.textContent=x.offline?'Could not reach the vault at that address. Is the laptop on, and Tailscale on here too?':x.status===401?'Wrong username or password.':x.status===429?`Too many tries. Wait ${x.body.wait} seconds.`:(x.message||'Something went wrong.')}
+  finally{btn.disabled=false}});
+
+function showUnlock(){lockView('unlock');$('#uu').value=acct.username;
+  $('#u-sub').textContent='Enter your password, '+acct.username+'.';setTimeout(()=>$('#up').focus(),50)}
+$('#f-unlock').addEventListener('submit',async e=>{e.preventDefault();const er=$('#e-unlock'),pw=$('#up').value;
+  if(Date.now()<waitUntil)return er.textContent=`Too many tries. Wait ${Math.ceil((waitUntil-Date.now())/1000)} seconds.`;
+  er.textContent='Checking…';$('#b-unlock').disabled=true;
+  try{let raw=null,d=await derive(pw,acct.salt,acct.iter);
+    try{raw=await unseal(d.kek,fromB64(acct.wk))}catch{}
+    if(!raw){ // shayad password doosre device se badla gaya: laptop se poochho
+      try{const pre=await api('prelogin',{method:'POST',json:{username:acct.username}});
+        const d2=await derive(pw,pre.salt,pre.iter);const r=await api('login',{method:'POST',json:{username:acct.username,authHash:d2.auth}});
+        raw=await unseal(d2.kek,fromB64(r.wk));d=d2;acct.salt=pre.salt;acct.iter=pre.iter;acct.wk=r.wk;await saveAcct();token=r.token;online=true}catch{}}
+    if(!raw){localFails++;spinDial(-40);er.textContent='Wrong password.';if(localFails>=5){waitUntil=Date.now()+30000;localFails=0;er.textContent='Wrong password. Wait 30 seconds.'}return}
+    vk=await crypto.subtle.importKey('raw',raw,'AES-GCM',false,['encrypt','decrypt']);raw.fill(0);
+    auth={auth:d.auth,kek:d.kek,pw};localFails=0;$('#up').value='';er.textContent='';spinDial(360);setTimeout(openApp,500)}
+  finally{$('#b-unlock').disabled=false}});
+$('#b-forget').onclick=async()=>{if(!await confirmBox('Remove from this device?','Everything saved on this device is erased. Your files on the laptop stay safe, and you can connect again later.','Remove'))return;
+  await idb.wipe();acct=null;location.reload()};
+
+// ================= app =================
+let syncTimer=null;
+async function openApp(){show($('#s-lock'),false);show($('#s-app'));resetIdle();paintSync('');await loadLocal();
+  syncNow();clearInterval(syncTimer);syncTimer=setInterval(()=>{if(vk)syncNow()},60000)}
+async function lock(){if(!vk)return;vk=null;auth=null;const t=token;token=null;clearInterval(syncTimer);
+  if(t)fetch(base()+'/api/logout',{method:'POST',headers:{Authorization:'Bearer '+t}}).catch(()=>{});
+  closeLb();show($('#ov'),false);$('#panel').replaceChildren();for(const u of urls.values())URL.revokeObjectURL(u);urls.clear();metaCache.clear();items=[];$('#grid').replaceChildren();
+  clearTimeout(idleT);spinDial(-180);showUnlock()}
+$('#b-lock').onclick=lock;
+function resetIdle(){clearTimeout(idleT);if(!vk||settings.al<=0)return;idleT=setTimeout(()=>{if(busyUp){resetIdle();return}lock()},settings.al*60000)}
+for(const ev of['pointerdown','keydown','scroll'])addEventListener(ev,()=>{if(vk)resetIdle()},{passive:true});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)hiddenAt=Date.now();
+  else if(vk&&settings.al>0&&hiddenAt&&Date.now()-hiddenAt>settings.al*60000&&!busyUp)lock();else if(vk){resetIdle();syncNow()}});
+addEventListener('online',()=>{if(vk)syncNow()});
+
+let deletedPending=0;
+async function loadLocal(){const all=await idb.all('items');const list=[];deletedPending=0;
+  for(const x of all){if(x.st==='del'){deletedPending++;continue}
+    let m=metaCache.get(x.id);if(!m||m.src!==x.m){try{m={src:x.m,...await openObj(x.m)}}catch{m={src:x.m,name:'(cannot decrypt)'}}metaCache.set(x.id,m)}
+    list.push({...x,m})}
+  if(!vk)return;list.sort((a,b)=>b.c-a.c);items=list;render();paintSync()}
+
+const matches=it=>(filter==='all'||it.k===filter)&&(!q||((it.m.name||'')+' '+(it.m.text||'')).toLowerCase().includes(q));
+function render(){view=items.filter(matches);const g=$('#grid');g.replaceChildren();
+  const c={photo:0,video:0,note:0,file:0};let bytes=0;for(const i of items){c[i.k]++;bytes+=i.m.size||0}
+  $('#stats').textContent=`${c.photo} photos · ${c.video} videos · ${c.note} notes · ${c.file} files · ${fmtSize(bytes)}`;
+  show($('#empty'),!items.length);if(items.length&&!view.length)g.append(el('p',{class:'muted',text:'Nothing matches.'}));
+  view.forEach((it,i)=>{let t;
+    if(it.k==='note')t=el('button',{class:'tile note'},el('b',{text:it.m.name||'Untitled note'}),el('span',{text:it.m.text||''}));
+    else if(it.k==='file'){const ext=((it.m.name||'').split('.').pop()||'file').slice(0,5).toUpperCase();t=el('button',{class:'tile file'},el('div',{class:'ico',text:ext}),el('b',{text:it.m.name||'File'}),el('span',{class:'muted small',text:fmtSize(it.m.size||0)}))}
+    else{t=el('button',{class:'tile'});const ph=el('div',{class:'ph',text:it.k==='video'?'Video':'Photo'});t.append(ph);
+      if(it.k==='video')t.append(el('span',{class:'badge',text:'▶ '+(it.m.dur?fmtDur(it.m.dur):'Video')}));
+      t.append(el('span',{class:'cap',text:it.m.name||''}));
+      thumbUrl(it).then(u=>{if(u){const im=el('img',{alt:it.m.name||''});im.src=u;ph.replaceWith(im)}})}
+    if(it.k!=='note'&&it.n&&settings.keep&&(it.have||0)<it.n)t.append(el('span',{class:'badge',style:'left:auto;right:8px',text:'☁'}));
+    t.setAttribute('aria-label',it.m.name||it.k);t.onclick=()=>it.k==='note'?editNote(it):openLb(i);g.append(t)})}
+async function thumbUrl(it){if(!it.th)return null;const k=it.id+':t:'+it.th.length;if(urls.has(k))return urls.get(k);
+  try{const b=await unseal(vk,fromB64(it.th));const u=URL.createObjectURL(new Blob([b],{type:'image/jpeg'}));urls.set(k,u);return u}catch{return null}}
+async function getChunk(it,i){const local=await idb.get('chunks',ck(it.id,i));if(local)return local;
+  const data=await api(`items/${it.id}/chunk/${i}`,{raw:true,timeout:180000});
+  if(settings.keep){await idb.put('chunks',data,ck(it.id,i));await bumpHave(it.id)}
+  return data}
+async function bumpHave(id){const r=await idb.get('items',id);if(!r)return;let h=0;for(let i=0;i<r.n;i++)if(await idb.tx('chunks','readonly',s=>s.count(ck(id,i))))h++;await idb.upd(id,x=>{if(x.st==='del')return false;x.have=h})}
+async function fullUrl(it,onp){const k=it.id+':f';if(urls.has(k))return urls.get(k);const parts=[];
+  for(let i=0;i<it.n;i++){parts.push(await unseal(vk,await getChunk(it,i)));onp&&onp((i+1)/it.n)}
+  const u=URL.createObjectURL(new Blob(parts,{type:it.m.type||'application/octet-stream'}));urls.set(k,u);return u}
+document.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{filter=c.dataset.f;document.querySelectorAll('.chip').forEach(x=>x.setAttribute('aria-pressed',x===c));render()});
+$('#q').addEventListener('input',e=>{q=e.target.value.trim().toLowerCase();render()});
+
+// ================= sync with laptop =================
+let syncing=false,syncAgain=false;
+async function syncNow(){if(!vk)return;if(syncing){syncAgain=true;return}syncing=true;paintSync('Syncing…');
+  try{do{syncAgain=false;await syncOnce()}while(syncAgain&&vk)}
+  catch(e){if(!e.offline)console.warn('sync',e)}
+  finally{syncing=false;if(vk){await loadLocal();paintSync(online?'':undefined)}}}
+async function syncOnce(){
+  if(!token&&!(await serverLogin()))return;
+  const r=await api('items');setOnline(true,'Syncing…');
+  const srv=new Map(r.items.map(x=>[x.id,x]));
+  const local=new Map((await idb.all('items')).map(x=>[x.id,x])),gone=new Set();
+  // 1) jo laptop par delete hua, yahan bhi hatao
+  for(const id in r.deleted){const l=local.get(id);if(l){await idb.del('items',id);await idb.dropChunks(id);local.delete(id)}gone.add(id)}
+  // 2) is device ki tabdeeliyan laptop par bhejo
+  for(const l of local.values()){if(!vk)return;const s=srv.get(l.id);
+    if(l.st==='del'){await api('items/'+l.id,{method:'DELETE'});await idb.del('items',l.id);await idb.dropChunks(l.id);local.delete(l.id);gone.add(l.id);continue}
+    if(l.st==='new'||(!s&&l.st==='ok'&&l.n&&(l.have||0)>=l.n)){await uploadItem(l);continue}
+    if(!s&&l.st==='ok'){await idb.del('items',l.id);await idb.dropChunks(l.id);local.delete(l.id);gone.add(l.id);continue} // laptop par nahi raha
+    if(l.st==='dirty'){if(!s){await uploadItem(l);continue}
+      if((s.u||0)<=l.u){await api('items/'+l.id,{method:'PATCH',json:{m:l.m,u:l.u,touch:l.c===l.u?1:0}});await idb.upd(l.id,r=>{if(r.st!=='dirty'||r.u!==l.u)return false;r.st='ok'})}
+      else await idb.upd(l.id,r=>{if(r.st!=='dirty'||r.u!==l.u)return false;Object.assign(r,{m:s.m,th:s.th,u:s.u,c:s.c,st:'ok'})});continue}
+    if(s&&(s.u||0)>(l.u||0))await idb.upd(l.id,r=>{if(r.st!=='ok')return false;Object.assign(r,{m:s.m,th:s.th,u:s.u,c:s.c})})}
+  // 3) laptop ki nayi cheezein yahan lao
+  for(const s of srv.values())if(!local.has(s.id)&&!gone.has(s.id)){const rec={id:s.id,k:s.k,c:s.c,u:s.u,m:s.m,th:s.th,n:s.n,sz:s.sz,st:'ok',have:0};if(!(await idb.get('items',s.id)))await idb.put('items',rec);local.set(s.id,rec)}
+  await loadLocal();
+  // 4) phone par copy rakhni hai to baqi files download karo
+  if(settings.keep){for(const l0 of local.values()){if(!vk)return;const l=await idb.get('items',l0.id);if(!l||l.st!=='ok'||!l.n||(l.have||0)>=l.n)continue;
+      const m=metaCache.get(l.id);paintSync('Saving to device: '+((m&&m.name)||'file'));
+      for(let i=0;i<l.n;i++){if(!vk)return;if(await idb.tx('chunks','readonly',s=>s.count(ck(l.id,i))))continue;
+        const data=await api(`items/${l.id}/chunk/${i}`,{raw:true,timeout:180000});await idb.put('chunks',data,ck(l.id,i))}
+      await bumpHave(l.id)}}
+  else{for(const l of local.values())if(l.st==='ok'&&l.have){if(await idb.upd(l.id,r=>{if(r.st!=='ok')return false;r.have=0}))await idb.dropChunks(l.id)}}
+  paintSync('')}
+async function uploadItem(l){const m=metaCache.get(l.id);paintSync('Sending to laptop: '+((m&&m.name)||'item'));
+  const r=await api('items',{method:'POST',json:{id:l.id,k:l.k,c:l.c,u:l.u,m:l.m,th:l.th,n:l.n}}).catch(e=>{if(e.status===410)return{gone:1};throw e});
+  if(r.gone){await idb.del('items',l.id);await idb.dropChunks(l.id);return}
+  if(!r.exists){for(let i=0;i<l.n;i++){if(!vk)throw new Error('locked');const data=await idb.get('chunks',ck(l.id,i));if(!data)throw new Error('missing local chunk');
+      await api(`items/${l.id}/chunk/${i}`,{method:'PUT',body:data,headers:{'Content-Type':'application/octet-stream'},timeout:180000})}
+    if(l.n)await api(`items/${l.id}/done`,{method:'POST'})}
+  await idb.upd(l.id,r=>{if(r.st==='del')return false;r.st=r.u===l.u?'ok':'dirty'})}
+
+// ================= add files (pehle device par, phir laptop) =================
+$('#b-add').onclick=$('#b-add2').onclick=()=>$('#fi').click();
+$('#fi').addEventListener('change',e=>{addFiles([...e.target.files]);e.target.value=''});
+const app=$('#s-app');
+app.addEventListener('dragover',e=>{e.preventDefault();app.classList.add('drop')});
+app.addEventListener('dragleave',e=>{if(!app.contains(e.relatedTarget))app.classList.remove('drop')});
+app.addEventListener('drop',e=>{e.preventDefault();app.classList.remove('drop');addFiles([...e.dataTransfer.files])});
+async function makeThumb(f){const cv=document.createElement('canvas');const draw=(src,w,h)=>{const s=Math.min(1,360/Math.max(w,h));cv.width=Math.max(1,Math.round(w*s));cv.height=Math.max(1,Math.round(h*s));cv.getContext('2d').drawImage(src,0,0,cv.width,cv.height)};
+  let dur=0;
+  if(f.type.startsWith('image/')){const bm=await createImageBitmap(f);draw(bm,bm.width,bm.height);bm.close&&bm.close()}
+  else{const u=URL.createObjectURL(f);try{await new Promise((res,rej)=>{const v=document.createElement('video');v.muted=true;v.playsInline=true;v.preload='metadata';v.src=u;
+    const t=setTimeout(()=>rej(new Error('timeout')),10000);
+    v.onloadedmetadata=()=>{dur=v.duration||0;v.currentTime=Math.min(1,(v.duration||2)/3)};
+    v.onseeked=()=>{clearTimeout(t);draw(v,v.videoWidth,v.videoHeight);res()};v.onerror=()=>{clearTimeout(t);rej(new Error('video'))}})}finally{URL.revokeObjectURL(u)}}
+  const b=await new Promise(r=>cv.toBlob(r,'image/jpeg',.72));return{th:b?toB64(await seal(vk,new Uint8Array(await b.arrayBuffer()))):null,dur}}
+let chain=Promise.resolve();
+function addFiles(files){for(const f of files){const qi=el('div',{class:'qi'},el('div',{text:'Waiting: '+f.name}),el('div',{class:'pb'},el('i')));$('#queue').append(qi);busyUp++;
+  chain=chain.then(()=>addOne(f,qi)).catch(()=>{}).finally(()=>{busyUp--;resetIdle()})}
+  chain=chain.then(()=>syncNow())}
+async function addOne(f,qi){const bar=qi.querySelector('i'),lbl=qi.firstChild;const done=(t,bad)=>{lbl.textContent=t;if(bad)lbl.style.color='var(--bad)';setTimeout(()=>qi.remove(),bad?7000:1500)};
+  if(!vk)return done('Vault locked — not saved: '+f.name,1);
+  lbl.textContent='Locking: '+f.name;
+  const k=f.type.startsWith('image/')?'photo':f.type.startsWith('video/')?'video':'file';
+  let th=null,dur=0;if(k!=='file'){try{({th,dur}=await makeThumb(f))}catch{}}
+  const id=newId(),n=Math.max(1,Math.ceil(f.size/CHUNK));
+  try{for(let i=0;i<n;i++){if(!vk)throw new Error('locked');
+      const part=new Uint8Array(await f.slice(i*CHUNK,(i+1)*CHUNK).arrayBuffer());await idb.put('chunks',await seal(vk,part),ck(id,i));bar.style.width=((i+1)/n*100)+'%'}
+    const now=Date.now();
+    await idb.put('items',{id,k,c:now,u:now,m:await sealObj({name:f.name,type:f.type||'application/octet-stream',size:f.size,dur}),th,n,sz:0,st:'new',have:n});
+    done('Saved: '+f.name);await loadLocal()}
+  catch(x){await idb.dropChunks(id).catch(()=>{});done('Could not save '+f.name+(x.name==='QuotaExceededError'?' (device is full)':''),1)}}
+
+// ================= viewer =================
+async function openLb(i){cur=i;const it=view[i];if(!it)return;show($('#lb'));$('#lb-name').textContent=it.m.name||'';
+  $('#lb-meta').textContent=[fmtSize(it.m.size||0),it.m.dur?fmtDur(it.m.dur):'',fmtDate(it.c),it.st==='ok'?'':'not on laptop yet'].filter(Boolean).join(' · ');
+  const st=$('#stage'),pct=el('div',{class:'pct',text:'Unlocking…'});st.replaceChildren(el('div',{},el('div',{class:'spin'}),pct));
+  const nav=()=>{if(view.length>1)st.append(el('button',{class:'nav prev','aria-label':'Previous',text:'‹',onclick:()=>step(-1)}),el('button',{class:'nav next','aria-label':'Next',text:'›',onclick:()=>step(1)}))};
+  try{const u=await fullUrl(it,p=>pct.textContent='Unlocking… '+Math.round(p*100)+'%');if(cur!==i||!vk)return;
+    let m;if(it.k==='photo'){m=el('img',{alt:it.m.name||''});m.src=u}else if(it.k==='video'){m=el('video',{controls:'',playsinline:'',autoplay:''});m.src=u}
+    else m=el('div',{style:'text-align:center'},el('div',{class:'ico',text:'FILE'}),el('p',{text:'Use Download to open this file.'}));
+    st.replaceChildren(m);nav()}
+  catch(e){if(cur===i){st.replaceChildren(el('p',{text:e.offline?'This item is only on the laptop, and the laptop is not reachable right now.':'This item could not be opened.'}));nav()}}}
+function step(d){if(view.length)openLb((cur+d+view.length)%view.length)}
+function closeLb(){show($('#lb'),false);const v=$('#stage video');if(v)v.pause();$('#stage').replaceChildren();cur=-1}
+$('#lb-x').onclick=closeLb;
+addEventListener('keydown',e=>{if($('#lb').classList.contains('hide')||!$('#ov').classList.contains('hide'))return;if(e.key==='Escape')closeLb();if(e.key==='ArrowRight')step(1);if(e.key==='ArrowLeft')step(-1)});
+$('#lb-dl').onclick=async()=>{const it=view[cur];if(!it)return;
+  try{if(NATIVE){toast('Saving to Downloads…');const name=it.m.name||'file',type=it.m.type||'application/octet-stream';
+      const h=window.AndroidVault.saveStart(name,type);if(!h)throw new Error('start');
+      for(let i=0;i<it.n;i++){const part=await unseal(vk,await getChunk(it,i));for(let o=0;o<part.length;o+=1048576)if(!window.AndroidVault.saveChunk(h,toB64(part.subarray(o,o+1048576))))throw new Error('write')}
+      if(!window.AndroidVault.saveEnd(h))throw new Error('end');toast('Saved to Downloads: '+name)}
+    else{const u=await fullUrl(it);const a=el('a',{href:u,download:it.m.name||'file'});document.body.append(a);a.click();a.remove()}}
+  catch{toast('Download failed.')}};
+async function changeMeta(it,patch){const{src,...rest}=it.m;const m=await sealObj({...rest,...patch}),now=Date.now();
+  await idb.upd(it.id,r=>{if(r.st==='del')return false;r.m=m;r.u=now;if(patch.text!==undefined)r.c=now;if(r.st==='ok')r.st='dirty'});await loadLocal();syncNow()}
+$('#lb-ren').onclick=async()=>{const it=view[cur];if(!it)return;const n=await promptBox('Rename',it.m.name||'');if(!n||!vk)return;await changeMeta(it,{name:n});$('#lb-name').textContent=n};
+$('#lb-del').onclick=async()=>{const it=view[cur];if(!it)return;if(!await confirmBox('Delete this item?',`"${it.m.name||'Item'}" will be deleted from this device and from the laptop.`))return;await removeItem(it);closeLb()};
+async function removeItem(it){let wasNew=false;await idb.upd(it.id,r=>{if(r.st==='new'){wasNew=true;return false}r.st='del';r.have=0});
+  if(wasNew)await idb.del('items',it.id);await idb.dropChunks(it.id);
+  for(const k of[...urls.keys()])if(k.startsWith(it.id+':')){URL.revokeObjectURL(urls.get(k));urls.delete(k)}
+  toast('Deleted');await loadLocal();syncNow()}
+
+// ================= notes =================
+$('#b-note').onclick=$('#b-note2').onclick=()=>editNote(null);
+function editNote(it){modal((p,close)=>{const t=el('input',{type:'text',placeholder:'Title','aria-label':'Title'});t.value=it?it.m.name||'':'';
+  const x=el('textarea',{placeholder:'Write anything private…','aria-label':'Note'});x.value=it?it.m.text||'':'';
+  const save=async()=>{if(!vk)return close();const text=x.value;if(text.length>150000)return toast('Note is too long.');
+    const name=t.value.trim()||text.trim().split('\n')[0].slice(0,60)||'Untitled note';const size=enc.encode(text).length;
+    try{if(it)await changeMeta(it,{name,text,size});
+      else{const now=Date.now();await idb.put('items',{id:newId(),k:'note',c:now,u:now,m:await sealObj({name,text,size}),th:null,n:0,sz:0,st:'new',have:0});await loadLocal();syncNow()}
+      close()}catch{toast('Could not save the note.')}};
+  const row=el('div',{class:'row'});
+  if(it)row.append(el('button',{class:'danger',text:'Delete',style:'margin-right:auto',onclick:async()=>{close();if(await confirmBox('Delete this note?','It will be deleted everywhere.'))removeItem(it)}}));
+  row.append(el('button',{'data-x':'',text:'Cancel',onclick:()=>close()}),el('button',{class:'pri',text:'Save note',onclick:save}));
+  p.append(el('h2',{text:it?'Edit note':'New note'}),el('p',{class:'muted small',text:'Encrypted before it is saved.'}),t,el('div',{style:'height:10px'}),x,row)})}
+
+// ================= settings =================
+$('#b-set').onclick=()=>modal((p,close)=>{
+  const sel=el('select',{id:'al'});for(const[v,l]of[[1,'1 minute'],[5,'5 minutes'],[15,'15 minutes'],[60,'1 hour'],[0,'Never']]){const o=el('option',{value:v,text:l});if(settings.al==v)o.selected=true;sel.append(o)}
+  const keep=el('input',{type:'checkbox',id:'keep'});keep.checked=!!settings.keep;
+  const srv=el('input',{type:'url',id:'srv',autocapitalize:'none'});srv.value=acct.server||'';
+  const p0=el('input',{type:'password',id:'cp0',autocomplete:'current-password'}),p1=el('input',{type:'password',id:'cp1',autocomplete:'new-password'}),p2=el('input',{type:'password',id:'cp2b',autocomplete:'new-password'});
+  const msg=el('div',{class:'small',role:'status',style:'min-height:22px;margin-top:8px'}),use=el('p',{class:'muted small',text:'Checking storage…'});
+  p.append(el('h2',{text:'Settings'}),use,
+    el('div',{class:'row',style:'justify-content:flex-start;margin-top:6px'},el('button',{text:'Sync now',onclick:()=>{syncNow();toast('Syncing…')}})),
+    el('label',{class:'check'},keep,el('span',{text:'Keep a copy of everything on this device (works without the laptop)'})));
+  if(!SAME)p.append(el('label',{for:'srv',text:'Laptop vault address'}),srv);
+  p.append(el('label',{for:'al',text:'Lock automatically after'}),sel,
+    el('h3',{text:'Change password',style:'margin:22px 0 0;font-size:18px'}),el('p',{class:'muted small',text:'Needs the laptop to be reachable.'}),
+    el('label',{for:'cp0',text:'Current password'}),p0,el('label',{for:'cp1',text:'New password'}),p1,el('label',{for:'cp2b',text:'New password again'}),p2,msg,
+    el('div',{class:'row'},el('button',{class:'danger',style:'margin-right:auto',text:'Remove from this device',onclick:async()=>{close();if(await confirmBox('Remove from this device?','Everything saved on this device is erased. Files already on the laptop stay safe. Items not yet sent to the laptop will be lost.','Remove')){await idb.wipe();location.reload()}}}),
+      el('button',{'data-x':'',text:'Close',onclick:()=>close()}),el('button',{class:'pri',text:'Save',onclick:async()=>{
+      settings.al=+sel.value;const was=settings.keep;settings.keep=keep.checked;await saveSettings();resetIdle();
+      if(!SAME){const s=normServer(srv.value);if(s&&s!==acct.server){acct.server=s;token=null;await saveAcct()}}
+      if(p0.value||p1.value){if(p1.value.length<8)return msg.textContent='New password needs 8+ characters.';if(p1.value!==p2.value)return msg.textContent='New passwords do not match.';
+        msg.textContent='Changing…';
+        try{const d=await derive(p0.value,acct.salt,acct.iter);let raw;try{raw=await unseal(d.kek,fromB64(acct.wk))}catch{return msg.textContent='Current password is wrong.'}
+          if(!token&&!(await serverLogin()))return msg.textContent='The laptop is not reachable right now.';
+          const c=await makeCreds(p1.value,raw);raw.fill(0);await api('password',{method:'POST',json:{oldAuthHash:d.auth,...c}});
+          acct.salt=c.salt;acct.iter=c.iter;acct.wk=c.wk;await saveAcct();const nd=await derive(p1.value,c.salt,c.iter);auth={auth:nd.auth,kek:nd.kek,pw:p1.value};toast('Password changed')}
+        catch(e){return msg.textContent=e.offline?'The laptop is not reachable right now.':'Could not change the password.'}}
+      close();if(was!==settings.keep){render();syncNow()}}})));
+  (async()=>{let t='';try{const e=await navigator.storage.estimate();t=`This device: ${fmtSize(e.usage||0)} used`}catch{}
+    try{if(online||await serverLogin()){const r=await api('usage');t+=(t?' · ':'')+`Laptop: ${fmtSize(r.used)} used`+(r.free!=null?`, ${fmtSize(r.free)} free`:'')}}catch{}
+    use.textContent=t})()});
+}
+</script>
+</body>
+</html>
