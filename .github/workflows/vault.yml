@@ -10,13 +10,18 @@ on:
       - 'vault/**'
       - '.github/workflows/vault.yml'
       - '!vault/**.md'
+  # Pull requests only build and keep a test APK; nothing is released
+  pull_request:
+    paths:
+      - 'vault/**'
+      - '.github/workflows/vault.yml'
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: vault-release
+  group: vault-${{ github.event_name == 'pull_request' && github.ref || 'release' }}
   cancel-in-progress: false
 
 jobs:
@@ -86,7 +91,7 @@ jobs:
           (cd /tmp/pkg && zip -qr "$GITHUB_WORKSPACE/MyVault-Server-v${VERSION_NAME}.zip" MyVault-Server)
 
       - name: Publish release
-        if: steps.keys.outputs.signed == 'true'
+        if: steps.keys.outputs.signed == 'true' && github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -109,7 +114,7 @@ jobs:
           gh release edit vault-latest --title "My Vault (latest: ${VERSION_NAME})"
 
       - name: Keep the test build
-        if: steps.keys.outputs.signed != 'true'
+        if: steps.keys.outputs.signed != 'true' || github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: MyVault-test-build
