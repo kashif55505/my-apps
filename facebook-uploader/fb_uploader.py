@@ -140,9 +140,12 @@ def do_update(log=print):
             # helper bat: app band hone ka intezaar, swap, relaunch
             bat = os.path.join(os.path.dirname(cur), "_update.bat")
             with open(bat, "w", encoding="utf-8") as f:
-                f.write("@echo off\r\n")
+                f.write("@echo off\r\nset n=0\r\n:loop\r\n")
                 f.write("timeout /t 2 /nobreak >nul\r\n")
-                f.write(f'move /Y "{new}" "{cur}" >nul\r\n')
+                # purani exe band hone tak baar baar koshish (onefile exe der se band hoti hai)
+                f.write(f'move /Y "{new}" "{cur}" >nul 2>&1\r\n')
+                f.write(f'if not exist "{new}" goto done\r\n')
+                f.write("set /a n+=1\r\nif %n% LSS 300 goto loop\r\n:done\r\n")
                 f.write(f'start "" "{cur}"\r\n')
                 f.write('del "%~f0"\r\n')
             subprocess.Popen(["cmd", "/c", bat], **_NOWIN)
@@ -4517,6 +4520,7 @@ downloads and replaces itself, then restarts. No manual download needed.
                     self.destroy()
                 except Exception:
                     pass
+                os._exit(0)   # tray/server threads samet poori tarah band (taake exe swap ho sake)
             elif res == "restart_py":
                 messagebox.showinfo(T("Update", "Update"),
                                     T("Updated! Please close and reopen the app.",
