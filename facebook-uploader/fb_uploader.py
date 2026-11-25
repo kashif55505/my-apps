@@ -36,6 +36,7 @@ import threading
 import queue
 import subprocess
 import importlib
+import shutil
 
 # Windows par background subprocess ki khali cmd window na khule
 _NOWIN = {}
@@ -757,6 +758,8 @@ def _fbb_prepare_profile(user_dir):
     except Exception:
         prefs = {}
     prefs["credentials_enable_service"] = False
+    prefs.setdefault("ntp", {})["shortcust_visible"] = False      # new tab par shortcuts na dikhen (Chrome ka asli spelling)
+    prefs["ntp"]["shortcuts_visible"] = False
     prefs["credentials_enable_autosignin"] = False
     prefs.setdefault("profile", {})["password_manager_enabled"] = False
     prefs["profile"]["password_manager_leak_detection"] = False
@@ -1136,6 +1139,17 @@ def export_accounts(path, accs, mode="full"):
                 row = account_row(a, 0)
                 d = dict(zip([k for k, _, _ in ACCOUNT_FIELDS], row))
                 w.writerow([d.get(k, a.get(k, "")) for k in keys])
+    # har ID ki asli DP bhi saath wale folder mein (Bob Prime jaisa)
+    try:
+        dps = [a for a in accs if a.get("dp") and os.path.isfile(a["dp"])]
+        if dps:
+            dd = os.path.splitext(path)[0] + "_DP"
+            os.makedirs(dd, exist_ok=True)
+            for a in dps:
+                nm = (a.get("uid") or a.get("email") or a.get("id", "id")).replace("@", "_")
+                shutil.copy2(a["dp"], os.path.join(dd, f"{nm}.jpg"))
+    except Exception:
+        pass
     return len(accs)
 
 
@@ -2797,6 +2811,7 @@ class Automation:
         last_state = ""
         relogins = 0
         last_fill = time.time()
+        uid_since = 0
         while time.time() - t0 < max_secs:
             if getattr(self, "stop_event", None) and self.stop_event.is_set():
                 return False
@@ -2804,6 +2819,19 @@ class Automation:
                 url = (self.page.url or "").lower()
                 if "checkpoint" not in url and "two_step" not in url and "two_factor" not in url:
                     return True
+                # login ho chuka (cookie mil gayi) magar koi beech ka page atka — zyada intezaar nahi
+                uid_since = uid_since or time.time()
+                if time.time() - uid_since > 15:
+                    self.log(T(f"[{acc['name']}] Logged in — skipping the leftover screen.",
+                               f"[{acc['name']}] Login ho gaya — bacha hua page chhor kar aage."))
+                    try:
+                        self.page.goto(FB_HOME, wait_until="domcontentloaded"); time.sleep(3)
+                    except Exception:
+                        pass
+                    u2 = (self.page.url or "").lower()
+                    if self._fb_uid() and "checkpoint" not in u2 and "two_step" not in u2 and "two_factor" not in u2:
+                        return True
+                    uid_since = time.time()
             txt = self._ptext()
             url = (self.page.url or "").lower()
 
@@ -3260,6 +3288,14 @@ class Automation:
             ch, cb = self._find_iframe_el("challenge")
             if not ch:
                 continue
+            if rounds in (3, 6):
+                # 2 dafa ghalat — naya (aasaan) challenge lo
+                self.log(T("Captcha: taking a new challenge...", "Captcha: naya challenge le rahe hain..."))
+                self._click_xy(cb["x"] + 28, cb["y"] + cb["height"] - 28)
+                time.sleep(3)
+                ch, cb = self._find_iframe_el("challenge")
+                if not ch:
+                    continue
             try:
                 png = ch.screenshot(scale="css")
             except Exception:
@@ -3533,13 +3569,65 @@ class Automation:
     def act_check_notification(self, count):
         self.log("  • Notifications check...")
         try:
-            self.page.goto("https://www.facebook.com/notifications", wait_until="domcontentloaded")
+            self._nav("notifications")
             time.sleep(random.uniform(3, 6))
             self._scroll_for(random.uniform(4, 8))
         except Exception as e:
             self.log(T(f"    notification skipped: {e}", f"    notification skip: {e}"))
 
     # ---------- insaan jaisi harkat ----------
+    # ---------- insaan ki tarah navigation (seedha link nahi, Facebook ke andar click) ----------
+    _NAV = {
+        "home": (["a[aria-label='Facebook']", "a[aria-label='Home']", "[role='navigation'] a[href='/']"], "https://www.facebook.com/"),
+        "notifications": (["[role='navigation'] a[href*='/notifications']", "div[aria-label='Notifications'][role='button']",
+                           "a[aria-label='Notifications']"], "https://www.facebook.com/notifications"),
+        "messages": (["[role='navigation'] a[href*='/messages']", "div[aria-label='Messenger'][role='button']",
+                      "a[aria-label='Messenger']"], "https://www.facebook.com/messages/t/"),
+        "friends": (["a[href$='/friends/']", "a[href$='/friends']", "a[aria-label='Friends']"], "https://www.facebook.com/friends"),
+        "watch": (["a[href*='/watch']", "a[aria-label='Video']", "a[aria-label='Watch']"], "https://www.facebook.com/watch/"),
+        "reels": (["a[href*='/reel/']", "a[href$='/reels/']", "a[aria-label='Reels']"], "https://www.facebook.com/reel/"),
+        "me": (["a[aria-label='Your profile']", "[role='navigation'] a[href*='/me/']",
+                "[role='navigation'] a[href*='profile.php']"], "https://www.facebook.com/me"),
+    }
+
+    def _nav(self, key):
+        """Facebook ke andar button/link par click kar ke jao; na mile to aakhir mein seedha khol do."""
+        try:
+            if "facebook.com" not in (self.page.url or ""):
+                self.page.goto("https://www.facebook.com/", wait_until="domcontentloaded")
+                time.sleep(random.uniform(3, 5))
+            if key in ("friend_requests", "friend_suggestions"):
+                self._nav("friends")
+                sub = "/friends/requests" if key == "friend_requests" else "/friends/suggestions"
+                for el in self.page.query_selector_all(f"a[href*='{sub}']"):
+                    if el.is_visible():
+                        self._human_click(None, el); time.sleep(random.uniform(3, 5)); return
+                self.page.goto("https://www.facebook.com" + sub, wait_until="domcontentloaded"); time.sleep(3)
+                return
+            sels, fallback = self._NAV[key]
+            for sel in sels:
+                for el in self.page.query_selector_all(sel):
+                    try:
+                        if not el.is_visible():
+                            continue
+                        self._human_click(None, el)
+                        time.sleep(random.uniform(2.5, 4))
+                        if key in ("notifications", "messages") and "role" in sel:
+                            # dropdown khula — 'See all' se poora page
+                            for a in self.page.query_selector_all(
+                                    "a[href*='/notifications']" if key == "notifications" else "a[href*='/messages/t']"):
+                                if a.is_visible():
+                                    self._human_click(None, a); time.sleep(random.uniform(2.5, 4)); break
+                        return
+                    except Exception:
+                        continue
+            self.page.goto(fallback, wait_until="domcontentloaded"); time.sleep(random.uniform(3, 5))
+        except Exception:
+            try:
+                self.page.goto(self._NAV.get(key, (None, "https://www.facebook.com/"))[1], wait_until="domcontentloaded")
+            except Exception:
+                pass
+
     def _unsafe_text(self, txt):
         t = (txt or "").lower()
         return any(w in t for w in UNSAFE_WORDS)
@@ -3641,7 +3729,7 @@ class Automation:
         secs = int(minutes * 60)
         self.log(T(f"  • Scrolling feed ~{minutes:.1f} min (1-2 likes)...", f"  • Feed scroll ~{minutes:.1f} min (1-2 like)..."))
         try:
-            self.page.goto(FB_HOME, wait_until="domcontentloaded")
+            self._nav("home")
             time.sleep(random.uniform(2, 4))
             self._human_feed(secs, like_max=random.randint(1, 2))
         except Exception as e:
@@ -3651,7 +3739,7 @@ class Automation:
         secs = int(minutes * 60)
         self.log(T(f"  • Watching stories ~{minutes:.1f} min...", f"  • Stories dekh rahe ~{minutes:.1f} min..."))
         try:
-            self.page.goto(FB_HOME, wait_until="domcontentloaded")
+            self._nav("home")
             time.sleep(random.uniform(3, 5))
             st = None
             for el in self.page.query_selector_all("a[href*='/stories/']"):
@@ -3714,7 +3802,7 @@ class Automation:
         secs = int(minutes * 60)
         self.log(T(f"  • Watching videos ~{minutes:.1f} min...", f"  • Videos dekh rahe ~{minutes:.1f} min..."))
         try:
-            self.page.goto("https://www.facebook.com/watch/", wait_until="domcontentloaded")
+            self._nav("watch")
             time.sleep(random.uniform(3, 5))
             self._media_watch(secs, reels=False)
         except Exception as e:
@@ -3724,7 +3812,7 @@ class Automation:
         secs = int(minutes * 60)
         self.log(T(f"  • Watching reels ~{minutes:.1f} min...", f"  • Reels dekh rahe ~{minutes:.1f} min..."))
         try:
-            self.page.goto("https://www.facebook.com/reel/", wait_until="domcontentloaded")
+            self._nav("reels")
             time.sleep(random.uniform(3, 5))
             self._media_watch(secs, reels=True)
         except Exception as e:
@@ -3733,7 +3821,7 @@ class Automation:
     def act_reactions(self, count):
         self.log(T(f"  • Liking {count} posts (clean posts only)...", f"  • {count} post like (sirf saaf posts)..."))
         try:
-            self.page.goto(FB_HOME, wait_until="domcontentloaded")
+            self._nav("home")
             time.sleep(random.uniform(3, 5))
             done = 0
             for _ in range(count * 8):
@@ -3751,7 +3839,7 @@ class Automation:
     def act_comments(self, count, text):
         self.log(T(f"  • Commenting on {count} posts...", f"  • {count} post par comment..."))
         try:
-            self.page.goto(FB_HOME, wait_until="domcontentloaded")
+            self._nav("home")
             time.sleep(random.uniform(3, 5))
             done = 0
             for _ in range(count * 8):
@@ -3781,7 +3869,7 @@ class Automation:
         self.log(T(f"  • Checking messages...", f"  • Messages check..."))
         text = text or "{Hi|Hey|Hello} {how are you?|kaise ho?|🙂}"
         try:
-            self.page.goto("https://www.facebook.com/messages/t/", wait_until="domcontentloaded")
+            self._nav("messages")
             time.sleep(random.uniform(4, 6))
             unread = self.page.evaluate("""() => {
                 const out = [];
@@ -3847,7 +3935,7 @@ class Automation:
     def act_confirm_friends(self, count):
         self.log(T(f"  • Confirming friend requests ({count})...", f"  • Friend requests confirm ({count})..."))
         try:
-            self.page.goto("https://www.facebook.com/friends/requests/", wait_until="domcontentloaded")
+            self._nav("friend_requests")
             time.sleep(4)
             done = 0
             btns = self.page.query_selector_all("div[aria-label='Confirm'][role='button']")
@@ -3899,7 +3987,7 @@ class Automation:
         done = 0
         seen = set()
         try:
-            self.page.goto("https://www.facebook.com/friends/suggestions", wait_until="domcontentloaded")
+            self._nav("friend_suggestions")
             time.sleep(random.uniform(4, 6))
             for _ in range(count * 6):
                 if done >= count:
@@ -4105,7 +4193,7 @@ class Automation:
     def _switch_to_profile(self):
         """Agar page ke taur par switched hain to wapas apni profile par."""
         try:
-            self.page.goto(FB_HOME, wait_until="domcontentloaded"); time.sleep(3)
+            self._nav("home"); time.sleep(3)
             if self._click_button(["Your profile", "Account controls and settings"]):
                 time.sleep(2)
                 self._click_button(["Switch to " + self.current_acc.get("name", ""), "See all profiles"])
@@ -4121,7 +4209,7 @@ class Automation:
                    "  • Profile info dhoondh rahe hain (naam, DOB, gender, location)..."))
         upd = {}
         try:
-            self.page.goto("https://www.facebook.com/me", wait_until="domcontentloaded"); time.sleep(random.uniform(4, 6))
+            self._nav("me"); time.sleep(random.uniform(4, 6))
             nm = ""
             for sel in ("[role='main'] h1", "h1"):
                 try:
@@ -4143,6 +4231,26 @@ class Automation:
                     pass
             if nm:
                 upd["name"] = nm
+            # asli DP (profile picture) save — export ke waqt folder mein copy hogi
+            try:
+                dp_url = self.page.evaluate("""() => {
+                    const m = document.querySelector('[role="main"]') || document;
+                    const im = m.querySelector('svg[aria-label] image, a[href*="photo"] svg image');
+                    if (im) return im.getAttribute('xlink:href') || im.getAttribute('href');
+                    const og = document.querySelector('meta[property="og:image"]');
+                    return og ? og.content : '';
+                }""") or ""
+                if dp_url.startswith("http"):
+                    body = self.page.request.get(dp_url, timeout=20000).body()
+                    if body and len(body) > 2000:
+                        dd = os.path.join(DATA_DIR, "dp"); os.makedirs(dd, exist_ok=True)
+                        key = (self._fb_uid() or acc.get("id", "x")).replace("@", "_")
+                        fp = os.path.join(dd, key + ".jpg")
+                        with open(fp, "wb") as f:
+                            f.write(body)
+                        upd["dp"] = fp
+            except Exception:
+                pass
             uid = self._fb_uid()
             if uid:
                 upd["uid"] = uid
@@ -4237,7 +4345,7 @@ class Automation:
         """ID par Professional mode ON."""
         self.log(T("  • Turning on Professional mode...", "  • Professional mode ON kar rahe hain..."))
         try:
-            self.page.goto("https://www.facebook.com/me", wait_until="domcontentloaded"); time.sleep(random.uniform(5, 7))
+            self._nav("me"); time.sleep(random.uniform(5, 7))
             txt = self._page_text().lower()
             if "professional dashboard" in txt or "turn off professional mode" in txt:
                 self.log(T("    already ON ✔", "    pehle se ON ✔"))
@@ -4312,7 +4420,7 @@ class Automation:
         self.log(T((f"  • Check-in post: {place or '(no IP city)'}" if do_checkin else "  • Photo post") + (f" + photo {os.path.basename(photo)}" if photo else ""),
                    (f"  • Check-in post: {place or '(IP city nahi)'}" if do_checkin else "  • Photo post") + (f" + photo {os.path.basename(photo)}" if photo else "")))
         try:
-            self.page.goto(FB_HOME, wait_until="domcontentloaded"); time.sleep(random.uniform(4, 7))
+            self._nav("home"); time.sleep(random.uniform(4, 7))
             if not self._click_button(["What's on your mind", "Create a post", "Create post"]):
                 el = self.page.query_selector("div[role='button']:has-text(\"What's on your mind\")")
                 if el:
@@ -4899,10 +5007,21 @@ class Automation:
             file_input.set_input_files(video_path)
             self.log(T(f"[{acc['name']}] Video selected, processing...", f"[{acc['name']}] Video choose ho gayi, process ho rahi hai..."))
             self._wait_after_upload(8)
-            self._fill_caption(caption)
-            self._click_through_publish()
-            self.log(T(f"[{acc['name']}] {kind} post command sent. Check the browser to confirm.", f"[{acc['name']}] {kind} post command bhej di. Browser mein confirm dekhein."))
-            return True
+            filled = self._fill_caption(caption)
+            if not self._click_through_publish(caption if not filled else ""):
+                self.last_error = T("Publish button not found", "Publish button nahi mila")
+                self.last_post_state = "failed"
+                return False
+            st = self._verify_posted()
+            self.last_post_state = st
+            if st == "ok":
+                self.log(T(f"[{acc['name']}] {kind} PUBLISHED ✔", f"[{acc['name']}] {kind} PUBLISH ho gayi ✔"))
+                return True
+            self.last_error = {"scheduled": T("Facebook SCHEDULED it instead of publishing", "Facebook ne publish ki jagah SCHEDULE kar di"),
+                               "failed": T("Facebook showed an error", "Facebook ne error diya"),
+                               }.get(st, T("Not confirmed — publish message not seen", "Confirm nahi hui — publish ka message nahi aaya"))
+            self.log(f"[{acc['name']}] {kind}: {self.last_error}")
+            return False
         except Exception as e:
             self.log(f"[{acc['name']}] Error: {e}")
             return False
@@ -4921,34 +5040,105 @@ class Automation:
 
     def _fill_caption(self, caption):
         if not caption:
-            return
+            return True
         selectors = [
             "div[aria-label*='description' i][contenteditable='true']",
             "div[aria-label*='caption' i][contenteditable='true']",
+            "div[aria-label*='Describe your reel' i][contenteditable='true']",
             "div[contenteditable='true'][role='textbox']",
-            "div[contenteditable='true']",
         ]
         for sel in selectors:
-            el = self.page.query_selector(sel)
-            if el:
+            for el in self.page.query_selector_all(sel):
                 try:
+                    if not el.is_visible():
+                        continue
+                    if "comment" in (el.get_attribute("aria-label") or "").lower():
+                        continue
                     el.click()
                     time.sleep(0.5)
                     el.type(caption, delay=15)
                     self.log(T("Caption/hashtags written.", "Caption/hashtags likh diye."))
-                    return
+                    return True
                 except Exception:
                     continue
-        self.log(T("Caption box not found — you can paste it manually in the browser.", "Caption box nahi mila — browser mein khud paste kar sakte hain."))
+        return False
 
-    def _click_through_publish(self):
-        for _ in range(4):
-            if self._click_button(["Publish", "Share", "Post"]):
-                return
-            if not self._click_button(["Next"]):
+    def _click_exact(self, labels):
+        """Sirf usi naam ka button (poora naam) — 'Schedule' wale kabhi nahi."""
+        for label in labels:
+            lab = label.replace("'", "\\'")
+            for sel in (f"[role='button'][aria-label='{lab}']", f"button:text-is('{lab}')",
+                        f"[role='button']:text-is('{lab}')", f"div[role='button'] span:text-is('{lab}')"):
+                try:
+                    els = self.page.query_selector_all(sel)
+                except Exception:
+                    continue
+                for el in reversed(els):
+                    try:
+                        if not el.is_visible():
+                            continue
+                        if "schedul" in (el.inner_text() or "").lower():
+                            continue
+                        if (el.get_attribute("aria-disabled") or "") == "true":
+                            continue
+                        el.click(timeout=4000)
+                        self.log(T(f"Clicked '{label}'.", f"'{label}' dabaya."))
+                        time.sleep(2)
+                        return True
+                    except Exception:
+                        continue
+        return False
+
+    def _ensure_publish_now(self):
+        """Agar 'Scheduling options' mein schedule chuna ho to 'Publish now / Share now' chuno."""
+        for lbl in ("Publish now", "Share now", "Post now", "Now"):
+            try:
+                for el in self.page.query_selector_all(f"[role='radio']:has-text('{lbl}'), label:has-text('{lbl}'), "
+                                                       f"[role='menuitemradio']:has-text('{lbl}')"):
+                    if el.is_visible() and (el.get_attribute("aria-checked") or "") != "true":
+                        el.click(timeout=3000); time.sleep(1)
+                        self.log(T(f"Selected '{lbl}' (not schedule).", f"'{lbl}' chuna (schedule nahi)."))
+                        return
+            except Exception:
+                continue
+
+    def _click_through_publish(self, caption=""):
+        for _ in range(7):
+            if caption and self._fill_caption(caption):
+                caption = ""
+            self._ensure_publish_now()
+            if self._click_exact(["Publish", "Share", "Post", "Share now", "Publish now", "Post now"]):
+                return True
+            if not self._click_exact(["Next"]):
                 break
-            time.sleep(2)
-        self._click_button(["Publish", "Share", "Post"])
+            time.sleep(2.5)
+        self._ensure_publish_now()
+        return self._click_exact(["Publish", "Share", "Post", "Share now", "Publish now"])
+
+    def _verify_posted(self, timeout=150):
+        """Publish ke baad pakka karo: 'ok' / 'scheduled' / 'failed' / 'unconfirmed'."""
+        ok_words = ("is now published", "has been published", "your reel is published", "reel published",
+                    "is being processed", "we'll let you know when", "we'll notify you when", "your reel is live",
+                    "your video is live", "post is live", "shared to your", "has been shared", "reel shared",
+                    "your post is now published")
+        sched_words = ("scheduled for", "your post is scheduled", "reel is scheduled", "will be published on",
+                       "has been scheduled")
+        err_words = ("something went wrong", "couldn't upload", "couldn't post", "upload failed",
+                     "couldn't publish", "can't upload", "try again later", "video couldn't be")
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            try:
+                txt = self._page_text().lower()
+            except Exception:
+                txt = ""
+            if any(w in txt for w in sched_words):
+                return "scheduled"
+            if any(w in txt for w in err_words):
+                return "failed"
+            if any(w in txt for w in ok_words):
+                return "ok"
+            time.sleep(3)
+        return "unconfirmed"
 
     def _click_button(self, labels):
         """Asli BUTTON dabao (heading/paragraph mein wahi lafz hon to unhe nahi).
@@ -6400,6 +6590,54 @@ def clean_caption(text, max_tags=4):
     return (body + ("\n\n" if body and tags else "") + " ".join(tags[:max_tags])).strip()
 
 
+def clean_page_label(name):
+    """Purani version ke ghalat page naam saaf: 'Profile picture for X' -> 'X'. Ad/Promote -> '' (hata do)."""
+    import re as _re
+    t = (name or "").split("\n")[0].strip()
+    t = _re.sub(r"^(profile picture (for|of)\s+)", "", t, flags=_re.I)
+    t = _re.sub(r"('s)?\s*profile picture$", "", t, flags=_re.I).strip(" ·•✓✔")
+    if t.lower() in ("promote", "create ad", "boost", "boost post", "ad center", "see all", "posts", "create new page"):
+        return ""
+    return t
+
+
+def migrate_page_names():
+    """Ek dafa: accounts ke pages, content sources aur page_folders ke naam saaf karo."""
+    try:
+        accs = load_accounts(); ch = False
+        for a in accs:
+            pg = a.get("pages") or []
+            out = []
+            for p in pg:
+                u = (p.get("url") or "").lower()
+                if any(b in u for b in ("ad_center", "adsmanager", "/promote", "boost")):
+                    ch = True; continue
+                nm = clean_page_label(p.get("name", ""))
+                if not nm:
+                    ch = True; continue
+                if nm != p.get("name"):
+                    p["name"] = nm; ch = True
+                out.append(p)
+            if ch:
+                a["pages"] = out
+        if ch:
+            save_accounts(accs)
+        st = load_settings()
+        srcs = st.get("content_sources", []); ch2 = False
+        for x in srcs:
+            nm = clean_page_label(x.get("page", ""))
+            if nm and nm != x.get("page"):
+                x["page"] = nm; ch2 = True
+        pf = st.get("page_folders", {}); npf = {}
+        for k, v in pf.items():
+            nk = clean_page_label(k) or k
+            npf[nk] = v; ch2 = ch2 or nk != k
+        if ch2:
+            save_settings({"content_sources": srcs, "page_folders": npf})
+    except Exception:
+        pass
+
+
 def sources_list():
     return load_settings().get("content_sources", [])
 
@@ -6408,9 +6646,28 @@ def sources_save(lst):
     save_settings({"content_sources": lst})
 
 
+def _safe_fname(text, n=70):
+    import re as _re
+    t = _re.sub(r"#[^\s#]+", "", text or "")
+    t = _re.sub(r'[\\/:*?"<>|\r\n\t]+', " ", t)
+    t = _re.sub(r"\s+", " ", t).strip(" .")
+    return t[:n].strip() or "video"
+
+
+def _tt_id(url):
+    import re as _re
+    m = _re.search(r"/video/(\d+)", url or "") or _re.search(r"(\d{15,})", url or "")
+    return m.group(1) if m else ""
+
+
+_FETCH_LOCK = threading.Lock()
+
+
 def fetch_tiktok(src, log=print, stop=None):
-    """TikTok creator (ya playlist/video link) se nayi videos HD mein page ke folder mein.
-    Har video ke sath .txt caption (max 4 hashtags). Return kitni nayi aayin."""
+    """TikTok creator se videos HD (bina watermark) page ke folder mein.
+    Tarteeb: pehle sab se NAYI (upar wali) jo abhi nahi lagi, phir purani wahin se jahan ruke the.
+    Koi video do dafa nahi. Har video ka naam = TikTok caption, saath .txt (caption + max 4 hashtags).
+    'last_link' diya ho to us video tak (aur us se upar ki) sab 'ho chuki' maan li jati hain."""
     try:
         import yt_dlp
     except Exception:
@@ -6418,52 +6675,112 @@ def fetch_tiktok(src, log=print, stop=None):
         subprocess.run([sys.executable, "-m", "pip", "install", "-U", "yt-dlp"], check=False, **_NOWIN)
         import yt_dlp
     page = src.get("page", "")
-    folder = src.get("folder") or page_media_folder(page)
+    folder = page_media_folder(page) or src.get("folder") or ""
     if not folder:
         root = media_root() or os.path.join(DATA_DIR, "media")
-        folder = os.path.join(root, page or "downloads")
+        folder = os.path.join(root, _safe_fname(page, 60) or "downloads")
     os.makedirs(folder, exist_ok=True)
-    archive = os.path.join(folder, ".downloaded.txt")
     max_n = int(src.get("max", 10) or 10)
-    got = []
+    max_tags = int(src.get("max_tags", 4) or 4)
+    done = list(src.get("done") or [])
+    # purani version ki archive file bhi parh lo (phir hata do)
+    old_arc = os.path.join(folder, ".downloaded.txt")
+    if os.path.isfile(old_arc):
+        try:
+            for ln in open(old_arc, encoding="utf-8", errors="ignore"):
+                p_ = ln.split()
+                if len(p_) >= 2 and p_[1] not in done:
+                    done.append(p_[1])
+            os.remove(old_arc)
+        except Exception:
+            pass
+    done_set = set(done)
+    url = src.get("url", "")
+    log(T(f"[Source] {page}: fetch started — reading creator's video list...",
+          f"[Source] {page}: fetch shuru — creator ki video list parh rahe hain..."))
+    t0 = time.time()
 
-    def hook(d):
-        if d.get("status") == "finished":
-            got.append(d.get("filename"))
+    def list_ids(limit):
+        o = {"extract_flat": "in_playlist", "playlistend": limit, "quiet": True, "no_warnings": True,
+             "ignoreerrors": True, "skip_download": True}
+        with yt_dlp.YoutubeDL(o) as y:
+            inf = y.extract_info(url, download=False) or {}
+        ents = inf.get("entries") or ([inf] if inf.get("id") else [])
+        out = []
+        for e in ents:
+            if e and e.get("id"):
+                out.append((str(e["id"]), e.get("url") or e.get("webpage_url") or
+                            f"https://www.tiktok.com/@{(inf.get('uploader_id') or inf.get('uploader') or 'x')}/video/{e['id']}"))
+        return out
 
-    opts = {
-        "outtmpl": os.path.join(folder, "%(upload_date)s_%(id)s.%(ext)s"),
-        "format": "best[vcodec^=h264][ext=mp4]/best[ext=mp4]/best",
-        "download_archive": archive, "playlistend": max_n * 3, "max_downloads": max_n,
-        "quiet": True, "no_warnings": True, "noprogress": True, "ignoreerrors": True,
-        "writeinfojson": False, "progress_hooks": [hook], "retries": 3,
-    }
-    log(T(f"[Source] {page}: fetching TikTok {src.get('url')} ...", f"[Source] {page}: TikTok se la rahe hain {src.get('url')} ..."))
-    n_new = 0
+    # kitni list chahiye: done + max se thora zyada (purani jagah tak pohanchne ke liye)
+    limit = max(30, len(done_set) + max_n * 2)
+    cut_id = _tt_id(src.get("last_link", "")) if src.get("last_link") and not src.get("cut_applied") else ""
+    ids = []
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(src["url"], download=True)
-            entries = (info or {}).get("entries") or ([info] if info else [])
-            for e in entries:
-                if not e or (stop and stop()):
-                    continue
-                fn = None
-                try:
-                    fn = ydl.prepare_filename(e)
-                except Exception:
-                    pass
-                if fn and os.path.isfile(fn):
-                    side = os.path.splitext(fn)[0] + ".txt"
-                    if not os.path.isfile(side):
-                        cap = clean_caption(e.get("description") or e.get("title") or "", int(src.get("max_tags", 4) or 4))
-                        with open(side, "w", encoding="utf-8") as f:
-                            f.write(cap)
-                        n_new += 1
+        ids = list_ids(limit)
+        if cut_id and cut_id not in [i for i, _ in ids]:
+            for lim in (200, 600, 1500):              # cutoff wali video tak list barhao
+                ids = list_ids(lim)
+                if cut_id in [i for i, _ in ids] or len(ids) < lim:
+                    break
     except Exception as e:
-        if "MaxDownloadsReached" not in e.__class__.__name__:
-            log(f"[Source] {page}: {e}")
+        log(f"[Source] {page}: list error: {e}")
+    if not ids:
+        log(T(f"[Source] {page}: no videos found (check the link).", f"[Source] {page}: koi video nahi mili (link check karein)."))
+        src["last"] = time.strftime("%Y-%m-%d %H:%M"); src["last_new"] = 0
+        return 0
+    if cut_id:
+        lst_ids = [i for i, _ in ids]
+        if cut_id in lst_ids:
+            for i in lst_ids[:lst_ids.index(cut_id) + 1]:     # upar se cutoff tak = ho chuki
+                if i not in done_set:
+                    done.append(i); done_set.add(i)
+            src["cut_applied"] = True
+            log(T(f"[Source] {page}: marked {lst_ids.index(cut_id) + 1} already-uploaded video(s) as done.",
+                  f"[Source] {page}: {lst_ids.index(cut_id) + 1} pehle se lagi videos 'done' kar di."))
+        else:
+            log(T(f"[Source] {page}: 'last uploaded' video not found in the list — starting from newest.",
+                  f"[Source] {page}: 'last uploaded' video list mein nahi mili — sab se nayi se shuru."))
+    todo = [(i, u) for i, u in ids if i not in done_set][:max_n]
+    log(T(f"[Source] {page}: list ready ({len(ids)} videos, {int(time.time() - t0)}s). Downloading {len(todo)} new...",
+          f"[Source] {page}: list tayyar ({len(ids)} videos, {int(time.time() - t0)}s). {len(todo)} nayi download..."))
+    seq = int(src.get("seq", 0) or 0)
+    n_new = 0
+    dl_opts = {"format": "best[vcodec^=h264][ext=mp4]/best[ext=mp4]/best", "quiet": True, "no_warnings": True, "noprogress": True,
+               "retries": 3, "ignoreerrors": False}
+    for k, (vid, vurl) in enumerate(todo, 1):
+        if stop and stop():
+            break
+        try:
+            seq += 1
+            tmpl = os.path.join(folder, f"_dl_{vid}.%(ext)s")
+            with yt_dlp.YoutubeDL(dict(dl_opts, outtmpl=tmpl)) as y:
+                info = y.extract_info(vurl, download=True) or {}
+                fn = (info.get("requested_downloads") or [{}])[0].get("filepath") or y.prepare_filename(info)
+            if not fn or not os.path.isfile(fn):
+                cand = [os.path.join(folder, f) for f in os.listdir(folder) if f.startswith(f"_dl_{vid}.")]
+                fn = cand[0] if cand else ""
+            if not fn:
+                raise RuntimeError("file not saved")
+            cap = clean_caption(info.get("description") or info.get("title") or "", max_tags)
+            base = f"{seq:04d} {_safe_fname(cap)}"
+            final = os.path.join(folder, base + os.path.splitext(fn)[1])
+            if os.path.exists(final):
+                final = os.path.join(folder, f"{base} {vid}{os.path.splitext(fn)[1]}")
+            os.replace(fn, final)
+            with open(os.path.splitext(final)[0] + ".txt", "w", encoding="utf-8") as f:
+                f.write(cap)
+            done.append(vid); done_set.add(vid); n_new += 1
+            src["seq"] = seq
+            log(T(f"[Source] {page}: {k}/{len(todo)} downloaded — {os.path.basename(final)}",
+                  f"[Source] {page}: {k}/{len(todo)} download — {os.path.basename(final)}"))
+        except Exception as e:
+            log(f"[Source] {page}: {k}/{len(todo)} skip ({vid}): {str(e)[:120]}")
+    src["done"] = done[-5000:]
     src["last"] = time.strftime("%Y-%m-%d %H:%M"); src["last_new"] = n_new; src["folder"] = folder
-    log(T(f"[Source] {page}: {n_new} new video(s) → {folder}", f"[Source] {page}: {n_new} nayi video(s) → {folder}"))
+    log(T(f"[Source] {page}: finished — {n_new} new video(s) → {folder}",
+          f"[Source] {page}: mukammal — {n_new} nayi video(s) → {folder}"))
     return n_new
 
 
@@ -6477,8 +6794,10 @@ def sources_auto_loop(log, stop_event):
                 lst = sources_list(); changed = False
                 for src in lst:
                     last = src.get("last_ts", 0)
-                    if time.time() - last >= hrs * 3600:
-                        fetch_tiktok(src, log); src["last_ts"] = time.time(); changed = True
+                    if time.time() - last >= hrs * 3600 and not _FETCH_LOCK.locked():
+                        with _FETCH_LOCK:
+                            fetch_tiktok(src, log)
+                        src["last_ts"] = time.time(); changed = True
                 if changed:
                     sources_save(lst)
         except Exception as e:
@@ -6501,7 +6820,7 @@ class SourcesMixin:
                    command=self._src_match).pack(side="left", padx=4)
         self.src_map = ttk.Treeview(top, columns=("page", "folder", "files"), show="headings", height=5)
         for c, t_, w in (("page", "Page", 260), ("folder", "Folder (auto)", 520), ("files", "Videos", 90)):
-            self.src_map.heading(c, text=t_); self.src_map.column(c, width=w, anchor="w")
+            self.src_map.heading(c, text=t_, anchor="w"); self.src_map.column(c, width=w, anchor="w")
         self.src_map.pack(fill="x", padx=6, pady=4)
         mb = ttk.Frame(top); mb.pack(fill="x", padx=6, pady=(0, 4))
         ttk.Button(mb, text=T("Set folder for selected page", "Selected page ka folder chuno"),
@@ -6524,10 +6843,22 @@ class SourcesMixin:
         self.src_max = tk.StringVar(value="10")
         tk.Spinbox(a, from_=1, to=100, textvariable=self.src_max, width=4).pack(side="left", padx=3)
         ttk.Button(a, text=T("Add", "Add"), command=self._src_add).pack(side="left", padx=4)
-        self.src_tree = ttk.Treeview(tk_, columns=("page", "url", "max", "last", "new"), show="headings", height=5)
-        for c, t_, w in (("page", "Page", 220), ("url", "TikTok link", 420), ("max", "Max", 60),
-                         ("last", "Last fetch", 150), ("new", "New", 60)):
-            self.src_tree.heading(c, text=t_); self.src_tree.column(c, width=w, anchor="w")
+        a2 = ttk.Frame(tk_); a2.pack(fill="x", padx=6, pady=(0, 4))
+        ttk.Label(a2, text=T("Last uploaded video link (optional):", "Aakhri lagi hui video ka link (optional):")).pack(side="left")
+        self.src_last = tk.StringVar()
+        ttk.Entry(a2, textvariable=self.src_last, width=50).pack(side="left", padx=4, fill="x", expand=True)
+        ttk.Button(a2, text=T("Set for selected row", "Selected row par lagao"), command=self._src_set_last).pack(side="left", padx=4)
+        ttk.Label(tk_, text=T("Order: newest videos first → then older ones from where it stopped. A video is never used twice. "
+                              "If you were uploading this creator manually, paste the link of the last video you uploaded — "
+                              "that video and the ones above it are treated as done.",
+                              "Tarteeb: pehle sab se nayi videos → phir purani wahin se jahan ruke the. Koi video do dafa nahi. "
+                              "Agar ye creator pehle manually lagate the to aakhri lagi hui video ka link do — "
+                              "woh aur us se upar wali 'done' maan li jayengi."),
+                  style="Muted.TLabel", wraplength=1100, justify="left").pack(anchor="w", padx=8)
+        self.src_tree = ttk.Treeview(tk_, columns=("page", "url", "max", "done", "last", "new"), show="headings", height=5)
+        for c, t_, w in (("page", "Page", 220), ("url", "TikTok link", 380), ("max", "Max", 60),
+                         ("done", "Done", 70), ("last", "Last fetch", 150), ("new", "New", 60)):
+            self.src_tree.heading(c, text=t_, anchor="w"); self.src_tree.column(c, width=w, anchor="w")
         self.src_tree.pack(fill="both", expand=True, padx=6, pady=4)
         b = ttk.Frame(tk_); b.pack(fill="x", padx=6, pady=4)
         ttk.Button(b, text=T("Fetch selected now", "Selected abhi lao"), command=lambda: self._src_fetch(True)).pack(side="left")
@@ -6538,6 +6869,13 @@ class SourcesMixin:
         tk.Spinbox(b, from_=0, to=72, textvariable=self.src_every, width=4,
                    command=lambda: save_settings({"sources_every_h": self._iv(self.src_every.get())})).pack(side="left", padx=3)
         ttk.Label(b, text=T("hours (0 = off)", "ghante (0 = band)")).pack(side="left")
+
+        def _save_every(*_):
+            try:
+                save_settings({"sources_every_h": float(self.src_every.get() or 0)})
+            except Exception:
+                pass
+        self.src_every.trace_add("write", _save_every)
         ttk.Label(tk_, text=T("Use only your own creator accounts / content you have rights to.",
                               "Sirf apne creator accounts / apna content use karein."), style="Muted.TLabel").pack(anchor="w", padx=8)
         self._src_stop = threading.Event()
@@ -6567,6 +6905,7 @@ class SourcesMixin:
         self.src_tree.delete(*self.src_tree.get_children())
         for i, s_ in enumerate(sources_list()):
             self.src_tree.insert("", "end", iid=str(i), values=(s_.get("page"), s_.get("url"), s_.get("max", 10),
+                                                                len(s_.get("done") or []),
                                                                 s_.get("last", "-"), s_.get("last_new", "-")))
 
     def _src_pick_root(self):
@@ -6604,8 +6943,26 @@ class SourcesMixin:
             messagebox.showwarning("Source", T("Choose a page and paste a TikTok link.", "Page chuno aur TikTok link daalo."))
             return
         lst = sources_list()
-        lst.append({"page": page, "url": url, "max": self._iv(self.src_max.get()) or 10, "max_tags": 4})
-        sources_save(lst); self.src_url.set(""); self._src_refresh()
+        lst.append({"page": page, "url": url, "max": self._iv(self.src_max.get()) or 10, "max_tags": 4,
+                    "last_link": self.src_last.get().strip()})
+        sources_save(lst); self.src_url.set(""); self.src_last.set(""); self._src_refresh()
+        self.log_q.put(T(f"[Source] Added: {page} ← {url}. Select the row and press 'Fetch selected now'.",
+                         f"[Source] Add ho gaya: {page} ← {url}. Row select kar ke 'Fetch selected now' dabayein."))
+
+    def _src_set_last(self):
+        sel = self.src_tree.selection()
+        link = self.src_last.get().strip()
+        if not sel or not link:
+            messagebox.showwarning("Source", T("Select a row and paste the last uploaded video link.",
+                                               "Row select karein aur aakhri lagi hui video ka link daalein."))
+            return
+        lst = sources_list()
+        for i in sel:
+            lst[int(i)]["last_link"] = link
+            lst[int(i)]["cut_applied"] = False
+        sources_save(lst); self.src_last.set(""); self._src_refresh()
+        self.log_q.put(T("[Source] Last uploaded link saved — applied on next fetch.",
+                         "[Source] Aakhri link save — agli fetch par lagega."))
 
     def _src_remove(self):
         sel = {int(i) for i in self.src_tree.selection()}
@@ -6613,12 +6970,32 @@ class SourcesMixin:
 
     def _src_fetch(self, only_sel):
         lst = sources_list()
-        idx = [int(i) for i in self.src_tree.selection()] if only_sel else list(range(len(lst)))
+        if not lst:
+            messagebox.showinfo("Source", T("Add a TikTok link first.", "Pehle TikTok link add karein."))
+            return
+        if only_sel:
+            idx = [int(i) for i in self.src_tree.selection()]
+            if not idx and len(lst) == 1:
+                idx = [0]
+            if not idx:
+                messagebox.showinfo("Source", T("Click a row in the TikTok table first, then 'Fetch selected now'.",
+                                                "Pehle TikTok table mein row par click karein, phir 'Fetch selected now'."))
+                return
+        else:
+            idx = list(range(len(lst)))
+        if _FETCH_LOCK.locked():
+            self.log_q.put(T("[Source] A fetch is already running — please wait.", "[Source] Fetch pehle se chal raha hai — intezaar karein."))
+            return
+        self.log_q.put(T(f"[Source] Fetch started for {len(idx)} source(s)...", f"[Source] {len(idx)} source ka fetch shuru..."))
 
         def work():
-            for i in idx:
-                fetch_tiktok(lst[i], lambda m: self.log_q.put(m)); lst[i]["last_ts"] = time.time()
-                sources_save(lst); self.after(0, self._src_refresh)
+            with _FETCH_LOCK:
+                for i in idx:
+                    cur = sources_list()
+                    if i >= len(cur):
+                        continue
+                    fetch_tiktok(cur[i], lambda m: self.log_q.put(m)); cur[i]["last_ts"] = time.time()
+                    sources_save(cur); self.after(0, self._src_refresh)
         threading.Thread(target=work, daemon=True).start()
 
 
@@ -6646,6 +7023,7 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         apply_dark_theme(self, style)
 
         self.log_q = queue.Queue()
+        migrate_page_names()
         self.resume_events = {}
         self.workers = []
         self.stop_flag = threading.Event()
@@ -6863,7 +7241,7 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
 
         self.a_name = self._row(form, T("Name:", "Name:"))
         self.a_email = self._row(form, T("Email / Phone:", "Email / Phone:"))
-        self.a_pass = self._row(form, T("Password:", "Password:"), show="*")
+        self.a_pass = self._row(form, T("Password:", "Password:"), show=None)
         self.a_page = self._row(form, T("Page name (optional):", "Page ka naam (optional):"))
         self.a_ix = self._row(form, T("ixBrowser Profile (name/ID):", "ixBrowser Profile (naam/ID):"))
         self.a_proxy = self._row(form, T("Proxy (optional):", "Proxy (optional):"))
@@ -7389,8 +7767,9 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
             bot = Automation(log=log, headless=False, browser_cfg=load_settings())
             try:
                 bot.start(acc)
-                try:
-                    bot.page.goto(FB_HOME, wait_until="domcontentloaded")
+                try:        # khaali tab — aap jo chahein kholein (Facebook bhi)
+                    if "facebook.com" in (bot.page.url or "") or "ip" in (bot.page.url or ""):
+                        bot.page.goto("about:blank")
                 except Exception:
                     pass
                 log(T(f"[{acc['name']}] Browser open — log in yourself. I'll save it when you're in. Close the window when done.",
@@ -7568,7 +7947,7 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         tk.Label(side, text="POST", bg=PAL["panel"], fg="white", font=("Segoe UI", 15, "bold")).pack(anchor="w", padx=14, pady=(14, 10))
         self.post_kind = tk.StringVar(value="reel")
         self._side_btns = {}
-        for key, label in [("reel", "📹  Post Reels"), ("video", "🎬  Post Video"), ("photo", "🖼  Post Photo")]:
+        for key, label in [("reel", "Post Reels"), ("video", "Post Video"), ("photo", "Post Photo")]:
             b = tk.Button(side, text=label, anchor="w", relief="flat", bd=0,
                           font=("Segoe UI", 13, "bold"), padx=14, pady=10,
                           command=lambda k=key: self._select_post_kind(k))
@@ -7585,21 +7964,29 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
                         variable=self.p_scroll_between).pack(anchor="w", padx=8, pady=2)
         rrow = ttk.Frame(cfg); rrow.pack(fill="x", padx=8, pady=3)
         self.p_rotation_on = tk.IntVar(value=0)
-        ttk.Checkbutton(rrow, text=T("Enable rotation", "Rotation karni hai"), variable=self.p_rotation_on).pack(side="left")
-        ttk.Label(rrow, text=T("Times:", "Times:")).pack(side="left", padx=(8, 2))
+        ttk.Checkbutton(rrow, text=T("Repeat rounds (rotation)", "Dobara round (rotation)"), variable=self.p_rotation_on).pack(side="left")
+        ttk.Label(rrow, text=T("Rounds:", "Round:")).pack(side="left", padx=(8, 2))
         self.p_rotation = tk.StringVar(value="2")
         tk.Spinbox(rrow, from_=1, to=50, textvariable=self.p_rotation, width=5).pack(side="left")
-        self.p_rot_gap = DurationSingle(cfg, T("Before rotation stops:", "Before rotation stops:"), 1, "min")
+        ttk.Label(cfg, text=T("Rotation = after posting all files, start again from the 1st (same files again) this many rounds.\n"
+                              "Normally keep it OFF. ON is only useful with 'Allow duplicate'.",
+                              "Rotation = saari files post karne ke baad phir pehli se dobara (wahi files) itne round.\n"
+                              "Aam taur par BAND rakhein. Sirf 'Allow duplicate' ke sath kaam ka hai."),
+                  style="Muted.TLabel", justify="left").pack(anchor="w", padx=8)
+        self.p_rot_gap = DurationSingle(cfg, T("Gap between rounds:", "Rounds ke beech gap:"), 1, "min")
         self.p_allow_dup = tk.IntVar(value=0)
         ttk.Checkbutton(cfg, text=T("Allow duplicate video posting", "Allow duplicate video posting"), variable=self.p_allow_dup).pack(anchor="w", padx=8, pady=2)
         self.p_delete_after = tk.IntVar(value=0)
         ttk.Checkbutton(cfg, text=T("Delete posted video from device (only successfully posted)", "Delete posted video from device (sirf jo successfully post ho)"),
                         variable=self.p_delete_after).pack(anchor="w", padx=8, pady=2)
-        ttk.Label(cfg, text=T("Videos are taken from each ID's own FOLDER (set in Accounts).\n"
-                               "Daily limit is per page (in Accounts). Caption = page hashtags.",
-                               "Videos har ID ke apne FOLDER se uthengi (Accounts mein set).\n"
-                               "Daily limit har page ki apni (Accounts mein). Caption = page hashtags."),
-                  foreground="#8ea0bd").pack(anchor="w", padx=8, pady=6)
+        ttk.Label(cfg, text=T("Videos come from each PAGE's folder (Content Sources) first; the ID's own folder is only a fallback.\n"
+                               "Caption = the video's own .txt (TikTok caption, max 4 hashtags); if none, page hashtags.\n"
+                               "Failed / not-confirmed posts are NOT deleted — they go to a 'Failed' folder inside the page folder.",
+                               "Videos pehle PAGE ke folder (Content Sources) se; ID ka apna folder sirf backup.\n"
+                               "Caption = video ki apni .txt (TikTok caption, max 4 hashtags); na ho to page hashtags.\n"
+                               "Fail / confirm na hone wali post DELETE nahi hoti — page folder ke andar 'Failed' folder mein jati hai."),
+                  foreground="#8ea0bd", justify="left").pack(anchor="w", padx=8, pady=6)
+        ttk.Button(cfg, text=T("Page history", "Page history"), command=self._show_page_history).pack(anchor="w", padx=8, pady=4)
 
         self.post_panel = AccountPanel(f, self, on_start=self._start_post_batch, start_label="START")
 
@@ -9098,7 +9485,7 @@ downloads and replaces itself, then restarts. No manual download needed.
                         log(T(f"[{account['name']}] {i}/{len(todo)}: {os.path.basename(path)}", f"[{account['name']}] {i}/{len(todo)}: {os.path.basename(path)}"))
                         try:
                             sc = sidecar_caption(path)
-                            cap = sc if sc else tags
+                            cap = clean_caption(sc if sc else tags, 4)      # hashtags zyada se zyada 4
                             if kind == "reel":
                                 ok = bot.upload_reel(path, cap)
                             elif kind == "photo":
@@ -9115,10 +9502,26 @@ downloads and replaces itself, then restarts. No manual download needed.
                             if cfg.get("delete_after") and tgt is targets[-1]:
                                 try:
                                     os.remove(path); log(T(f"[{account['name']}] deleted from device: {os.path.basename(path)}", f"[{account['name']}] device se delete: {os.path.basename(path)}"))
+                                    side = os.path.splitext(path)[0] + ".txt"
+                                    if os.path.exists(side):
+                                        os.remove(side)
                                 except Exception as e:
                                     log(T(f"delete failed: {e}", f"delete fail: {e}"))
                         else:
                             add_page_history(page, path, "fail", bot.last_error or T("post did not happen", "post nahi hui"))
+                            # fail / confirm nahi -> delete NAHI, page folder ke andar 'Failed' folder mein
+                            if tgt is targets[-1] and os.path.exists(path):
+                                try:
+                                    fdir = os.path.join(os.path.dirname(path), "Failed")
+                                    os.makedirs(fdir, exist_ok=True)
+                                    shutil.move(path, os.path.join(fdir, os.path.basename(path)))
+                                    side = os.path.splitext(path)[0] + ".txt"
+                                    if os.path.exists(side):
+                                        shutil.move(side, os.path.join(fdir, os.path.basename(side)))
+                                    log(T(f"[{account['name']}] moved to 'Failed' folder (kept, not deleted): {os.path.basename(path)}",
+                                          f"[{account['name']}] 'Failed' folder mein rakh di (delete nahi): {os.path.basename(path)}"))
+                                except Exception as e:
+                                    log(f"move to Failed: {e}")
                         if i < len(todo):
                             gap = random.randint(min(imn, imx), max(imn, imx)) if (imn or imx) else random.randint(40, 90)
                             if cfg.get("scroll_between"):
