@@ -2790,8 +2790,11 @@ class Automation:
                 return True
             if self.page.query_selector("iframe[src*='hcaptcha'], iframe[title*='hcaptcha' i]"):
                 return True
-            txt = self.page.content().lower()
-            return "captcha" in txt or "g-recaptcha" in txt or "h-captcha" in txt
+            # sirf asli nazar aane wala captcha (script ke andar ka lafz nahi — 2Captcha ke paise zaya na hon)
+            if self.page.query_selector("iframe[src*='captcha' i]") or self.page.query_selector(".g-recaptcha, .h-captcha"):
+                return True
+            vis = (self.page.inner_text("body") or "").lower()
+            return ("i'm not a robot" in vis or "security check" in vis) and "captcha" in self.page.content().lower()
         except Exception:
             return False
 
