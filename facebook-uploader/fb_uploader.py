@@ -3912,7 +3912,11 @@ TITLES = {k: (sec, lab) for sec, items in NAV for k, lab, _ in items}
 class ProUIMixin:
     def _build_sidebar(self):
         P = PAL
-        side = tk.Frame(self, bg=P["side"], width=int(215 * ui_zoom()))
+        try:
+            _dpi = self.winfo_fpixels("1i") / 96.0
+        except Exception:
+            _dpi = 1.0
+        side = tk.Frame(self, bg=P["side"], width=int(205 * ui_zoom() * _dpi))
         side.pack(side="left", fill="y"); side.pack_propagate(False)
         brand = tk.Frame(side, bg=P["side"]); brand.pack(fill="x", padx=16, pady=(16, 10))
         tk.Label(brand, text="DK", bg=P["accent2"], fg="white", font=("Segoe UI", 15, "bold"),
@@ -4484,7 +4488,11 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
         self.acc_table = AccountPanel(f, self, on_start=None, show_delete=True, on_pick=self._load_account_into_form)
 
     def _scroll_area(self, parent, width=470, full=False):
-        width = int(width * ui_zoom() / 1.25)
+        try:
+            _dpi = self.winfo_fpixels("1i") / 96.0
+        except Exception:
+            _dpi = 1.0
+        width = int(width * ui_zoom() * _dpi / 1.25)
         """Left side ko scroll wala banao (chhoti screen par sab nazar aaye)."""
         outer = ttk.Frame(parent)
         if full:
