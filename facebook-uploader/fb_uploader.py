@@ -628,6 +628,58 @@ def _stealth_js(fp, lang):
 """ % (json.dumps(fp), langs)
 
 
+_TILE_N = 4          # kitne browser ek sath khulenge (pool set karta hai)
+
+
+def set_tile_count(n):
+    global _TILE_N
+    try:
+        _TILE_N = max(1, int(n))
+    except Exception:
+        pass
+
+
+def _work_area_dip():
+    """Screen ka kaam wala hissa (taskbar ke bagair), Chrome ke DIP units mein: (x, y, w, h)."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        r = wintypes.RECT()
+        ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(r), 0)
+        try:
+            dpi = ctypes.windll.user32.GetDpiForSystem()
+        except Exception:
+            dpi = 96
+        k = 96.0 / (dpi or 96)
+        return int(r.left * k), int(r.top * k), int((r.right - r.left) * k), int((r.bottom - r.top) * k)
+    except Exception:
+        return 0, 0, 1600, 860
+
+
+def _tile_rect(slot, n):
+    """n browsers ko poori screen mein barabar baanto. Har browser ka (x, y, w, h)."""
+    import math
+    X, Y, W, H = _work_area_dip()
+    n = max(1, n)
+    best = None
+    for cols in range(1, n + 1):
+        rows = math.ceil(n / cols)
+        w, h = W / cols, H / rows
+        score = abs((w / h) - 0.9)            # browser ka shape thora lamba (portrait/square) behtar
+        score += (cols * rows - n) * 0.35     # khali khane kam
+        if w < 420:
+            score += 2 + (420 - w) / 100      # bohot patla na ho
+        if h < 380:
+            score += 2 + (380 - h) / 100      # bohot chhota na ho
+        if best is None or score < best[0]:
+            best = (score, cols, rows)
+    _, cols, rows = best
+    i = slot % (cols * rows)
+    c, r = i % cols, i // cols
+    w, h = int(W / cols), int(H / rows)
+    return X + c * w, Y + r * h, max(w, 420), max(h, 360)
+
+
 _GRID_LOCK = threading.Lock()
 _GRID_USED = set()
 
@@ -668,7 +720,10 @@ def fb_browser_launch(pw, account, cfg, headless=False, log=print):
     per_row = max(1, int(cfg.get("fbb_per_row", 4) or 4))
     ww, wh = int(cfg.get("fbb_w", 900) or 900), int(cfg.get("fbb_h", 800) or 800)
     slot = _grid_slot()
-    x, y = (slot % per_row) * (ww // 2), (slot // per_row % 3) * 60
+    if cfg.get("fbb_auto_tile", True):
+        x, y, ww, wh = _tile_rect(slot, _TILE_N)     # khud poori screen mein fit
+    else:
+        x, y = (slot % per_row) * (ww // 2), (slot // per_row % 3) * 60
     args = ["--disable-blink-features=AutomationControlled", "--no-first-run",
             "--no-default-browser-check", f"--lang={lang}",
             "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
@@ -6136,6 +6191,7 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         def pool():
             if not ensure_runtime(log=lambda m: self.log_q.put(m)):
                 return
+            set_tile_count(min(n, len(accs)))
             act, pend = [], list(accs)
             while (pend or act) and not self.stop_flag.is_set():
                 act = [t for t in act if t.is_alive()]
@@ -6155,6 +6211,7 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
 
     def _run_login_pool(self, accs, limit, detect):
         log = lambda m: self.log_q.put(m)
+        set_tile_count(min(limit, len(accs)))
         if not ensure_runtime(log=log):
             return
         active, pending = [], list(accs)
@@ -7461,6 +7518,9 @@ downloads and replaces itself, then restarts. No manual download needed.
         self.set_fbb_h = tk.StringVar(value=str(s.get("fbb_h", 800)))
         ttk.Entry(fr, textvariable=self.set_fbb_w, width=5).pack(side="left", padx=2)
         ttk.Entry(fr, textvariable=self.set_fbb_h, width=5).pack(side="left", padx=2)
+        self.set_fbb_tile = tk.IntVar(value=1 if s.get("fbb_auto_tile", True) else 0)
+        ttk.Checkbutton(fr, text=T("Auto-fit all browsers on screen", "Sab browsers screen par khud fit"),
+                        variable=self.set_fbb_tile).pack(side="left", padx=8)
         self.set_fbb_mute = tk.IntVar(value=1 if s.get("fbb_mute", True) else 0)
         ttk.Checkbutton(fr, text=T("Mute audio", "Awaz band"), variable=self.set_fbb_mute).pack(side="left", padx=8)
         ttk.Label(fr, text=T("Language (empty = from proxy):", "Zaban (khali = proxy se):")).pack(side="left", padx=(10, 0))
@@ -7748,7 +7808,7 @@ downloads and replaces itself, then restarts. No manual download needed.
                 return d
         save_settings({"fbb_engine": self.set_fbb_engine.get(), "fbb_per_row": _int(self.set_fbb_row.get(), 4),
                        "fbb_w": _int(self.set_fbb_w.get(), 900), "fbb_h": _int(self.set_fbb_h.get(), 800),
-                       "fbb_mute": bool(self.set_fbb_mute.get()), "fbb_lang": self.set_fbb_lang.get().strip()})
+                       "fbb_mute": bool(self.set_fbb_mute.get()), "fbb_auto_tile": bool(self.set_fbb_tile.get()), "fbb_lang": self.set_fbb_lang.get().strip()})
         save_settings({"browser": br, "browser_path": self.set_path.get().strip(),
                        "use_ixbrowser": br == "ixbrowser", "ix_max_per_day": ix_max,
                        "ix_limit_on": bool(self.set_ix_limit_on.get()),
@@ -7981,6 +8041,7 @@ downloads and replaces itself, then restarts. No manual download needed.
     # ---------- posting ----------
     def _run_pool(self, jobs, kind, start_at, limit, cfg):
         log = lambda m: self.log_q.put(m)
+        set_tile_count(min(limit, len(jobs)))
         active, pending = [], list(jobs)
         while (pending or active) and not self.stop_flag.is_set():
             active = [t for t in active if t.is_alive()]
@@ -8104,6 +8165,7 @@ downloads and replaces itself, then restarts. No manual download needed.
     # ---------- active ----------
     def _run_active_pool(self, accounts, settings, limit, start_at=None):
         log = lambda m: self.log_q.put(m)
+        set_tile_count(min(limit, len(accounts)))
         active, pending = [], list(accounts)
         while (pending or active) and not self.stop_flag.is_set():
             active = [t for t in active if t.is_alive()]
