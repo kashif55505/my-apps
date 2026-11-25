@@ -314,6 +314,176 @@ def set_page_enabled(acc_id, key, enabled):
 
 
 # ============================================================
+# VPN TUNNELS — Surfshark (ya koi bhi) WireGuard .conf se har browser ka ALAG IP
+# Har tunnel ek chhota "wireproxy" process: WireGuard -> local SOCKS5 (127.0.0.1:port)
+# ============================================================
+TUNNEL_DIR = os.path.join(DATA_DIR, "tunnels")
+_WG_PROCS = {}          # name -> Popen
+_WG_LOCK = threading.Lock()
+
+
+def wg_list():
+    return load_settings().get("wg_tunnels", [])
+
+
+def wg_save(lst):
+    save_settings({"wg_tunnels": lst})
+
+
+def wg_import_files(paths):
+    """WireGuard .conf files add karo. Return kitne add hue."""
+    lst = wg_list()
+    have = {t["name"] for t in lst}
+    used_ports = {t["port"] for t in lst}
+    port = 41000
+    n = 0
+    for p in paths:
+        try:
+            txt = open(p, encoding="utf-8", errors="ignore").read()
+        except Exception:
+            continue
+        if "[Interface]" not in txt or "[Peer]" not in txt:
+            continue
+        name = os.path.splitext(os.path.basename(p))[0][:40]
+        base, k = name, 2
+        while name in have:
+            name = f"{base}-{k}"; k += 1
+        while port in used_ports:
+            port += 1
+        ep = ""
+        for line in txt.splitlines():
+            if line.strip().lower().startswith("endpoint"):
+                ep = line.split("=", 1)[1].strip()
+        lst.append({"name": name, "conf": txt, "port": port, "endpoint": ep})
+        have.add(name); used_ports.add(port); n += 1
+    wg_save(lst)
+    return n
+
+
+def _wireproxy_exe(log=print):
+    """wireproxy.exe dhoondo; na ho to GitHub se 1 dafa download."""
+    cands = []
+    if getattr(sys, "frozen", False):
+        cands.append(os.path.join(getattr(sys, "_MEIPASS", ""), "wireproxy.exe"))
+        cands.append(os.path.join(os.path.dirname(sys.executable), "wireproxy.exe"))
+    bindir = os.path.join(DATA_DIR, "bin")
+    cands.append(os.path.join(bindir, "wireproxy.exe" if os.name == "nt" else "wireproxy"))
+    for c in cands:
+        if os.path.isfile(c):
+            return c
+    import urllib.request, tarfile, io
+    log(T("Downloading tunnel engine (wireproxy, one time)...", "Tunnel engine (wireproxy) download ho raha hai (sirf 1 dafa)..."))
+    want = "windows_amd64" if os.name == "nt" else "linux_amd64"
+    url = None
+    for repo in ("whyvl/wireproxy", "pufferffish/wireproxy"):
+        try:
+            req = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases/latest",
+                                         headers={"User-Agent": "dkfbu"})
+            rel = json.loads(urllib.request.urlopen(req, timeout=20).read().decode())
+            for a in rel.get("assets", []):
+                if want in a["name"] and a["name"].endswith((".tar.gz", ".zip")):
+                    url = a["browser_download_url"]; break
+            if url:
+                break
+        except Exception:
+            continue
+    if not url:
+        raise RuntimeError("wireproxy download link not found")
+    data = urllib.request.urlopen(url, timeout=120).read()
+    os.makedirs(bindir, exist_ok=True)
+    target = cands[-1]
+    if url.endswith(".zip"):
+        import zipfile
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            for m in z.namelist():
+                if os.path.basename(m).startswith("wireproxy"):
+                    open(target, "wb").write(z.read(m)); break
+    else:
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+            for m in tf.getmembers():
+                if os.path.basename(m.name).startswith("wireproxy") and m.isfile():
+                    open(target, "wb").write(tf.extractfile(m).read()); break
+    if os.name != "nt":
+        os.chmod(target, 0o755)
+    log(T("Tunnel engine ready.", "Tunnel engine tayyar."))
+    return target
+
+
+def _port_open(port, timeout=1.0):
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+def wg_ensure(name, log=print):
+    """Tunnel chalao (agar band hai). Return local port."""
+    t = next((x for x in wg_list() if x["name"] == name), None)
+    if not t:
+        raise RuntimeError(f"tunnel '{name}' not found")
+    with _WG_LOCK:
+        pr = _WG_PROCS.get(name)
+        if pr and pr.poll() is None and _port_open(t["port"]):
+            return t["port"]
+        exe = _wireproxy_exe(log)
+        os.makedirs(TUNNEL_DIR, exist_ok=True)
+        cfg = os.path.join(TUNNEL_DIR, f"{name}.conf")
+        conf = "\n".join(l for l in t["conf"].splitlines()
+                         if not l.strip().lower().startswith(("postup", "postdown", "predown", "preup", "table", "saveconfig")))
+        with open(cfg, "w", encoding="utf-8") as f:
+            f.write(conf.strip() + f"\n\n[Socks5]\nBindAddress = 127.0.0.1:{t['port']}\n")
+        _WG_PROCS[name] = subprocess.Popen([exe, "-c", cfg], **_NOWIN)
+    for _ in range(30):
+        if _port_open(t["port"]):
+            log(T(f"VPN tunnel '{name}' up (127.0.0.1:{t['port']}).", f"VPN tunnel '{name}' chal gaya."))
+            return t["port"]
+        time.sleep(0.5)
+    raise RuntimeError(f"tunnel '{name}' did not start (check the .conf file)")
+
+
+def wg_stop_all():
+    for p in list(_WG_PROCS.values()):
+        try:
+            p.terminate()
+        except Exception:
+            pass
+    _WG_PROCS.clear()
+
+
+import atexit as _atexit
+_atexit.register(wg_stop_all)
+
+
+def socks_ipinfo(port, timeout=15):
+    """Local SOCKS5 (no auth) ke zariye ip-api.com se IP/city/timezone."""
+    import socket, struct
+    s = socket.create_connection(("127.0.0.1", int(port)), timeout=timeout)
+    try:
+        s.sendall(b"\x05\x01\x00")
+        if s.recv(2) != b"\x05\x00":
+            raise RuntimeError("socks handshake failed")
+        host = b"ip-api.com"
+        s.sendall(b"\x05\x01\x00\x03" + bytes([len(host)]) + host + struct.pack(">H", 80))
+        rep = s.recv(10)
+        if len(rep) < 2 or rep[1] != 0:
+            raise RuntimeError("socks connect failed")
+        s.sendall(b"GET /json/?fields=status,query,city,regionName,country,countryCode,timezone,lat,lon,isp "
+                  b"HTTP/1.0\r\nHost: ip-api.com\r\n\r\n")
+        data = b""
+        while True:
+            ch = s.recv(4096)
+            if not ch:
+                break
+            data += ch
+        body = data.split(b"\r\n\r\n", 1)[-1]
+        return json.loads(body.decode("utf-8", "ignore"))
+    finally:
+        s.close()
+
+
+# ============================================================
 # FB BROWSER — apna built-in anti-detect browser (ixBrowser ki zaroorat nahi)
 # Har ID: alag profile folder, alag fingerprint (screen, CPU, RAM, WebGL,
 # canvas/audio noise), proxy ke hisaab se timezone + language, WebRTC leak band.
@@ -353,6 +523,9 @@ def _geo_for_proxy(proxy):
                 scheme, rest = srv.split("://", 1)
                 srv = f"{scheme}://{proxy['username']}:{proxy.get('password', '')}@{rest}"
             handlers.append(urllib.request.ProxyHandler({"http": srv, "https": srv}))
+        elif proxy and proxy.get("server", "").startswith("socks5://127.0.0.1:") and not proxy.get("username"):
+            j = socks_ipinfo(proxy["server"].rsplit(":", 1)[1])
+            return j if j.get("status") == "success" else None
         elif proxy:
             return None      # socks: python se check nahi; local settings
         op = urllib.request.build_opener(*handlers)
@@ -446,6 +619,10 @@ def fb_browser_launch(pw, account, cfg, headless=False, log=print):
         fp = make_fingerprint(acc["id"])
         update_account(acc["id"], fingerprint=fp)
     proxy = parse_proxy(acc.get("proxy", ""))
+    if acc.get("proxy", "").strip() and not proxy:
+        # asli IP se kabhi na kholo — ID bachao
+        raise RuntimeError(T(f"Proxy/VPN '{acc['proxy']}' is not working — browser NOT opened (to protect the ID).",
+                             f"Proxy/VPN '{acc['proxy']}' kaam nahi kar raha — ID bachane ke liye browser NAHI khola."))
     geo = acc.get("geo") if acc.get("geo_proxy") == acc.get("proxy", "") else None
     if not geo:
         geo = _geo_for_proxy(proxy)
@@ -502,6 +679,27 @@ def fb_browser_launch(pw, account, cfg, headless=False, log=print):
             _pg.goto("about:blank")
         except Exception:
             pass
+    # ---- CHECK IP (Bob Prime jaisa): browser khulte hi IP + city + country ----
+    try:
+        _pg = ctx.pages[0] if ctx.pages else ctx.new_page()
+        _pg.goto("http://ip-api.com/json/?fields=status,query,city,regionName,country,countryCode,timezone,isp",
+                 timeout=25000)
+        info = json.loads(_pg.inner_text("body"))
+        if info.get("status") == "success":
+            update_account(acc["id"], ip_info=info, last_ip=info.get("query"))
+            log(T(f"[{acc['name']}] CHECK IP: {info.get('query')} — {info.get('city')}, {info.get('regionName')}, "
+                  f"{info.get('country')} ({info.get('isp', '')})",
+                  f"[{acc['name']}] CHECK IP: {info.get('query')} — {info.get('city')}, {info.get('regionName')}, "
+                  f"{info.get('country')} ({info.get('isp', '')})"))
+            try:
+                APP_INSTANCE.after(0, APP_INSTANCE._refresh_all_panels)
+            except Exception:
+                pass
+            if tz and info.get("timezone") and info["timezone"] != tz:
+                update_account(acc["id"], geo=None)   # agli dafa sahi timezone
+        _pg.goto("about:blank")
+    except Exception as e:
+        log(T(f"[{acc['name']}] CHECK IP failed: {e.__class__.__name__}", f"[{acc['name']}] CHECK IP nahi hua."))
     log(T(f"[{acc['name']}] FB Browser opened — {fp['screen_w']}x{fp['screen_h']}, {fp['cpu']} CPU, "
           f"{lang}, {tz or 'local time'}{', proxy ' + proxy['server'] if proxy else ''}.",
           f"[{acc['name']}] FB Browser khula — {fp['screen_w']}x{fp['screen_h']}, {fp['cpu']} CPU, "
@@ -529,6 +727,13 @@ def check_proxy(text, timeout=12):
     p = parse_proxy(text)
     if not p:
         return False, 0, "invalid"
+    if p["server"].startswith("socks5://127.0.0.1:"):
+        t0 = time.time()
+        try:
+            j = socks_ipinfo(p["server"].rsplit(":", 1)[1])
+            return True, int((time.time() - t0) * 1000), f"{j.get('query')} {j.get('countryCode')} {j.get('city', '')}"
+        except Exception as e:
+            return False, 0, str(e)[:80]
     if not p["server"].startswith("http"):
         return None, 0, "socks (check in browser)"
     srv = p["server"]
@@ -756,6 +961,16 @@ def parse_proxy(text):
     s = (text or "").strip()
     if not s:
         return None
+    if s.lower().startswith("wg:"):          # Surfshark/WireGuard tunnel
+        try:
+            port = wg_ensure(s[3:].strip())
+            return {"server": f"socks5://127.0.0.1:{port}"}
+        except Exception as e:
+            try:
+                APP_INSTANCE.log_q.put(f"[VPN] {e}")
+            except Exception:
+                pass
+            return None
     scheme = "http"
     if "://" in s:
         scheme, s = s.split("://", 1)
@@ -2597,40 +2812,63 @@ class Automation:
             self.log(T(f"    confirm skipped: {e}", f"    confirm skip: {e}"))
 
     def run_active(self, s, stop_check=None):
-        """Diye gaye warm-up settings chalaye. s = dict. Loops bhi handle."""
+        """Warm-up / Active. Har ID (har browser) ka apna RANDOM plan:
+        kaamon ki tarteeb, ginti aur waqfe sab alag — taake insaan jaisa lage."""
         acc = self.current_acc
+        rnd = random.Random(f"{acc.get('id')}-{time.time()}")
         loops = max(1, int(s.get("loops", 1)))
+
+        def cnt(c):
+            c = max(1, int(c or 1))
+            return rnd.randint(max(1, int(round(c * 0.6))), c)
+
         for lp in range(1, loops + 1):
             if stop_check and stop_check():
                 break
-            self.log(T(f"[{acc['name']}] Active loop {lp}/{loops}", f"[{acc['name']}] Active loop {lp}/{loops}"))
+            tasks = []
             if s.get("check_notification", {}).get("on"):
-                self.act_check_notification(s["check_notification"].get("count", 1))
+                tasks.append(("notifications", lambda: self.act_check_notification(cnt(s["check_notification"].get("count", 1)))))
             if s.get("scroll_feed", {}).get("on"):
-                self.act_scroll_feed(self._rng(s["scroll_feed"]))
+                tasks.append(("feed", lambda: self.act_scroll_feed(self._rng(s["scroll_feed"]))))
             if s.get("check_stories", {}).get("on"):
-                self.act_check_stories(self._rng(s["check_stories"]))
+                tasks.append(("stories", lambda: self.act_check_stories(self._rng(s["check_stories"]))))
             if s.get("scroll_videos", {}).get("on"):
-                self.act_scroll_videos(self._rng(s["scroll_videos"]))
+                tasks.append(("videos", lambda: self.act_scroll_videos(self._rng(s["scroll_videos"]))))
             if s.get("scroll_reels", {}).get("on"):
-                self.act_scroll_reels(self._rng(s["scroll_reels"]))
+                tasks.append(("reels", lambda: self.act_scroll_reels(self._rng(s["scroll_reels"]))))
             if s.get("confirm_friends", {}).get("on"):
-                self.act_confirm_friends(s["confirm_friends"].get("count", 1))
+                tasks.append(("friends", lambda: self.act_confirm_friends(cnt(s["confirm_friends"].get("count", 1)))))
             if s.get("reaction", {}).get("on"):
-                self.act_reactions(s["reaction"].get("count", 1))
+                tasks.append(("likes", lambda: self.act_reactions(cnt(s["reaction"].get("count", 1)))))
             if s.get("check_message", {}).get("on"):
                 cm = s["check_message"]
-                self.act_messages_reply(cm.get("count", 1), cm.get("reply_on", False), cm.get("reply_text", ""))
+                tasks.append(("messages", lambda: self.act_messages_reply(cnt(cm.get("count", 1)), cm.get("reply_on", False),
+                                                                           cm.get("reply_text", ""))))
             if s.get("comments", {}).get("on"):
-                self.act_comments(s["comments"].get("count", 1), s["comments"].get("text", ""))
-            # Group activities (ab isi active list me)
+                tasks.append(("comments", lambda: self.act_comments(cnt(s["comments"].get("count", 1)),
+                                                                     s["comments"].get("text", ""))))
             if s.get("group_join", {}).get("on"):
-                self.join_trending_groups(s["group_join"].get("count", 5))
+                tasks.append(("join groups", lambda: self.join_trending_groups(cnt(s["group_join"].get("count", 5)))))
             gp_text = s.get("group_post", {}).get("text", "") if s.get("group_post", {}).get("on") else ""
             ga = s.get("group_active", {})
             if ga.get("on") or gp_text:
-                self.groups_active(ga.get("min", 3) if ga.get("on") else 0,
-                                   ga.get("like", True), ga.get("comment", True), gp_text)
+                tasks.append(("groups", lambda: self.groups_active(ga.get("min", 3) if ga.get("on") else 0,
+                                                                   ga.get("like", True), ga.get("comment", True), gp_text)))
+            rnd.shuffle(tasks)
+            # kabhi kabhi 1 kaam chhor do (insaan har roz sab kuch nahi karta)
+            if len(tasks) > 3 and rnd.random() < 0.35:
+                tasks.pop(rnd.randrange(len(tasks)))
+            self.log(T(f"[{acc['name']}] Active loop {lp}/{loops} — plan: " + " → ".join(t[0] for t in tasks),
+                       f"[{acc['name']}] Active loop {lp}/{loops} — plan: " + " → ".join(t[0] for t in tasks)))
+            for name, fn in tasks:
+                if stop_check and stop_check():
+                    break
+                try:
+                    fn()
+                except Exception as e:
+                    self.log(f"[{acc['name']}] {name}: {e}")
+                # insaani waqfa (har ID ka alag)
+                time.sleep(rnd.uniform(4, 25))
         self.log(T(f"[{acc['name']}] Active session complete.", f"[{acc['name']}] Active session mukammal."))
 
     @staticmethod
@@ -3208,7 +3446,11 @@ class AccountPanel:
     def refresh(self):
         self.tree.delete(*self.tree.get_children())
         for i, a in enumerate(load_accounts(), 1):
-            mode = a.get("ix_profile") or (a.get("ix_key") and "ix (free)") or (a.get("proxy") and "proxy") or "-"
+            _ii = a.get("ip_info") or {}
+            _loc = f"{_ii.get('query', '')} {_ii.get('countryCode', '')} {_ii.get('city', '')}".strip()
+            _px = a.get("proxy", "")
+            _ptag = ("VPN " + _px[3:]) if _px.lower().startswith("wg:") else ("proxy" if _px else "")
+            mode = " · ".join(x for x in (_ptag, _loc) if x) or a.get("ix_profile") or (a.get("ix_key") and "ix (free)") or "-"
             img = self.app.img_check if a["id"] in self.checked else self.app.img_empty
             self.tree.insert("", "end", iid=a["id"], image=img,
                              values=(i, a["name"], a["email"], self._pages_summary(a),
@@ -3915,6 +4157,15 @@ NAV = [("WORKSPACE", [("Dashboard", "Dashboard", "▦"), ("Accounts", "Accounts"
                        ("LDPlayer", "LDPlayer (mobile)", "📱")]),
        ("SYSTEM", [("Logs", "Logs", "≡"), ("Settings", "System Settings", "⚙"), ("Guide", "Guide", "?")])]
 
+WG_HELP = """SURFSHARK — different IP for every browser (one time setup):
+1. Log in at my.surfshark.com → VPN → Manual setup → Desktop or mobile → WireGuard.
+2. "I don't have a key pair" → Generate a new key pair (save it).
+3. Choose a location (e.g. United States – Dallas) → Download. Repeat for many
+   US cities/servers (one file = one IP). 10 IDs → ~10 files.
+4. Here: Import .conf files → Check tunnels → tick IDs in Accounts →
+   Assign tunnels to ticked IDs. Each browser now opens through its own tunnel.
+No Surfshark app / ExpressVPN needs to be running for this."""
+
 TITLES = {k: (sec, lab) for sec, items in NAV for k, lab, _ in items}
 
 
@@ -4125,7 +4376,24 @@ class ProUIMixin:
                    command=self._proxy_assign).pack(side="left", padx=4)
         ttk.Button(bb, text=T("Remove selected", "Selected hatao"), command=self._proxy_remove).pack(side="left")
         cols = ("proxy", "type", "status", "lat", "ip", "used")
-        self.px_tree = ttk.Treeview(f, columns=cols, show="headings", height=12)
+        # ---- VPN tunnels (Surfshark WireGuard) ----
+        wg = ttk.LabelFrame(f, text=T("VPN TUNNELS — Surfshark / WireGuard (different IP for every browser)",
+                                      "VPN TUNNELS — Surfshark / WireGuard (har browser ka alag IP)"))
+        wg.pack(fill="x", padx=20, pady=(4, 6))
+        wb = ttk.Frame(wg); wb.pack(fill="x", padx=6, pady=4)
+        ttk.Button(wb, text=T("Import .conf files", ".conf files daalo"), command=self._wg_import).pack(side="left")
+        ttk.Button(wb, text=T("Check tunnels (IP/city)", "Tunnels check (IP/city)"), command=self._wg_check).pack(side="left", padx=4)
+        ttk.Button(wb, text=T("Assign tunnels to ticked IDs", "Tick IDs ko tunnels do"), style="Accent.TButton",
+                   command=self._wg_assign).pack(side="left")
+        ttk.Button(wb, text=T("Remove selected", "Selected hatao"), command=self._wg_remove).pack(side="left", padx=4)
+        ttk.Button(wb, text=T("How to get Surfshark files?", "Surfshark files kaise?"),
+                   command=lambda: messagebox.showinfo("Surfshark", WG_HELP)).pack(side="left")
+        self.wg_tree = ttk.Treeview(wg, columns=("name", "ep", "port", "ip", "used"), show="headings", height=4)
+        for c, t_, w in (("name", "Tunnel", 180), ("ep", "Server", 260), ("port", "Local port", 100),
+                         ("ip", "IP / City", 280), ("used", "Used by", 260)):
+            self.wg_tree.heading(c, text=t_); self.wg_tree.column(c, width=w, anchor="w")
+        self.wg_tree.pack(fill="x", padx=6, pady=4)
+        self.px_tree = ttk.Treeview(f, columns=cols, show="headings", height=8)
         for c, t, w in (("proxy", "Proxy", 300), ("type", "Protocol", 90), ("status", "Status", 110),
                         ("lat", "Latency", 90), ("ip", "IP / Country", 200), ("used", "Used by", 260)):
             self.px_tree.heading(c, text=t); self.px_tree.column(c, width=w, anchor="w")
@@ -4135,11 +4403,68 @@ class ProUIMixin:
         s = load_settings()
         pool = s.get("proxy_pool", [])
         for a in load_accounts():
-            if a.get("proxy") and a["proxy"] not in [p["proxy"] for p in pool]:
+            if a.get("proxy") and not a["proxy"].lower().startswith("wg:") and a["proxy"] not in [p["proxy"] for p in pool]:
                 pool.append({"proxy": a["proxy"]})
         return pool
 
+    def _wg_refresh(self):
+        used = {}
+        for a in load_accounts():
+            if str(a.get("proxy", "")).lower().startswith("wg:"):
+                used.setdefault(a["proxy"][3:], []).append(a["name"])
+        st = getattr(self, "_wg_status", {})
+        self.wg_tree.delete(*self.wg_tree.get_children())
+        for t_ in wg_list():
+            self.wg_tree.insert("", "end", iid=t_["name"], values=(t_["name"], t_.get("endpoint", ""), t_["port"],
+                                st.get(t_["name"], "-"), ", ".join(used.get(t_["name"], [])) or "-"))
+
+    def _wg_import(self):
+        paths = filedialog.askopenfilenames(title="WireGuard .conf", filetypes=[("WireGuard", "*.conf"), ("All", "*.*")])
+        if paths:
+            n = wg_import_files(paths)
+            self.log_q.put(T(f"[VPN] {n} tunnel(s) added.", f"[VPN] {n} tunnel add hue."))
+            self._wg_refresh()
+
+    def _wg_check(self):
+        self._wg_status = getattr(self, "_wg_status", {})
+        names = list(self.wg_tree.selection()) or [t_["name"] for t_ in wg_list()]
+
+        def work():
+            for n in names:
+                try:
+                    port = wg_ensure(n, lambda m: self.log_q.put(m))
+                    j = socks_ipinfo(port)
+                    self._wg_status[n] = f"{j.get('query')} · {j.get('city')}, {j.get('countryCode')}"
+                except Exception as e:
+                    self._wg_status[n] = f"✖ {str(e)[:60]}"
+                self.after(0, self._wg_refresh)
+            self.log_q.put(T("[VPN] Tunnel check finished.", "[VPN] Tunnel check khatam."))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _wg_assign(self):
+        accs = self.acc_table.checked_accounts()
+        tl = [t_["name"] for t_ in wg_list()]
+        if not accs or not tl:
+            messagebox.showwarning("VPN", T("Tick IDs in Accounts and import tunnels first.",
+                                            "Pehle Accounts mein IDs tick karein aur tunnels daalein."))
+            return
+        for k, a in enumerate(accs):
+            update_account(a["id"], proxy="wg:" + tl[k % len(tl)], geo=None)
+        if len(accs) > len(tl):
+            messagebox.showinfo("VPN", T(f"{len(accs)} IDs but only {len(tl)} tunnels — some IDs share a tunnel (same IP). "
+                                         "Import more locations for a unique IP each.",
+                                         f"{len(accs)} IDs aur sirf {len(tl)} tunnels — kuch IDs ka IP same hoga. "
+                                         "Har ID ka alag IP chahiye to aur locations ki files daalein."))
+        self.log_q.put(T(f"[VPN] Tunnels assigned to {len(accs)} ID(s).", f"[VPN] {len(accs)} IDs ko tunnels mil gaye."))
+        self._refresh_all_panels(); self._wg_refresh()
+
+    def _wg_remove(self):
+        sel = set(self.wg_tree.selection())
+        wg_save([t_ for t_ in wg_list() if t_["name"] not in sel])
+        self._wg_refresh()
+
     def _proxy_refresh(self):
+        self._wg_refresh()
         pool = self._proxy_pool()
         used = {}
         for a in load_accounts():
@@ -6249,6 +6574,8 @@ downloads and replaces itself, then restarts. No manual download needed.
                 t = threading.Thread(target=self._run_active, args=(acc, settings, start_at), daemon=True)
                 t.start(); active.append(t); self.workers.append(t)
                 log(T(f"Active: {acc['name']} (running {len(active)}, queued {len(pending)})", f"Active: {acc['name']} (chal rahi {len(active)}, qatar {len(pending)})"))
+                # har browser alag waqt par khule (sab ek sath nahi)
+                self.stop_flag.wait(random.uniform(6, 20))
             time.sleep(2)
         log(T("=== ACTIVE pool finished ===", "=== ACTIVE pool khatam ==="))
 

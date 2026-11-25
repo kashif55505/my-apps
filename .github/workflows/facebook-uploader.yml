@@ -60,9 +60,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller playwright ixbrowser-local-api pystray pillow pytesseract
 
+      - name: Get wireproxy (VPN tunnel engine)
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download -R whyvl/wireproxy --pattern "*windows_amd64*" -D wp \
+            || gh release download -R pufferffish/wireproxy --pattern "*windows_amd64*" -D wp
+          cd wp && for f in *; do case "$f" in *.tar.gz) tar -xzf "$f";; *.zip) unzip -o "$f";; esac; done
+          cp "$(find . -iname 'wireproxy*.exe' | head -1)" ../wireproxy.exe && ls -l ../wireproxy.exe
+
       - name: Build app exe
         run: |
-          pyinstaller --onefile --noconsole --name "Facebook Uploader" --icon app_icon.ico `
+          $extra = @()
+          if (Test-Path wireproxy.exe) { $extra = @("--add-binary", "wireproxy.exe;.") }
+          pyinstaller --onefile --noconsole --name "Facebook Uploader" --icon app_icon.ico @extra `
             --collect-all playwright `
             --hidden-import ixbrowser_local_api --collect-all ixbrowser_local_api `
             --hidden-import pystray --hidden-import PIL --hidden-import pytesseract `
