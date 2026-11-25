@@ -298,8 +298,9 @@ def add_account(name, email, password, page_name, proxy="", ix_profile="", folde
         "twofa": (twofa or "").strip(),
         "ld_index": str(ld_index or "").strip(),
     }
-    if old.get("pages"):
-        rec["pages"] = old["pages"]      # detect kiye pages + ticks mehfooz
+    for _k, _v in old.items():           # baqi saari maloomat (UID, group, status, pages...) mehfooz
+        if _k not in rec:
+            rec[_k] = _v
     if old.get("ix_key"):
         rec["ix_key"] = old["ix_key"]    # ixBrowser free-mode link mehfooz
     accounts.append(rec)
@@ -650,7 +651,7 @@ def fb_browser_launch(pw, account, cfg, headless=False, log=print):
     acc = get_account(account["id"]) or account
     fp = acc.get("fingerprint")
     if not fp:
-        fp = make_fingerprint(acc["id"])
+        fp = make_fingerprint(acc.get("profile") or acc["id"])
         update_account(acc["id"], fingerprint=fp)
     proxy = parse_proxy(acc.get("proxy", ""))
     if acc.get("proxy", "").strip() and not proxy:
@@ -915,6 +916,110 @@ def _free_port():
     import socket
     s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close()
     return p
+
+
+def profiles_list():
+    return load_settings().get("profiles", [])
+
+
+def profiles_create(n):
+    lst = profiles_list()
+    k = len(lst)
+    for _ in range(max(0, int(n))):
+        k += 1
+        name = f"P{k:03d}"
+        while name in lst:
+            k += 1; name = f"P{k:03d}"
+        lst.append(name)
+    save_settings({"profiles": lst})
+    return lst
+
+
+def profiles_auto_assign(acc_ids=None, per_profile=1):
+    """Jin IDs ka profile nahi, unhein khali profiles do (tarteeb se). Kam pade to naye bana do."""
+    accs = load_accounts()
+    used = {}
+    for a in accs:
+        if a.get("profile"):
+            used[a["profile"]] = used.get(a["profile"], 0) + 1
+    need = [a for a in accs if not a.get("profile") and (acc_ids is None or a["id"] in acc_ids)]
+    profs = profiles_list()
+    free = [p for p in profs if used.get(p, 0) < per_profile]
+    if len(free) * per_profile < len(need):
+        profiles_create(-(-(len(need) - len(free) * per_profile) // per_profile))
+        profs = profiles_list()
+        free = [p for p in profs if used.get(p, 0) < per_profile]
+    n = 0
+    for a in need:
+        while free and used.get(free[0], 0) >= per_profile:
+            free.pop(0)
+        if not free:
+            break
+        p = free[0]
+        a["profile"] = p; used[p] = used.get(p, 0) + 1; n += 1
+    save_accounts(accs)
+    return n
+
+
+ACCOUNT_FIELDS = [("no", "No", 50), ("profile", "Profile", 80), ("name", "Name", 150), ("uid", "UID", 150),
+                  ("email", "Email", 230), ("email2", "Email2", 170), ("password", "Pass", 120),
+                  ("twofa", "2FA", 210), ("primary_loc", "Primary location", 150), ("created", "Creation date", 120),
+                  ("ip", "IP location", 230), ("status", "Status", 110), ("last_update", "Last update", 140),
+                  ("group", "Group", 110), ("country", "Country", 90), ("dob", "DOB", 100), ("gender", "Gender", 80),
+                  ("pages", "Pages (ticked)", 170)]
+
+
+def account_row(a, i):
+    ii = a.get("ip_info") or {}
+    ip = " ".join(x for x in (ii.get("query", ""), ii.get("countryCode", ""), ii.get("city", "")) if x)
+    px = a.get("proxy", "")
+    if px.lower().startswith("wg:"):
+        ip = (f"VPN {px[3:]} · " + ip) if ip else f"VPN {px[3:]}"
+    pg = a.get("pages") or []
+    on = [p["name"] for p in pg if p.get("enabled")]
+    pages = f"{len(on)}/{len(pg)}" + (f" ✔ {on[0]}" if on else "") if pg else (a.get("page_name") or "-")
+    vals = {"no": i, "ip": ip or "-", "pages": pages}
+    return [vals.get(k, a.get(k, "")) for k, _, _ in ACCOUNT_FIELDS]
+
+
+def export_accounts(path, accs, mode="full"):
+    """mode: full (CSV/Excel), txt (email|pass|2fa), uid (sirf UID)."""
+    import csv
+    if mode == "uid":
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(a.get("uid", "") for a in accs if a.get("uid")) + "\n")
+    elif mode == "txt":
+        with open(path, "w", encoding="utf-8") as f:
+            for a in accs:
+                f.write("|".join([a.get("email", ""), a.get("password", ""), a.get("twofa", ""),
+                                  a.get("uid", ""), a.get("name", "")]) + "\n")
+    else:
+        keys = [k for k, _, _ in ACCOUNT_FIELDS if k not in ("no", "pages")] + ["proxy", "page_name"]
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.writer(f)
+            w.writerow([dict((k, h) for k, h, _ in ACCOUNT_FIELDS).get(k, k) for k in keys])
+            for a in accs:
+                row = account_row(a, 0)
+                d = dict(zip([k for k, _, _ in ACCOUNT_FIELDS], row))
+                w.writerow([d.get(k, a.get(k, "")) for k in keys])
+    return len(accs)
+
+
+IMPORT_SLOTS = ["Email", "Pass", "2FA", "UID", "Email2", "Name", "Skip"]
+
+
+def parse_with_format(line, fmt):
+    """fmt jaise ["UID","Pass","2FA","Email","Email2"]. Separator: | , ; tab ya :"""
+    import re as _re
+    line = (line or "").strip().lstrip("\ufeff")
+    if not line or line.startswith("#"):
+        return None
+    parts = [p.strip() for p in _re.split(r"[|;,\t]+", line)] if _re.search(r"[|;,\t]", line) else line.split(":")
+    d = {}
+    for slot, val in zip(fmt, parts):
+        if slot != "Skip" and val:
+            d[slot] = val.replace(" ", "") if slot == "2FA" else val
+    return d
 
 
 def parse_account_line(line):
@@ -1298,9 +1403,19 @@ def ensure_runtime(log=print):
         return False
 
 
+def profile_of(acc_id):
+    try:
+        a = get_account(acc_id) or {}
+        return (a.get("profile") or "").strip()
+    except Exception:
+        return ""
+
+
 def session_dir_for(acc_id):
     _ensure_dirs()
-    safe = "".join(c if c.isalnum() else "_" for c in acc_id)
+    prof = profile_of(acc_id)
+    key = ("profile_" + prof) if prof else acc_id     # browser profile (Bob Prime ke LD jaisa)
+    safe = "".join(c if c.isalnum() else "_" for c in key)
     path = os.path.join(SESSIONS_DIR, safe)
     os.makedirs(path, exist_ok=True)
     return path
@@ -2279,6 +2394,21 @@ class Automation:
             pass
         return ""
 
+    def account_state(self):
+        """Login na ho to wajah: Checkpoint / Disabled / Suspended / Die."""
+        try:
+            url = (self.page.url or "").lower()
+            txt = self._page_text().lower() if hasattr(self, "_page_text") else ""
+        except Exception:
+            return "Die"
+        if "suspended" in txt or "/1501092823525282" in url:
+            return "Suspended"
+        if "disabled" in txt or "we disabled" in txt or "account has been disabled" in txt:
+            return "Disabled"
+        if "checkpoint" in url or "confirm your identity" in txt or "we suspect" in txt:
+            return "Checkpoint"
+        return "Die"
+
     def is_logged_in(self):
         self.page.goto(FB_HOME, wait_until="domcontentloaded")
         for _ in range(8):
@@ -2293,7 +2423,14 @@ class Automation:
                     return False
             except Exception:
                 pass
-            if self._fb_uid():
+            uid = self._fb_uid()
+            if uid:
+                try:
+                    a = get_account(self.current_acc["id"]) or {}
+                    if a.get("uid") != uid:
+                        update_account(self.current_acc["id"], uid=uid)
+                except Exception:
+                    pass
                 return True
         return bool(self._fb_uid())
 
@@ -3774,8 +3911,11 @@ class TimePicker:
 class AccountPanel:
     """Account table: checkbox select + Total + buttons (configurable)."""
     def __init__(self, parent, app, on_start=None, start_label="START",
-                 show_startstop=True, show_delete=False, on_pick=None, show_pages=True):
+                 show_startstop=True, show_delete=False, on_pick=None, show_pages=True, detail=False):
         self.app = app
+        self.detail = detail
+        self.filter_group = tk.StringVar(value="All")
+        self.filter_text = tk.StringVar()
         self.show_pages = show_pages
         self.cur_acc_id = None
         self.on_start = on_start
@@ -3793,22 +3933,53 @@ class AccountPanel:
         ttk.Button(head, text="Unselect all", command=self._unselect_all).pack(side="left", padx=2)
         if show_delete:
             ttk.Button(head, text="Delete selected", command=self.app._delete_checked).pack(side="left", padx=2)
+        if detail:
+            ttk.Label(head, text="  Group:").pack(side="left")
+            self.group_cb = ttk.Combobox(head, textvariable=self.filter_group, width=12, state="readonly")
+            self.group_cb.pack(side="left", padx=2)
+            self.group_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh())
+            ttk.Label(head, text="  Search:").pack(side="left")
+            se = ttk.Entry(head, textvariable=self.filter_text, width=16); se.pack(side="left", padx=2)
+            se.bind("<KeyRelease>", lambda e: self.refresh())
+            mb = ttk.Menubutton(head, text=T("Export ▾", "Export ▾"))
+            em = tk.Menu(mb, tearoff=0)
+            em.add_command(label=T("Export FULL (Excel/CSV) — ticked or all", "Export FULL (Excel/CSV)"),
+                           command=lambda: self.app._export_accounts("full"))
+            em.add_command(label="Export TXT  (email|pass|2fa|uid|name)", command=lambda: self.app._export_accounts("txt"))
+            em.add_command(label="Export UID", command=lambda: self.app._export_accounts("uid"))
+            mb["menu"] = em; mb.pack(side="right", padx=2)
         if on_start:
             ttk.Button(head, text=start_label, command=self._start).pack(side="right", padx=4)
             if show_startstop:
                 ttk.Button(head, text="STOP", command=self.app._stop_all).pack(side="right", padx=2)
 
-        cols = ("no", "name", "email", "page", "mode", "status")
-        self.tree = ttk.Treeview(wrap, columns=cols, show="tree headings",
+        k = ui_px(app) * 0.8
+        if detail:
+            cols = tuple(c for c, _, _ in ACCOUNT_FIELDS)
+            widths = {c: w for c, _, w in ACCOUNT_FIELDS}
+            heads = {c: h for c, h, _ in ACCOUNT_FIELDS}
+        else:
+            cols = ("no", "name", "email", "page", "mode", "status")
+            widths = {"no": 50, "name": 140, "email": 200, "page": 160, "mode": 170, "status": 100}
+            heads = {"no": "No", "name": "Account", "email": "Email",
+                     "page": "Pages (ticked)", "mode": "IP / Proxy", "status": "Status"}
+        tf = ttk.Frame(wrap); tf.pack(fill="both", expand=True, padx=6, pady=4)
+        self.tree = ttk.Treeview(tf, columns=cols, show="tree headings",
                                  height=(7 if show_pages else 14), selectmode="none")
-        self.tree.column("#0", width=46, anchor="center", stretch=False)
-        self.tree.heading("#0", text=T("Pick", "Pick"))
-        widths = {"no": 34, "name": 130, "email": 160, "page": 150, "mode": 110, "status": 90}
-        heads = {"no": "No", "name": "Account", "email": "Email",
-                 "page": "Pages (ticked)", "mode": "Profile/Proxy", "status": "Status"}
+        self.tree.column("#0", width=int(48 * k), minwidth=int(40 * k), anchor="center", stretch=False)
+        self.tree.heading("#0", text="✔")
         for c in cols:
-            self.tree.heading(c, text=heads[c]); self.tree.column(c, width=widths[c], anchor="w")
-        self.tree.pack(fill="both", expand=True, padx=6, pady=4)
+            self.tree.heading(c, text=heads[c])
+            self.tree.column(c, width=int(widths[c] * k), minwidth=int(40 * k), anchor="w",
+                             stretch=(not detail and c in ("name", "email")))
+        xs = ttk.Scrollbar(tf, orient="horizontal", command=self.tree.xview)
+        ys = ttk.Scrollbar(tf, orient="vertical", command=self.tree.yview)
+        self.tree.configure(xscrollcommand=xs.set, yscrollcommand=ys.set)
+        self.tree.grid(row=0, column=0, sticky="nsew"); ys.grid(row=0, column=1, sticky="ns")
+        xs.grid(row=1, column=0, sticky="ew")
+        tf.grid_rowconfigure(0, weight=1); tf.grid_columnconfigure(0, weight=1)
+        if detail:
+            self.tree.bind("<Button-3>", self._row_menu)
         self.tree.bind("<Button-1>", self._on_click)
 
         if show_pages:
@@ -3834,8 +4005,55 @@ class AccountPanel:
         self.app._panels.append(self)
         self.refresh()
 
+    def _row_menu(self, e):
+        row = self.tree.identify_row(e.y)
+        if not row:
+            return
+        a = get_account(row)
+        if not a:
+            return
+        m = tk.Menu(self.tree, tearoff=0)
+        m.add_command(label=T("Open browser (this ID)", "Browser kholo (is ID ka)"), command=lambda: self.app._open_browser_for(a))
+        m.add_command(label=T("Edit", "Edit"), command=lambda: self.on_pick and self.on_pick(a))
+        m.add_separator()
+        m.add_command(label=T("Select", "Select"), command=lambda: (self.checked.add(row), self.refresh()))
+        m.add_command(label=T("Unselect", "Unselect"), command=lambda: (self.checked.discard(row), self.refresh()))
+        m.add_command(label=T("Set group for ticked…", "Ticked IDs ka group…"), command=self.app._set_group_ticked)
+        m.add_separator()
+        m.add_command(label="Export UID (ticked)", command=lambda: self.app._export_accounts("uid"))
+        m.add_command(label="Export FULL (ticked)", command=lambda: self.app._export_accounts("full"))
+        m.add_command(label=T("Delete ticked", "Ticked delete"), command=self.app._delete_checked)
+        try:
+            m.tk_popup(e.x_root, e.y_root)
+        finally:
+            m.grab_release()
+
     def refresh(self):
         self.tree.delete(*self.tree.get_children())
+        if self.detail:
+            accs = load_accounts()
+            groups = sorted({a.get("group", "") for a in accs if a.get("group")})
+            try:
+                self.group_cb.config(values=["All"] + groups)
+            except Exception:
+                pass
+            fg, ft = self.filter_group.get(), self.filter_text.get().strip().lower()
+            for i, a in enumerate(accs, 1):
+                if fg not in ("All", "") and a.get("group", "") != fg:
+                    continue
+                if ft and ft not in " ".join(str(v) for v in (a.get("name"), a.get("email"), a.get("uid"),
+                                                              a.get("profile"), a.get("status"))).lower():
+                    continue
+                img = self.app.img_check if a["id"] in self.checked else self.app.img_empty
+                row = account_row(a, i)
+                live = self.status.get(a["id"])
+                if live:
+                    row[[c for c, _, _ in ACCOUNT_FIELDS].index("status")] = live
+                self.tree.insert("", "end", iid=a["id"], image=img, values=row)
+            self.lbl_total.config(text=f"Total {len(accs)}  |  Selected {len(self.checked)}")
+            if self.show_pages:
+                self._render_pages()
+            return
         for i, a in enumerate(load_accounts(), 1):
             _ii = a.get("ip_info") or {}
             _loc = f"{_ii.get('query', '')} {_ii.get('countryCode', '')} {_ii.get('city', '')}".strip()
@@ -3845,7 +4063,7 @@ class AccountPanel:
             img = self.app.img_check if a["id"] in self.checked else self.app.img_empty
             self.tree.insert("", "end", iid=a["id"], image=img,
                              values=(i, a["name"], a["email"], self._pages_summary(a),
-                                     mode, self.status.get(a["id"], "")))
+                                     mode, self.status.get(a["id"], "") or a.get("status", "")))
         accs = load_accounts()
         self.lbl_total.config(text=f"Total {len(accs)}  |  Selected {len(self.checked)}")
         if self.show_pages:
@@ -3935,6 +4153,11 @@ class AccountPanel:
 
     def set_status(self, acc_id, text):
         self.status[acc_id] = text
+        if text and text not in ("Login...", "LD"):
+            try:
+                update_account(acc_id, status=text, last_update=_now_str()[:16])
+            except Exception:
+                pass
         try:
             self.app.api_status_map[acc_id] = text
         except Exception:
@@ -5479,6 +5702,23 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         self.a_proxy = self._row(form, T("Proxy (optional):", "Proxy (optional):"))
         self.a_twofa = self._row(form, T("2FA secret key (optional):", "2FA secret key (optional):"))
         self.a_ld = self._row(form, T("LDPlayer index (emulator, optional):", "LDPlayer index (emulator, optional):"))
+        self.a_uid = self._row(form, "UID:")
+        self.a_email2 = self._row(form, T("Email2 / recovery:", "Email2 / recovery:"))
+        pr_ = ttk.Frame(form); pr_.pack(fill="x", padx=8, pady=3)
+        ttk.Label(pr_, text=T("Browser profile:", "Browser profile:"), width=18).pack(side="left")
+        self.a_profile = tk.StringVar()
+        self.a_profile_cb = ttk.Combobox(pr_, textvariable=self.a_profile, width=24)
+        self.a_profile_cb.pack(side="left", fill="x", expand=True)
+        self.a_group = self._row(form, T("Group:", "Group:"))
+        self.a_primary = self._row(form, T("Primary location:", "Primary location:"))
+        self.a_created = self._row(form, T("Creation date:", "Banne ki tareekh:"))
+        self.a_country = self._row(form, T("Country:", "Country:"))
+        self.a_dob = self._row(form, T("DOB (date of birth):", "DOB (paidaish):"))
+        gr_ = ttk.Frame(form); gr_.pack(fill="x", padx=8, pady=3)
+        ttk.Label(gr_, text=T("Gender:", "Gender:"), width=18).pack(side="left")
+        self.a_gender = tk.StringVar()
+        ttk.Combobox(gr_, textvariable=self.a_gender, values=("", "Male", "Female", "Other"), width=24,
+                     state="readonly").pack(side="left", fill="x", expand=True)
 
         fr = ttk.Frame(form); fr.pack(fill="x", padx=8, pady=3)
         ttk.Label(fr, text=T("Videos folder:", "Videos folder:"), width=18).pack(side="left")
@@ -5503,8 +5743,37 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         ttk.Button(btns, text=T("Save ID", "Save ID"), command=self._save_account).pack(side="left")
         ttk.Button(btns, text=T("New / clear form", "New / clear form"), command=self._clear_form).pack(side="left", padx=4)
 
-        ib = ttk.Frame(form); ib.pack(fill="x", padx=8, pady=4)
-        ttk.Button(ib, text=T("Bulk import from file (.txt)", "File se bulk import (.txt)"), command=self._import_accounts_file).pack(side="left")
+        # ---- ADD ACCOUNTS (Bob Prime jaisa: format khud chuno) ----
+        imf = ttk.LabelFrame(left, text=T("ADD ACCOUNTS (.txt import — choose the column order)",
+                                          "ADD ACCOUNTS (.txt import — columns ki tarteeb chuno)"))
+        imf.pack(fill="x", pady=6)
+        fr1 = ttk.Frame(imf); fr1.pack(fill="x", padx=6, pady=3)
+        ttk.Label(fr1, text=T("Format:", "Format:")).pack(side="left")
+        saved_fmt = load_settings().get("import_fmt", ["Email", "Pass", "2FA", "Skip", "Skip"])
+        self.imp_fmt = []
+        for k_ in range(5):
+            v_ = tk.StringVar(value=saved_fmt[k_] if k_ < len(saved_fmt) else "Skip")
+            ttk.Combobox(fr1, textvariable=v_, values=IMPORT_SLOTS, width=6, state="readonly").pack(side="left", padx=1)
+            self.imp_fmt.append(v_)
+        fr2 = ttk.Frame(imf); fr2.pack(fill="x", padx=6, pady=3)
+        self.imp_auto = tk.IntVar(value=1 if load_settings().get("import_auto", True) else 0)
+        ttk.Checkbutton(fr2, text=T("Auto-detect format", "Format khud pehchano"), variable=self.imp_auto).pack(side="left")
+        self.imp_profiles = tk.IntVar(value=1)
+        ttk.Checkbutton(fr2, text=T("Put each ID in its own browser profile", "Har ID apne browser profile mein"),
+                        variable=self.imp_profiles).pack(side="left", padx=6)
+        fr3 = ttk.Frame(imf); fr3.pack(fill="x", padx=6, pady=3)
+        ttk.Label(fr3, text=T("Group:", "Group:")).pack(side="left")
+        self.imp_group = tk.StringVar()
+        ttk.Entry(fr3, textvariable=self.imp_group, width=12).pack(side="left", padx=3)
+        ttk.Button(fr3, text=T("Choose .txt & ADD NOW", ".txt chuno aur ADD NOW"), style="Accent.TButton",
+                   command=self._import_accounts_file).pack(side="left", padx=4)
+        fr4 = ttk.Frame(imf); fr4.pack(fill="x", padx=6, pady=3)
+        ttk.Label(fr4, text=T("Browser profiles:", "Browser profiles:")).pack(side="left")
+        self.prof_n = tk.StringVar(value="10")
+        tk.Spinbox(fr4, from_=1, to=500, textvariable=self.prof_n, width=5).pack(side="left", padx=3)
+        ttk.Button(fr4, text=T("Create profiles", "Profiles banao"), command=self._create_profiles).pack(side="left")
+        ttk.Button(fr4, text=T("Auto-assign IDs → profiles", "IDs → profiles khud"), command=self._assign_profiles).pack(side="left", padx=4)
+        ib = ttk.Frame(form)
         ttk.Label(form, text=T("Text file, one ID per line:  email|password|2FA secret\n"
                                "(also works with :  ,  ;  space or tab — 2FA optional)",
                                "Text file, har line me aik ID:  email|password|2FA secret\n"
@@ -5516,7 +5785,9 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         ttk.Button(hb, text=T("Page History", "Page History"), command=self._show_page_history).pack(side="left", padx=4)
         ttk.Button(hb, text=T("ID History", "ID History"), command=self._show_id_history).pack(side="left")
 
-        self.acc_table = AccountPanel(f, self, on_start=None, show_delete=True, on_pick=self._load_account_into_form)
+        self.acc_table = AccountPanel(f, self, on_start=None, show_delete=True, on_pick=self._load_account_into_form,
+                                      detail=True)
+        self._refresh_profiles_cb()
 
     def _scroll_area(self, parent, width=470, full=False):
         try:
@@ -5689,8 +5960,9 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         try:
             bot.start(acc)
             if not bot.login(wait_for_2fa_callback=self._wait_2fa):
-                self.after(0, lambda: self._set_status_all(acc["id"], "Die"))
-                add_id_history(acc["id"], "login failed", bot.last_error or "login failed")
+                st = bot.account_state()
+                self.after(0, lambda: self._set_status_all(acc["id"], st))
+                add_id_history(acc["id"], "login failed", f"{st}: " + (bot.last_error or "login failed"))
                 return
             self.after(0, lambda: self._set_status_all(acc["id"], "Live"))
             add_id_history(acc["id"], "login ok", "")
@@ -5727,7 +5999,9 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         return var
 
     def _clear_form(self):
-        for v in (self.a_name, self.a_email, self.a_pass, self.a_page, self.a_ix, self.a_proxy, self.a_twofa, self.a_ld, self.a_folder, self.a_daily):
+        for v in (self.a_name, self.a_email, self.a_pass, self.a_page, self.a_ix, self.a_proxy, self.a_twofa, self.a_ld, self.a_folder, self.a_daily,
+                  self.a_uid, self.a_email2, self.a_profile, self.a_group, self.a_primary, self.a_created,
+                  self.a_country, self.a_dob, self.a_gender):
             v.set("")
         self.a_daily.set("0")
         self.a_hash.delete("1.0", tk.END)
@@ -5739,6 +6013,10 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         self.a_ix.set(a.get("ix_profile", "")); self.a_proxy.set(a.get("proxy", ""))
         self.a_twofa.set(a.get("twofa", "")); self.a_ld.set(a.get("ld_index", ""))
         self.a_folder.set(a.get("folder", ""))
+        for var, key in ((self.a_uid, "uid"), (self.a_email2, "email2"), (self.a_profile, "profile"),
+                         (self.a_group, "group"), (self.a_primary, "primary_loc"), (self.a_created, "created"),
+                         (self.a_country, "country"), (self.a_dob, "dob"), (self.a_gender, "gender")):
+            var.set(a.get(key, ""))
         self.a_daily.set(str(get_page_daily_limit(a.get("page_name", ""))))
         self.a_hash.delete("1.0", tk.END)
         self.a_hash.insert("1.0", get_hashtags_for_page(a.get("page_name", "")))
@@ -5749,9 +6027,14 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
             messagebox.showwarning(T("Wait", "Ruko"), T("Email and password are required.", "Email aur password zaroori hain."))
             return
         page = self.a_page.get().strip()
-        add_account(self.a_name.get() or self.a_email.get(), self.a_email.get(),
-                    self.a_pass.get(), page, self.a_proxy.get(), self.a_ix.get(),
-                    self.a_folder.get(), self.a_twofa.get(), self.a_ld.get())
+        aid = add_account(self.a_name.get() or self.a_email.get(), self.a_email.get(),
+                          self.a_pass.get(), page, self.a_proxy.get(), self.a_ix.get(),
+                          self.a_folder.get(), self.a_twofa.get(), self.a_ld.get())
+        update_account(aid, uid=self.a_uid.get().strip(), email2=self.a_email2.get().strip(),
+                       profile=self.a_profile.get().strip(), group=self.a_group.get().strip(),
+                       primary_loc=self.a_primary.get().strip(), created=self.a_created.get().strip(),
+                       country=self.a_country.get().strip(), dob=self.a_dob.get().strip(),
+                       gender=self.a_gender.get().strip(), last_update=_now_str()[:16])
         if page:
             set_hashtags_for_page(page, self.a_hash.get("1.0", tk.END))
             try:
@@ -5760,6 +6043,87 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
                 pass
         self._clear_form()
         self._refresh_all_panels()
+
+    def _restart_app(self):
+        """App band kar ke khud dobara kholo."""
+        env = {k: v for k, v in os.environ.items()
+               if not k.upper().startswith(("_MEI", "_PYI", "PYINSTALLER"))}
+        env.pop("TCL_LIBRARY", None); env.pop("TK_LIBRARY", None)
+        if getattr(sys, "frozen", False):
+            cmd = f'timeout /t 3 /nobreak >nul & start "" "{sys.executable}"'
+        else:
+            cmd = f'timeout /t 3 /nobreak >nul & start "" "{sys.executable}" "{os.path.abspath(__file__)}"'
+        try:
+            subprocess.Popen(["cmd", "/c", cmd], env=env, **_NOWIN)
+        except Exception:
+            pass
+        try:
+            self.destroy()
+        finally:
+            os._exit(0)
+
+    def _refresh_profiles_cb(self):
+        try:
+            self.a_profile_cb.config(values=[""] + profiles_list())
+        except Exception:
+            pass
+
+    def _create_profiles(self):
+        n = self._iv(self.prof_n.get()) or 1
+        profiles_create(n); self._refresh_profiles_cb()
+        self.log_q.put(T(f"{n} browser profile(s) created. Total: {len(profiles_list())}",
+                         f"{n} browser profile ban gaye. Kul: {len(profiles_list())}"))
+
+    def _assign_profiles(self):
+        ids = set(self.acc_table.checked) or None
+        n = profiles_auto_assign(ids)
+        self._refresh_profiles_cb(); self._refresh_all_panels()
+        self.log_q.put(T(f"{n} ID(s) placed into browser profiles.", f"{n} IDs browser profiles mein chali gayin."))
+
+    def _export_accounts(self, mode):
+        accs = self.acc_table.checked_accounts() or load_accounts()
+        ext = {"full": ".csv", "txt": ".txt", "uid": ".txt"}[mode]
+        path = filedialog.asksaveasfilename(defaultextension=ext, initialfile=f"accounts_{mode}_{_today_str()}{ext}",
+                                            filetypes=[("CSV / Excel", "*.csv"), ("Text", "*.txt"), ("All", "*.*")])
+        if not path:
+            return
+        n = export_accounts(path, accs, mode)
+        self.log_q.put(T(f"Exported {n} ID(s) → {path}", f"{n} IDs export → {path}"))
+        messagebox.showinfo("Export", T(f"{n} ID(s) saved:\n{path}", f"{n} IDs save ho gayin:\n{path}"))
+
+    def _set_group_ticked(self):
+        accs = self.acc_table.checked_accounts()
+        if not accs:
+            messagebox.showwarning(T("Wait", "Ruko"), T("Tick IDs first.", "Pehle IDs tick karein.")); return
+        win = tk.Toplevel(self); win.title("Group")
+        ttk.Label(win, text=T("Group name for ticked IDs:", "Tick IDs ka group naam:")).pack(padx=12, pady=8)
+        v = tk.StringVar(); ttk.Entry(win, textvariable=v, width=24).pack(padx=12)
+        def ok():
+            for a in accs:
+                update_account(a["id"], group=v.get().strip())
+            win.destroy(); self._refresh_all_panels()
+        ttk.Button(win, text="OK", command=ok).pack(pady=10)
+
+    def _open_browser_for(self, acc):
+        """Is ID ka browser kholo (login + khula chhor do, aap khud kaam kar sakte ho)."""
+        def work():
+            log = lambda m: self.log_q.put(m)
+            if not ensure_runtime(log=log):
+                return
+            bot = Automation(log=log, headless=False, browser_cfg=load_settings())
+            try:
+                bot.start(acc)
+                ok = bot.login(wait_for_2fa_callback=self._wait_2fa)
+                self.after(0, lambda: self._set_status_all(acc["id"], "Live" if ok else (bot.account_state() or "Die")))
+                log(T(f"[{acc['name']}] Browser is open — close the window when done.",
+                      f"[{acc['name']}] Browser khula hai — kaam ke baad window band kar dein."))
+                while bot.context and bot.context.pages:
+                    time.sleep(2)
+            except Exception as e:
+                log(f"[{acc['name']}] {e}")
+            finally:
+                bot.stop()
+        threading.Thread(target=work, daemon=True).start()
 
     def _delete_checked(self):
         ids = list(self.acc_table.checked)
@@ -5800,19 +6164,49 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
             messagebox.showerror("Error", T(f"Could not open file: {e}", f"File nahi khuli: {e}"))
             return
         added = 0; skipped = 0
+        fmt = [v.get() for v in getattr(self, "imp_fmt", [])]
+        auto = bool(getattr(self, "imp_auto", None) is None or self.imp_auto.get())
+        save_settings({"import_fmt": fmt, "import_auto": auto})
+        group = getattr(self, "imp_group", None) and self.imp_group.get().strip()
+        new_ids = []
         for raw in lines:
-            r = parse_account_line(raw)
-            if not r or not r[1]:
-                if raw.strip():
-                    skipped += 1
-                continue
-            email, password, twofa, rest = r
-            name = rest[0] if rest else (email.split("@")[0] if "@" in email else email)
-            page = rest[1] if len(rest) > 1 else ""
-            ixp = rest[2] if len(rest) > 2 else ""
-            proxy = rest[3] if len(rest) > 3 else ""
-            add_account(name, email, password, page, proxy, ixp, "", twofa)
+            extra = {}
+            if auto or not fmt:
+                r = parse_account_line(raw)
+                if not r or not r[1]:
+                    if raw.strip():
+                        skipped += 1
+                    continue
+                email, password, twofa, rest = r
+                name = rest[0] if rest else (email.split("@")[0] if "@" in email else email)
+                page = rest[1] if len(rest) > 1 else ""
+                ixp = rest[2] if len(rest) > 2 else ""
+                proxy = rest[3] if len(rest) > 3 else ""
+            else:
+                d = parse_with_format(raw, fmt)
+                if not d:
+                    continue
+                email = d.get("Email") or d.get("UID") or ""
+                password = d.get("Pass", "")
+                if not email or not password:
+                    skipped += 1; continue
+                twofa = d.get("2FA", "")
+                name = d.get("Name") or (email.split("@")[0] if "@" in email else email)
+                page = ixp = proxy = ""
+                if d.get("UID"):
+                    extra["uid"] = d["UID"]
+                if d.get("Email2"):
+                    extra["email2"] = d["Email2"]
+            aid = add_account(name, email, password, page, proxy, ixp, "", twofa)
+            extra["last_update"] = _now_str()[:16]
+            if group:
+                extra["group"] = group
+            update_account(aid, **extra)
+            new_ids.append(aid)
             added += 1
+        if new_ids and getattr(self, "imp_profiles", None) and self.imp_profiles.get():
+            profiles_auto_assign(set(new_ids))
+            self._refresh_profiles_cb()
         self._refresh_all_panels()
         messagebox.showinfo(T("Import", "Import"), T(f"{added} IDs added, {skipped} skipped (no email/password).", f"{added} IDs add hui, {skipped} skip (email/password nahi mili)."))
         self.log_q.put(T(f"Bulk import: {added} added, {skipped} skipped.", f"Bulk import: {added} added, {skipped} skipped."))
@@ -6451,6 +6845,19 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
 
     # ---------- Guide page (in-app help, English) ----------
     GUIDE_TEXT = """
+ACCOUNTS (Bob Prime style):
+ - Table columns: No, Profile, Name, UID, Email, Email2, Pass, 2FA, Primary
+   location, Creation date, IP location, Status (Live / Checkpoint / Disabled /
+   Suspended / Die), Last update, Group, Country, DOB, Gender, Pages.
+ - Right-click a row: Open browser, Edit, Select/Unselect, Set group, Export,
+   Delete. Group filter + Search at the top. Export ▾ = FULL (Excel/CSV),
+   TXT (email|pass|2fa|uid|name) or UID — of ticked IDs (or all).
+ - ADD ACCOUNTS: choose the column order (e.g. UID | Pass | 2FA | Email |
+   Email2) or Auto-detect, optional Group → "Choose .txt & ADD NOW".
+   Each ID goes into its own browser profile (P001, P002 …).
+ - Browser profiles: "Create profiles" (e.g. 10), "Auto-assign IDs → profiles".
+ - UID is saved automatically after login. Edit any field in "Add / edit ID".
+
 CONTENT SOURCES (sidebar):
  - Main media folder: make one folder, inside it one folder per page with the
    page's name (e.g. "Funny Cats Page"). "Match folders to pages" — Posting and
@@ -6711,8 +7118,9 @@ downloads and replaces itself, then restarts. No manual download needed.
         def _zoom_now(e=None):
             try:
                 save_settings({"ui_zoom": int(self.set_zoom.get().rstrip("%")) / 100.0})
-                messagebox.showinfo("Text size", T("Saved. Close and reopen the app to apply.",
-                                                   "Save ho gaya. App band kar ke dobara kholein."))
+                if messagebox.askyesno("Text size", T("Saved. Restart the app now to apply the new size?",
+                                                      "Save ho gaya. Naya size lagane ke liye app abhi restart karein?")):
+                    self._restart_app()
             except Exception:
                 pass
         zc.bind("<<ComboboxSelected>>", _zoom_now)
