@@ -5326,6 +5326,7 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         self._build_guide_page()
         self._build_logbar()
         self._show("Dashboard")
+        self.after(300, lambda: self.state("zoomed") if os.name == "nt" else None)   # hamesha poori screen
         self.bind_all("<Control-z>", lambda e: self._undo_delete())
 
         if not PLAYWRIGHT_OK:
