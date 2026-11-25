@@ -3823,6 +3823,15 @@ class ApiPagesMixin:
 # ============================================================
 # PRO DARK UI — sidebar, header, dashboard, proxy manager, logs
 # ============================================================
+def ui_zoom():
+    """Text/screen size (Settings → Text size). 1.0 = 100%."""
+    try:
+        z = float(load_settings().get("ui_zoom", 1.5))
+        return min(2.5, max(0.8, z))
+    except Exception:
+        return 1.5
+
+
 PAL = {"bg": "#0b1220", "side": "#0a101c", "panel": "#111a2b", "panel2": "#16213a", "border": "#22304d",
        "text": "#e5edf7", "muted": "#8ea0bd", "accent": "#22c3e6", "accent2": "#1aa6c6",
        "ok": "#34d399", "warn": "#fbbf24", "bad": "#f87171", "field": "#0e1626"}
@@ -3877,7 +3886,7 @@ def apply_dark_theme(root, style):
     style.map("TCombobox", fieldbackground=[("readonly", P["field"])], foreground=[("readonly", P["text"])],
               selectbackground=[("readonly", P["field"])])
     style.configure("Treeview", background=P["panel"], fieldbackground=P["panel"], foreground=P["text"],
-                    rowheight=32, font=("Segoe UI", 11), bordercolor=P["border"])
+                    rowheight=int(26 * ui_zoom()), font=("Segoe UI", 11), bordercolor=P["border"])
     style.map("Treeview", background=[("selected", "#1b3a5c")], foreground=[("selected", "#ffffff")])
     style.configure("Treeview.Heading", background=P["panel2"], foreground=P["muted"],
                     font=("Segoe UI", 10, "bold"), relief="flat", padding=6)
@@ -3903,7 +3912,7 @@ TITLES = {k: (sec, lab) for sec, items in NAV for k, lab, _ in items}
 class ProUIMixin:
     def _build_sidebar(self):
         P = PAL
-        side = tk.Frame(self, bg=P["side"], width=236)
+        side = tk.Frame(self, bg=P["side"], width=int(215 * ui_zoom()))
         side.pack(side="left", fill="y"); side.pack_propagate(False)
         brand = tk.Frame(side, bg=P["side"]); brand.pack(fill="x", padx=16, pady=(16, 10))
         tk.Label(brand, text="F", bg=P["accent2"], fg="white", font=("Segoe UI", 16, "bold"),
@@ -4208,13 +4217,19 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
         super().__init__()
         self.title("Facebook Uploader")
         self.geometry("1240x720")
+        try:
+            self.state("zoomed")          # poori screen par khule
+        except Exception:
+            pass
         self.minsize(1000, 600)
         try:
             self.iconphoto(True, self._make_logo(48, "#ffffff"))
         except Exception:
             pass
         try:
-            self.tk.call("tk", "scaling", 1.25)
+            # DPI ke hisaab se + user ka Text size
+            dpi = self.winfo_fpixels("1i")
+            self.tk.call("tk", "scaling", (dpi / 72.0) * ui_zoom())
         except Exception:
             pass
         style = ttk.Style(self)
@@ -4459,7 +4474,7 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
                                "(also works with :  ,  ;  space or tab — 2FA optional)",
                                "Text file, har line me aik ID:  email|password|2FA secret\n"
                                "(:  ,  ;  space ya tab bhi chalega — 2FA optional)"),
-                  foreground="#555").pack(anchor="w", padx=8)
+                  foreground="#8ea0bd").pack(anchor="w", padx=8)
 
         hb = ttk.Frame(left); hb.pack(fill="x", pady=6)
         ttk.Button(hb, text=T("IP check (selected)", "IP check (selected)"), command=self._check_ip_selected).pack(side="left")
@@ -4469,6 +4484,7 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
         self.acc_table = AccountPanel(f, self, on_start=None, show_delete=True, on_pick=self._load_account_into_form)
 
     def _scroll_area(self, parent, width=470, full=False):
+        width = int(width * ui_zoom() / 1.25)
         """Left side ko scroll wala banao (chhoti screen par sab nazar aaye)."""
         outer = ttk.Frame(parent)
         if full:
@@ -4814,7 +4830,7 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
                                "Daily limit is per page (in Accounts). Caption = page hashtags.",
                                "Videos har ID ke apne FOLDER se uthengi (Accounts mein set).\n"
                                "Daily limit har page ki apni (Accounts mein). Caption = page hashtags."),
-                  foreground="#555").pack(anchor="w", padx=8, pady=6)
+                  foreground="#8ea0bd").pack(anchor="w", padx=8, pady=6)
 
         self.post_panel = AccountPanel(f, self, on_start=self._start_post_batch, start_label="START")
 
@@ -4878,7 +4894,7 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
                                "These IDs will only scroll/like/comment etc. — they will NOT post anything.",
                                "Table me IDs ✔ karein, phir START dabayein.\n"
                                "Ye IDs sirf scroll/like/comment karengi — koi POSTING nahi hogi."),
-                  foreground="#555").pack(anchor="w", padx=8, pady=(4, 2))
+                  foreground="#8ea0bd").pack(anchor="w", padx=8, pady=(4, 2))
         self.active_vars = {}
         saved = load_active_settings()
 
@@ -4959,7 +4975,7 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
         ttk.Entry(gpr, textvariable=self._gp_txt, width=24).pack(side="left", padx=4)
         ttk.Label(grid, text=T("Groups: bot writes relevant comments & skips hate/nudity (AI key in Settings = better).",
                                "Groups: bot relevant comment likhta hai aur hate/nudity skip karta hai (AI key = behtar)."),
-                  foreground="#555").pack(anchor="w", padx=8, pady=(2, 0))
+                  foreground="#8ea0bd").pack(anchor="w", padx=8, pady=(2, 0))
 
         opt = ttk.Frame(grid); opt.pack(fill="x", padx=6, pady=4)
         ttk.Label(opt, text="Loops:").pack(side="left")
@@ -5041,7 +5057,7 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
         ttk.Button(fr, text="...", width=3, command=self._ldw_pick_folder).pack(side="left")
         ttk.Label(right, text=T("Pick once — it stays saved. Videos auto-push to each LD and auto-select.",
                                 "Aik dafa chunein — save rehta hai. Videos khud LD me push + auto-select hoti hain."),
-                  foreground="#555").pack(anchor="w", padx=8)
+                  foreground="#8ea0bd").pack(anchor="w", padx=8)
         gp = ttk.Frame(right); gp.pack(fill="x", padx=8, pady=2)
         ttk.Label(gp, text=T("Page (for reels/page post):", "Page (reel/page post ke liye):")).pack(side="left")
         self.ldw_page = tk.StringVar(value=s.get("ldw_page", ""))
@@ -5067,7 +5083,7 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
         ttk.Button(act, text="STOP (work)", command=lambda: self.ld_stop.set()).pack(side="left", padx=6)
         ttk.Label(act, text=T("Working runs independently from the web Post tab — both can run together.",
                               "Working web Post tab se alag chalta hai — dono aik saath chal sakte hain."),
-                  foreground="#555").pack(side="left", padx=10)
+                  foreground="#8ea0bd").pack(side="left", padx=10)
         self._ldw_instances = []
 
     def _ld_bulk(self, what):
@@ -5512,7 +5528,7 @@ downloads and replaces itself, then restarts. No manual download needed.
         self.update_lbl.pack(side="left", padx=6)
         ttk.Label(upd, text=T("One click checks GitHub and updates — no need to re-download.",
                               "Aik click GitHub se check kar ke update kar deta hai — dobara download nahi."),
-                  foreground="#555").pack(anchor="w", padx=10, pady=(0, 6))
+                  foreground="#8ea0bd").pack(anchor="w", padx=10, pady=(0, 6))
 
         lang = ttk.LabelFrame(f, text="Language")
         lang.pack(fill="x", padx=12, pady=(12, 0))
@@ -5522,7 +5538,20 @@ downloads and replaces itself, then restarts. No manual download needed.
         ttk.Combobox(lr0, textvariable=self.set_lang_disp, values=["English", "Roman Urdu"],
                      width=14, state="readonly").pack(side="left", padx=6)
         ttk.Label(lr0, text=T("(applies after restart)", "(tabdeeli restart ke baad)"),
-                  foreground="#555").pack(side="left")
+                  foreground="#8ea0bd").pack(side="left")
+        ttk.Label(lr0, text=T("   Text size:", "   Text size:")).pack(side="left")
+        self.set_zoom = tk.StringVar(value=f"{int(round(ui_zoom() * 100))}%")
+        zc = ttk.Combobox(lr0, textvariable=self.set_zoom, width=6, state="readonly",
+                          values=("100%", "125%", "150%", "175%", "200%", "225%"))
+        zc.pack(side="left", padx=4)
+        def _zoom_now(e=None):
+            try:
+                save_settings({"ui_zoom": int(self.set_zoom.get().rstrip("%")) / 100.0})
+                messagebox.showinfo("Text size", T("Saved. Close and reopen the app to apply.",
+                                                   "Save ho gaya. App band kar ke dobara kholein."))
+            except Exception:
+                pass
+        zc.bind("<<ComboboxSelected>>", _zoom_now)
 
         box = ttk.LabelFrame(f, text=T("Browser (default: FB Browser — built-in)", "Browser (default: FB Browser — built-in)"))
         box.pack(fill="x", padx=12, pady=12)
@@ -5563,7 +5592,7 @@ downloads and replaces itself, then restarts. No manual download needed.
         ttk.Checkbutton(lr, text=T("Enable ixBrowser daily limit:", "ixBrowser roz ki limit lagao:"), variable=self.set_ix_limit_on).pack(side="left")
         self.set_ix_max = tk.StringVar(value=str(s.get("ix_max_per_day", 10)))
         tk.Spinbox(lr, from_=1, to=1000, textvariable=self.set_ix_max, width=6).pack(side="left", padx=4)
-        ttk.Label(lr, text=T("profiles/day (OFF = no limit)", "profile/din (OFF = koi limit nahi)"), foreground="#555").pack(side="left")
+        ttk.Label(lr, text=T("profiles/day (OFF = no limit)", "profile/din (OFF = koi limit nahi)"), foreground="#8ea0bd").pack(side="left")
 
         # AI (relevant comments + hate/nudity skip)
         aib = ttk.LabelFrame(f, text=T("AI (smart comments + skip hate/nudity)",
@@ -5597,14 +5626,7 @@ downloads and replaces itself, then restarts. No manual download needed.
                               "Pick a provider above, paste its free key. Used for relevant comments + hate/nudity skip.",
                               "FREE keys: Groq → console.groq.com/keys  |  Gemini → aistudio.google.com/apikey\n"
                               "Upar provider chunein, uski free key paste karein. Relevant comments + hate/nudity skip ke liye."),
-                  foreground="#555").pack(anchor="w", padx=10, pady=(0, 6))
-
-    def _ai_apply_preset(self):
-        name = self.set_ai_provider.get()
-        if name in self._ai_presets:
-            base, model = self._ai_presets[name]
-            self.set_ai_base.set(base)
-            self.set_ai_model.set(model)
+                  foreground="#8ea0bd").pack(anchor="w", padx=10, pady=(0, 6))
 
         # Captcha solver
         cap = ttk.LabelFrame(f, text=T("Captcha solver", "Captcha solver"))
@@ -5622,7 +5644,7 @@ downloads and replaces itself, then restarts. No manual download needed.
                               "2captcha is only a fallback for image-selection (reCAPTCHA) captchas.",
                               "'Enter the characters' wala captcha built-in OCR free solve karta hai. "
                               "2captcha sirf reCAPTCHA (tasveer chunne wale) ke liye backup hai."),
-                  foreground="#555").pack(anchor="w", padx=10, pady=(0, 4))
+                  foreground="#8ea0bd").pack(anchor="w", padx=10, pady=(0, 4))
 
         # Our own API keys (doosre software ke liye)
         ap = ttk.LabelFrame(f, text=T("Your OCR API keys (use in other software)",
@@ -5643,7 +5665,7 @@ downloads and replaces itself, then restarts. No manual download needed.
                              "Returns JSON: {{\"text\": \"solved\"}}. Server starts when at least one key exists (restart after first key).",
                              f"Local API: POST http://127.0.0.1:{port}/solve  header X-API-Key, body = captcha image.\n"
                              "JSON return: {{\"text\": \"solved\"}}. Pehli key banane ke baad restart par server chalu."),
-                  foreground="#555").pack(anchor="w", padx=10, pady=(0, 6))
+                  foreground="#8ea0bd").pack(anchor="w", padx=10, pady=(0, 6))
         self.set_compat80 = tk.IntVar(value=1 if s.get("captcha_compat80") else 0)
         ttk.Checkbutton(ap, text=T("2captcha-compatible mode on port 80 (for Bomb Prime etc.) — needs admin + hosts file",
                                    "2captcha-compatible mode port 80 par (Bomb Prime waghera ke liye) — admin + hosts file chahiye"),
@@ -5652,7 +5674,7 @@ downloads and replaces itself, then restarts. No manual download needed.
                              "add a line:  127.0.0.1  2captcha.com   3) In Bomb Prime use your generated key as the 2captcha key.",
                              "Tareeqa: 1) upar tick, Save, app ko Administrator se chalayein.  2) C:\\Windows\\System32\\drivers\\etc\\hosts\n"
                              "me line add karein:  127.0.0.1  2captcha.com   3) Bomb Prime me 2captcha key ki jagah apni generated key daalein."),
-                  foreground="#555").pack(anchor="w", padx=10, pady=(0, 6))
+                  foreground="#8ea0bd").pack(anchor="w", padx=10, pady=(0, 6))
 
         # Remote access from anywhere: Telegram + Tunnel
         rem = ttk.LabelFrame(f, text=T("Remote access (control from anywhere)",
@@ -5670,7 +5692,7 @@ downloads and replaces itself, then restarts. No manual download needed.
                               "then send /start to your bot. Commands: /status /log /accounts /post all reel 5 /active all 5 /stop",
                               "Telegram par @BotFather se bot banayein, uska token yahan paste karein, Save, app restart,\n"
                               "phir bot ko /start bhejein. Commands: /status /log /accounts /post all reel 5 /active all 5 /stop"),
-                  foreground="#555").pack(anchor="w", padx=10, pady=(0, 4))
+                  foreground="#8ea0bd").pack(anchor="w", padx=10, pady=(0, 4))
         self.set_tunnel_on = tk.IntVar(value=1 if s.get("tunnel_on") else 0)
         ttk.Checkbutton(rem, text=T("Public tunnel (needs cloudflared.exe next to the app) — gives a public link for the phone app",
                                     "Public tunnel (cloudflared.exe app ke paas ho) — phone app ke liye public link deta hai"),
@@ -5688,7 +5710,7 @@ downloads and replaces itself, then restarts. No manual download needed.
                              "Then use the LDPlayer tab to detect and control instances.",
                              "Aksar khud mil jata hai. Na mile to ldconsole.exe chunein (LDPlayer folder me). "
                              "Phir LDPlayer tab se instances detect/control karein."),
-                  foreground="#555").pack(anchor="w", padx=10, pady=(0, 6))
+                  foreground="#8ea0bd").pack(anchor="w", padx=10, pady=(0, 6))
 
         # Daily auto-upload
         da = ttk.LabelFrame(f, text=T("Daily auto-upload (runs automatically at this time)", "Daily auto-upload (roz isi time khud chale)"))
@@ -5731,11 +5753,18 @@ downloads and replaces itself, then restarts. No manual download needed.
                              "it opens on PC startup, then starts at the set time.",
                              "Note: Auto-upload tab chalega jab software khula ho. Auto-start on karne se "
                              "PC on hote hi khud khul jayega, phir time par kaam shuru."),
-                  foreground="#555").pack(anchor="w", padx=10)
+                  foreground="#8ea0bd").pack(anchor="w", padx=10)
 
         ttk.Button(box, text=T("Save settings", "Settings save"), command=self._save_settings).pack(anchor="e", padx=12, pady=8)
         ttk.Label(f, text=T("Hashtags and daily limit are now set per ID/page on the Accounts page.", "Hashtags, daily limit ab har ID/page ke saath Accounts page par set hote hain."),
-                  foreground="#555").pack(anchor="w", padx=14)
+                  foreground="#8ea0bd").pack(anchor="w", padx=14)
+
+    def _ai_apply_preset(self):
+        name = self.set_ai_provider.get()
+        if name in self._ai_presets:
+            base, model = self._ai_presets[name]
+            self.set_ai_base.set(base)
+            self.set_ai_model.set(model)
 
     def _refresh_api_keys(self):
         try:
