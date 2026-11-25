@@ -3022,11 +3022,80 @@ class Automation:
         self.log("2captcha timeout.")
         return None
 
+    def _find_iframe_el(self, kinds):
+        """Sab frames mein captcha iframe ELEMENT dhoondo (frame khud list na ho tab bhi)."""
+        sels = {"anchor": ["iframe[src*='anchor']", "iframe[title='reCAPTCHA' i]",
+                           "iframe[title*='reCAPTCHA' i]:not([title*='challenge' i])"],
+                "challenge": ["iframe[src*='bframe']", "iframe[title*='challenge' i]"]}[kinds]
+        for fr in self.page.frames:
+            for s in sels:
+                try:
+                    for el in fr.query_selector_all(s):
+                        b = el.bounding_box()
+                        if b and b["width"] > 50 and b["height"] > 40:
+                            return el, b
+                except Exception:
+                    continue
+        return None, None
+
+    def _click_xy(self, x, y):
+        self.page.mouse.move(x - random.randint(30, 90), y - random.randint(15, 45), steps=8)
+        time.sleep(random.uniform(0.1, 0.3))
+        self.page.mouse.move(x, y, steps=random.randint(6, 12))
+        time.sleep(random.uniform(0.05, 0.2))
+        self.page.mouse.click(x, y)
+
+    def _solve_recaptcha_by_position(self, key):
+        """Google frame list na ho to: iframe ki jagah par screen click + 2Captcha coordinates."""
+        import base64
+        import re
+        el, b = self._find_iframe_el("anchor")
+        if not el:
+            self.log(T("Captcha box not found on screen.", "Captcha box screen par nahi mila."))
+            return False
+        self.log(T("Captcha: clicking 'I'm not a robot' (by position)...",
+                   "Captcha: 'I'm not a robot' click (jagah se)..."))
+        self._click_xy(b["x"] + min(30, b["width"] * 0.1), b["y"] + b["height"] / 2)
+        time.sleep(5)
+        for rnd in range(8):
+            ch, cb = self._find_iframe_el("challenge")
+            if not ch:
+                # challenge nahi aaya -> tick lag gaya (ya page aage barh gaya)
+                self.log(T("Captcha ticked in the browser.", "Captcha browser mein tick ho gaya."))
+                return True
+            try:
+                png = ch.screenshot()
+            except Exception:
+                time.sleep(2); continue
+            self.log(T(f"Captcha images → 2Captcha (round {rnd + 1})...",
+                       f"Captcha tasveerein → 2Captcha (round {rnd + 1})..."))
+            ans = self._twocap(key, {"method": "base64", "body": base64.b64encode(png).decode(),
+                                     "coordinatescaptcha": 1,
+                                     "textinstructions": "Follow the instruction in the blue header and click every matching "
+                                                         "image tile. If none match, click the Skip/Verify button."},
+                               wait_secs=120)
+            if ans is None:
+                time.sleep(2); continue
+            pts = re.findall(r"x=(\d+),y=(\d+)", ans)
+            for xs, ys in pts:
+                self._click_xy(cb["x"] + int(xs), cb["y"] + int(ys))
+                time.sleep(random.uniform(0.3, 0.8))
+            time.sleep(1.5)
+            # Verify/Skip button (challenge ke neeche daayen)
+            ch2, cb2 = self._find_iframe_el("challenge")
+            if ch2:
+                self._click_xy(cb2["x"] + cb2["width"] - 50, cb2["y"] + cb2["height"] - 28)
+            time.sleep(5)
+            if not self._find_iframe_el("challenge")[0]:
+                self.log(T("Captcha passed in the browser.", "Captcha browser mein pass ho gaya."))
+                return True
+        return False
+
     def _solve_recaptcha_click(self, key):
         import base64
         anchor, bframe = self._cap_frames()
         if not anchor:
-            return False
+            return self._solve_recaptcha_by_position(key)
         try:
             cb = anchor.wait_for_selector("#recaptcha-anchor", timeout=8000)
         except Exception:
@@ -3109,7 +3178,7 @@ class Automation:
         key = (load_settings().get("captcha_key") or "").strip()
         if key:
             anchor, _ = self._cap_frames()
-            if anchor:
+            if anchor or self._find_iframe_el("anchor")[0]:
                 try:
                     if self._solve_recaptcha_click(key):
                         time.sleep(2)
