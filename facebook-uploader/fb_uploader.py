@@ -5683,6 +5683,7 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         self._build_guide_page()
         self._build_logbar()
         self._show("Dashboard")
+        self.after(60 * 1000, self._auto_update_tick)      # khud update (default ON)
         self.after(300, lambda: self.state("zoomed") if os.name == "nt" else None)   # hamesha poori screen
         self.bind_all("<Control-z>", lambda e: self._undo_delete())
 
@@ -6227,6 +6228,35 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
                 pass
         self._clear_form()
         self._refresh_all_panels()
+
+    def _busy(self):
+        """Koi kaam (posting/active/login) chal raha hai?"""
+        try:
+            return any(t.is_alive() for t in self.workers)
+        except Exception:
+            return False
+
+    def _auto_update_tick(self):
+        """Har 15 min: nayi version ho aur koi kaam na chal raha ho to KHUD update + restart."""
+        def work():
+            try:
+                if not load_settings().get("auto_update", True) or not getattr(sys, "frozen", False):
+                    return
+                has, latest, _ = check_update()
+                if not has:
+                    return
+                if self._busy():
+                    self.log_q.put(T(f"Update {latest} ready — will install when current work finishes.",
+                                     f"Update {latest} tayyar — kaam khatam hote hi lagegi."))
+                    return
+                self.log_q.put(T(f"Auto-update: installing {latest}...", f"Auto-update: {latest} lag rahi hai..."))
+                res = do_update(log=lambda m: self.log_q.put(m))
+                if res == "restart_exe":
+                    self.after(0, lambda: (self.destroy(), os._exit(0)))
+            except Exception as e:
+                self.log_q.put(f"auto-update: {e}")
+        threading.Thread(target=work, daemon=True).start()
+        self.after(15 * 60 * 1000, self._auto_update_tick)
 
     def _restart_app(self):
         """App band kar ke khud dobara kholo."""
@@ -7294,6 +7324,10 @@ downloads and replaces itself, then restarts. No manual download needed.
                    command=self._check_update_click).pack(side="left", padx=10)
         self.update_lbl = ttk.Label(ur, text="", foreground="#06c")
         self.update_lbl.pack(side="left", padx=6)
+        self.set_auto_upd = tk.IntVar(value=1 if s.get("auto_update", True) else 0)
+        ttk.Checkbutton(ur, text=T("Auto-update (install new versions by itself)", "Auto-update (nayi version khud lagao)"),
+                        variable=self.set_auto_upd,
+                        command=lambda: save_settings({"auto_update": bool(self.set_auto_upd.get())})).pack(side="left", padx=12)
         ttk.Label(upd, text=T("One click checks GitHub and updates — no need to re-download.",
                               "Aik click GitHub se check kar ke update kar deta hai — dobara download nahi."),
                   foreground="#8ea0bd").pack(anchor="w", padx=10, pady=(0, 6))
