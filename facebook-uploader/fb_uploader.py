@@ -3043,6 +3043,62 @@ class Automation:
                 self.log(f"    copyright cleanup: {e}")
         return removed
 
+    def act_checkin_post(self, caption="", photo_folder="", with_photo=False):
+        """Profile par CHECK-IN post: location = IP wali city (US), optional photo + caption."""
+        acc = get_account(self.current_acc["id"]) or self.current_acc
+        info = acc.get("ip_info") or {}
+        city = info.get("city") or ""
+        place = ", ".join(x for x in (city, info.get("regionName", "")) if x)
+        photo = ""
+        if with_photo and photo_folder and os.path.isdir(photo_folder):
+            used = self._done_set("checkin_photos")
+            pics = [p for p in list_media_in_folder(photo_folder, "photo") if os.path.basename(p) not in used]
+            if pics:
+                photo = random.choice(pics)
+        self.log(T(f"  • Check-in post: {place or '(no IP city)'}" + (f" + photo {os.path.basename(photo)}" if photo else ""),
+                   f"  • Check-in post: {place or '(IP city nahi)'}" + (f" + photo {os.path.basename(photo)}" if photo else "")))
+        try:
+            self.page.goto(FB_HOME, wait_until="domcontentloaded"); time.sleep(random.uniform(4, 7))
+            if not self._click_button(["What's on your mind", "Create a post", "Create post"]):
+                el = self.page.query_selector("div[role='button']:has-text(\"What's on your mind\")")
+                if el:
+                    el.click()
+            time.sleep(3)
+            if photo:
+                fi = self._find_file_input(media="image")
+                if not fi:
+                    self._click_button(["Photo/video", "Photo/Video"]); time.sleep(2)
+                    fi = self._find_file_input(media="image")
+                if fi:
+                    fi.set_input_files(photo); time.sleep(6)
+            if place:
+                if self._click_button(["Check in", "Check In", "Check-in"]):
+                    time.sleep(3)
+                    box = self.page.query_selector("input[placeholder*='Where are you' i]") or \
+                        self.page.query_selector("input[aria-label*='Search' i][type='search']") or \
+                        self.page.query_selector("[role='dialog'] input[type='text']")
+                    if box:
+                        box.click(); box.type(city or place, delay=60); time.sleep(4)
+                        opt = self.page.query_selector("[role='dialog'] [role='listbox'] [role='option'], "
+                                                       "[role='dialog'] ul [role='button']")
+                        if opt:
+                            opt.click(); time.sleep(3)
+                        else:
+                            self.page.keyboard.press("Enter"); time.sleep(3)
+            if caption:
+                self._fill_caption(spin(caption))
+            time.sleep(2)
+            ok = self._click_button(["Post", "Share now", "Share"])
+            time.sleep(6)
+            if ok and photo:
+                self._mark_done("checkin_photos", os.path.basename(photo))
+            self.log(T(f"    check-in post {'done ✔' if ok else 'not confirmed'}",
+                       f"    check-in post {'ho gayi ✔' if ok else 'confirm nahi hui'}"))
+            return ok
+        except Exception as e:
+            self.log(f"    check-in error: {e}")
+            return False
+
     def run_active(self, s, stop_check=None):
         """Warm-up / Active. Har ID (har browser) ka apna RANDOM plan:
         kaamon ki tarteeb, ginti aur waqfe sab alag — taake insaan jaisa lage."""
@@ -3079,6 +3135,10 @@ class Automation:
             if s.get("comments", {}).get("on"):
                 tasks.append(("comments", lambda: self.act_comments(cnt(s["comments"].get("count", 1)),
                                                                      s["comments"].get("text", ""))))
+            if s.get("checkin", {}).get("on"):
+                ck = s["checkin"]
+                tasks.append(("check-in post", lambda: self.act_checkin_post(ck.get("caption", ""), ck.get("folder", ""),
+                                                                            bool(ck.get("photo")))))
             if s.get("add_friends", {}).get("on"):
                 tasks.append(("add friends", lambda: self.act_add_friends_suggest(cnt(s["add_friends"].get("count", 3)))))
             if s.get("add_friends_uid", {}).get("on"):
@@ -3968,9 +4028,10 @@ def api_caption_for(page, file_path):
             pass
     if not cap and mode in ("auto", "filename") and file_path:
         cap = os.path.splitext(os.path.basename(file_path))[0].replace("_", " ").strip()
+    from_side = bool(cap)
     if not cap:
         cap = page.get("fallback", "")
-    tags = get_hashtags_for_page(page.get("name", ""))
+    tags = "" if from_side else get_hashtags_for_page(page.get("name", ""))
     if tags:
         cap = (cap + "\n\n" + tags).strip()
     return cap
@@ -3981,7 +4042,11 @@ def api_next_file(page):
     import random as _r
     kind = page.get("kind", "reel")
     files = []
-    for fo in page.get("folders", []):
+    fos = list(page.get("folders", []))
+    pfo = page_media_folder(page.get("name", ""))
+    if pfo and pfo not in fos:
+        fos.append(pfo)
+    for fo in fos:
         files += list_media_in_folder(fo, "photo" if kind == "photo" else "video")
     key = "API:" + page["id"]
     fresh = [f for f in files if not is_uploaded(key, file_hash(f) or f)]
@@ -4397,7 +4462,7 @@ def apply_dark_theme(root, style):
 
 NAV = [("WORKSPACE", [("Dashboard", "Dashboard", "▦"), ("Accounts", "Accounts", "👤"),
                       ("Proxy", "Proxy Management", "⇄")]),
-       ("AUTOMATION", [("Post", "Posting (browser)", "⚡"), ("API", "API Pages", "☁"),
+       ("AUTOMATION", [("Sources", "Content Sources", "⬇"), ("Post", "Posting (browser)", "⚡"), ("API", "API Pages", "☁"),
                        ("Interact", "Active & Groups", "♥"), ("Schedule", "Schedule", "⏱"),
                        ("LDPlayer", "LDPlayer (mobile)", "📱")]),
        ("SYSTEM", [("Logs", "Logs", "≡"), ("Settings", "System Settings", "⚙"), ("Guide", "Guide", "?")])]
@@ -4478,6 +4543,8 @@ class ProUIMixin:
             self._proxy_refresh()
         elif name == "Logs":
             self._logs_refresh()
+        elif name == "Sources":
+            self._src_refresh()
 
     def _build_statusbar(self):
         P = PAL
@@ -4795,7 +4862,292 @@ class ProUIMixin:
         self.lg_act.insert("end", "\n".join(self.log_buffer[-300:]))
 
 
-class App(ProUIMixin, ApiPagesMixin, tk.Tk):
+# ============================================================
+# CONTENT SOURCES — page ke naam wale folders + TikTok creator se HD videos
+# ============================================================
+def _norm_name(s):
+    import re as _re
+    return _re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+def media_root():
+    return (load_settings().get("media_root") or "").strip()
+
+
+def page_media_folder(page_name):
+    """Page ka folder: (1) khud chuna hua mapping, (2) media root mein page ke naam wala folder."""
+    mp = load_settings().get("page_folders", {})
+    if page_name in mp and os.path.isdir(mp[page_name]):
+        return mp[page_name]
+    root = media_root()
+    if root and os.path.isdir(root) and page_name:
+        want = _norm_name(page_name)
+        try:
+            subs = [d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d))]
+        except Exception:
+            subs = []
+        for d in subs:
+            if _norm_name(d) == want:
+                return os.path.join(root, d)
+        for d in subs:                         # thora sa farq bhi chal jaye
+            nd = _norm_name(d)
+            if nd and (nd in want or want in nd):
+                return os.path.join(root, d)
+    return ""
+
+
+def page_files(page_name, kind):
+    fo = page_media_folder(page_name)
+    return list_media_in_folder(fo, "photo" if kind == "photo" else "video") if fo else []
+
+
+def sidecar_caption(path):
+    """Video ke sath same naam ki .txt ho to wahi caption."""
+    try:
+        side = os.path.splitext(path)[0] + ".txt"
+        if os.path.isfile(side):
+            return open(side, encoding="utf-8", errors="ignore").read().strip()
+    except Exception:
+        pass
+    return ""
+
+
+def clean_caption(text, max_tags=4):
+    """Caption: text wahi, hashtags zyada se zyada max_tags (pehle wale)."""
+    import re as _re
+    text = text or ""
+    tags = []
+    for t in _re.findall(r"#[^\s#]+", text):
+        if t.lower() not in [x.lower() for x in tags]:
+            tags.append(t)
+    body = _re.sub(r"#[^\s#]+", "", text)
+    body = _re.sub(r"[ \t]+", " ", body).strip()
+    return (body + ("\n\n" if body and tags else "") + " ".join(tags[:max_tags])).strip()
+
+
+def sources_list():
+    return load_settings().get("content_sources", [])
+
+
+def sources_save(lst):
+    save_settings({"content_sources": lst})
+
+
+def fetch_tiktok(src, log=print, stop=None):
+    """TikTok creator (ya playlist/video link) se nayi videos HD mein page ke folder mein.
+    Har video ke sath .txt caption (max 4 hashtags). Return kitni nayi aayin."""
+    try:
+        import yt_dlp
+    except Exception:
+        log(T("Installing video downloader (yt-dlp)...", "Video downloader (yt-dlp) install ho raha hai..."))
+        subprocess.run([sys.executable, "-m", "pip", "install", "-U", "yt-dlp"], check=False, **_NOWIN)
+        import yt_dlp
+    page = src.get("page", "")
+    folder = src.get("folder") or page_media_folder(page)
+    if not folder:
+        root = media_root() or os.path.join(DATA_DIR, "media")
+        folder = os.path.join(root, page or "downloads")
+    os.makedirs(folder, exist_ok=True)
+    archive = os.path.join(folder, ".downloaded.txt")
+    max_n = int(src.get("max", 10) or 10)
+    got = []
+
+    def hook(d):
+        if d.get("status") == "finished":
+            got.append(d.get("filename"))
+
+    opts = {
+        "outtmpl": os.path.join(folder, "%(upload_date)s_%(id)s.%(ext)s"),
+        "format": "best[vcodec^=h264][ext=mp4]/best[ext=mp4]/best",
+        "download_archive": archive, "playlistend": max_n * 3, "max_downloads": max_n,
+        "quiet": True, "no_warnings": True, "noprogress": True, "ignoreerrors": True,
+        "writeinfojson": False, "progress_hooks": [hook], "retries": 3,
+    }
+    log(T(f"[Source] {page}: fetching TikTok {src.get('url')} ...", f"[Source] {page}: TikTok se la rahe hain {src.get('url')} ..."))
+    n_new = 0
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(src["url"], download=True)
+            entries = (info or {}).get("entries") or ([info] if info else [])
+            for e in entries:
+                if not e or (stop and stop()):
+                    continue
+                fn = None
+                try:
+                    fn = ydl.prepare_filename(e)
+                except Exception:
+                    pass
+                if fn and os.path.isfile(fn):
+                    side = os.path.splitext(fn)[0] + ".txt"
+                    if not os.path.isfile(side):
+                        cap = clean_caption(e.get("description") or e.get("title") or "", int(src.get("max_tags", 4) or 4))
+                        with open(side, "w", encoding="utf-8") as f:
+                            f.write(cap)
+                        n_new += 1
+    except Exception as e:
+        if "MaxDownloadsReached" not in e.__class__.__name__:
+            log(f"[Source] {page}: {e}")
+    src["last"] = time.strftime("%Y-%m-%d %H:%M"); src["last_new"] = n_new; src["folder"] = folder
+    log(T(f"[Source] {page}: {n_new} new video(s) → {folder}", f"[Source] {page}: {n_new} nayi video(s) → {folder}"))
+    return n_new
+
+
+def sources_auto_loop(log, stop_event):
+    """Har X ghante TikTok sources se nayi videos."""
+    while not stop_event.is_set():
+        try:
+            s = load_settings()
+            hrs = float(s.get("sources_every_h", 0) or 0)
+            if hrs > 0:
+                lst = sources_list(); changed = False
+                for src in lst:
+                    last = src.get("last_ts", 0)
+                    if time.time() - last >= hrs * 3600:
+                        fetch_tiktok(src, log); src["last_ts"] = time.time(); changed = True
+                if changed:
+                    sources_save(lst)
+        except Exception as e:
+            log(f"[Source] auto: {e}")
+        stop_event.wait(300)
+
+
+class SourcesMixin:
+    def _build_sources_page(self):
+        f = self._scroll_area(self.pages["Sources"], full=True)
+        top = ttk.LabelFrame(f, text=T("PAGE FOLDERS — one main folder, inside it a folder for each page (same name as the page)",
+                                       "PAGE FOLDERS — ek main folder, andar har page ke naam ka folder"))
+        top.pack(fill="x", padx=20, pady=6)
+        r = ttk.Frame(top); r.pack(fill="x", padx=6, pady=4)
+        ttk.Label(r, text=T("Main media folder:", "Main media folder:")).pack(side="left")
+        self.src_root = tk.StringVar(value=media_root())
+        ttk.Entry(r, textvariable=self.src_root, width=60).pack(side="left", padx=4, fill="x", expand=True)
+        ttk.Button(r, text="...", width=3, command=self._src_pick_root).pack(side="left")
+        ttk.Button(r, text=T("Match folders to pages", "Folders pages se milao"), style="Accent.TButton",
+                   command=self._src_match).pack(side="left", padx=4)
+        self.src_map = ttk.Treeview(top, columns=("page", "folder", "files"), show="headings", height=5)
+        for c, t_, w in (("page", "Page", 260), ("folder", "Folder (auto)", 520), ("files", "Videos", 90)):
+            self.src_map.heading(c, text=t_); self.src_map.column(c, width=w, anchor="w")
+        self.src_map.pack(fill="x", padx=6, pady=4)
+        mb = ttk.Frame(top); mb.pack(fill="x", padx=6, pady=(0, 4))
+        ttk.Button(mb, text=T("Set folder for selected page", "Selected page ka folder chuno"),
+                   command=self._src_set_folder).pack(side="left")
+        ttk.Label(mb, text=T("Posting + API Pages take videos from these folders automatically.",
+                             "Posting + API Pages in folders se videos khud uthate hain."), style="Muted.TLabel").pack(side="left", padx=8)
+
+        tk_ = ttk.LabelFrame(f, text=T("TIKTOK CREATORS → download HD → upload with caption (max 4 hashtags)",
+                                       "TIKTOK CREATORS → HD download → caption ke sath upload (max 4 hashtags)"))
+        tk_.pack(fill="x", padx=20, pady=6)
+        a = ttk.Frame(tk_); a.pack(fill="x", padx=6, pady=4)
+        ttk.Label(a, text=T("Page:", "Page:")).pack(side="left")
+        self.src_page = tk.StringVar()
+        self.src_page_cb = ttk.Combobox(a, textvariable=self.src_page, width=26)
+        self.src_page_cb.pack(side="left", padx=4)
+        ttk.Label(a, text=T("TikTok link:", "TikTok link:")).pack(side="left")
+        self.src_url = tk.StringVar()
+        ttk.Entry(a, textvariable=self.src_url, width=40).pack(side="left", padx=4, fill="x", expand=True)
+        ttk.Label(a, text=T("Max/fetch:", "Max/fetch:")).pack(side="left")
+        self.src_max = tk.StringVar(value="10")
+        tk.Spinbox(a, from_=1, to=100, textvariable=self.src_max, width=4).pack(side="left", padx=3)
+        ttk.Button(a, text=T("Add", "Add"), command=self._src_add).pack(side="left", padx=4)
+        self.src_tree = ttk.Treeview(tk_, columns=("page", "url", "max", "last", "new"), show="headings", height=5)
+        for c, t_, w in (("page", "Page", 220), ("url", "TikTok link", 420), ("max", "Max", 60),
+                         ("last", "Last fetch", 150), ("new", "New", 60)):
+            self.src_tree.heading(c, text=t_); self.src_tree.column(c, width=w, anchor="w")
+        self.src_tree.pack(fill="both", expand=True, padx=6, pady=4)
+        b = ttk.Frame(tk_); b.pack(fill="x", padx=6, pady=4)
+        ttk.Button(b, text=T("Fetch selected now", "Selected abhi lao"), command=lambda: self._src_fetch(True)).pack(side="left")
+        ttk.Button(b, text=T("Fetch all now", "Sab abhi lao"), command=lambda: self._src_fetch(False)).pack(side="left", padx=4)
+        ttk.Button(b, text=T("Remove", "Hatao"), command=self._src_remove).pack(side="left")
+        ttk.Label(b, text=T("   Auto fetch every", "   Har")).pack(side="left")
+        self.src_every = tk.StringVar(value=str(load_settings().get("sources_every_h", 0)))
+        tk.Spinbox(b, from_=0, to=72, textvariable=self.src_every, width=4,
+                   command=lambda: save_settings({"sources_every_h": self._iv(self.src_every.get())})).pack(side="left", padx=3)
+        ttk.Label(b, text=T("hours (0 = off)", "ghante (0 = band)")).pack(side="left")
+        ttk.Label(tk_, text=T("Use only your own creator accounts / content you have rights to.",
+                              "Sirf apne creator accounts / apna content use karein."), style="Muted.TLabel").pack(anchor="w", padx=8)
+        self._src_stop = threading.Event()
+        threading.Thread(target=sources_auto_loop, args=(lambda m: self.log_q.put(m), self._src_stop), daemon=True).start()
+
+    def _all_page_names(self):
+        names = []
+        for a in load_accounts():
+            for p in a.get("pages") or []:
+                if p.get("name") and p["name"] not in names:
+                    names.append(p["name"])
+            if a.get("page_name") and a["page_name"] not in names:
+                names.append(a["page_name"])
+        for p in api_load().get("pages", {}).values():
+            if p.get("name") and p["name"] not in names:
+                names.append(p["name"])
+        return names
+
+    def _src_refresh(self):
+        names = self._all_page_names()
+        self.src_page_cb.config(values=names)
+        self.src_map.delete(*self.src_map.get_children())
+        for i, n in enumerate(names):
+            fo = page_media_folder(n)
+            cnt = len(list_media_in_folder(fo, "video")) if fo else 0
+            self.src_map.insert("", "end", iid=f"p{i}", values=(n, fo or "—", cnt))
+        self.src_tree.delete(*self.src_tree.get_children())
+        for i, s_ in enumerate(sources_list()):
+            self.src_tree.insert("", "end", iid=str(i), values=(s_.get("page"), s_.get("url"), s_.get("max", 10),
+                                                                s_.get("last", "-"), s_.get("last_new", "-")))
+
+    def _src_pick_root(self):
+        d = filedialog.askdirectory()
+        if d:
+            self.src_root.set(d); save_settings({"media_root": d}); self._src_refresh()
+
+    def _src_match(self):
+        save_settings({"media_root": self.src_root.get().strip()})
+        # API pages ke folders bhi bhar do (agar khali)
+        n = 0
+        with _API_LOCK:
+            d = api_load()
+            for pid, p in d["pages"].items():
+                fo = page_media_folder(p.get("name", ""))
+                if fo and fo not in p.get("folders", []):
+                    p["folders"] = [fo] + list(p.get("folders", [])); n += 1
+            api_save(d)
+        self._src_refresh()
+        self.log_q.put(T(f"[Source] Folders matched. API pages updated: {n}", f"[Source] Folders mil gaye. API pages update: {n}"))
+
+    def _src_set_folder(self):
+        sel = self.src_map.selection()
+        if not sel:
+            return
+        page = self.src_map.set(sel[0], "page")
+        d = filedialog.askdirectory()
+        if d:
+            mp = load_settings().get("page_folders", {}); mp[page] = d
+            save_settings({"page_folders": mp}); self._src_refresh()
+
+    def _src_add(self):
+        page, url = self.src_page.get().strip(), self.src_url.get().strip()
+        if not page or not url.startswith("http"):
+            messagebox.showwarning("Source", T("Choose a page and paste a TikTok link.", "Page chuno aur TikTok link daalo."))
+            return
+        lst = sources_list()
+        lst.append({"page": page, "url": url, "max": self._iv(self.src_max.get()) or 10, "max_tags": 4})
+        sources_save(lst); self.src_url.set(""); self._src_refresh()
+
+    def _src_remove(self):
+        sel = {int(i) for i in self.src_tree.selection()}
+        sources_save([s_ for i, s_ in enumerate(sources_list()) if i not in sel]); self._src_refresh()
+
+    def _src_fetch(self, only_sel):
+        lst = sources_list()
+        idx = [int(i) for i in self.src_tree.selection()] if only_sel else list(range(len(lst)))
+
+        def work():
+            for i in idx:
+                fetch_tiktok(lst[i], lambda m: self.log_q.put(m)); lst[i]["last_ts"] = time.time()
+                sources_save(lst); self.after(0, self._src_refresh)
+        threading.Thread(target=work, daemon=True).start()
+
+
+class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("DK Facebook Uploader")
@@ -4868,7 +5220,7 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
         self.container = ttk.Frame(self.right)
         self.container.pack(fill="both", expand=True)
         self.pages = {}
-        for name in ("Dashboard", "Accounts", "Proxy", "Post", "API", "Interact", "LDPlayer", "Schedule",
+        for name in ("Dashboard", "Accounts", "Proxy", "Sources", "Post", "API", "Interact", "LDPlayer", "Schedule",
                      "Logs", "Settings", "Guide"):
             fr = ttk.Frame(self.container)
             fr.place(relx=0, rely=0, relwidth=1, relheight=1)
@@ -4876,6 +5228,7 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
         self._build_dashboard_page()
         self._build_accounts_page()
         self._build_proxy_page()
+        self._build_sources_page()
         self._build_logs_page()
         self._build_post_page()
         self._build_api_page()
@@ -5449,7 +5802,8 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
         jobs = []
         for a in accounts:
             files = list_media_in_folder(a.get("folder", ""), kind)
-            if files:
+            has_page_folder = any(page_files(t.get("name") or "", kind) for t in posting_targets(a))
+            if files or has_page_folder:
                 jobs.append((a, files))
             else:
                 self.log_q.put(T(f"[{a['name']}] folder not set/empty — skipped.", f"[{a['name']}] folder set/khali nahi — skip."))
@@ -5559,6 +5913,19 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
 
         list_row("add_friends_uid", T("Add friends (UID list)", "Friends add (UID list)"), 3, "UID / profile links .txt")
         list_row("follow_pages", T("Follow pages (list)", "Pages follow (list)"), 3, "Page links / IDs .txt")
+        ck = saved.get("checkin", {})
+        ckr = ttk.Frame(grid); ckr.pack(fill="x", padx=6, pady=2)
+        self._ck_on = tk.IntVar(value=1 if ck.get("on") else 0)
+        self._ck_photo = tk.IntVar(value=1 if ck.get("photo") else 0)
+        self._ck_cap = tk.StringVar(value=ck.get("caption", ""))
+        self._ck_folder = tk.StringVar(value=ck.get("folder", ""))
+        ttk.Checkbutton(ckr, text=T("Check-in post (IP city)", "Check-in post (IP city)"), variable=self._ck_on,
+                        width=20).pack(side="left")
+        ttk.Entry(ckr, textvariable=self._ck_cap, width=18).pack(side="left", padx=2)
+        ttk.Checkbutton(ckr, text=T("+ photo", "+ photo"), variable=self._ck_photo).pack(side="left", padx=2)
+        ttk.Entry(ckr, textvariable=self._ck_folder, width=12).pack(side="left", padx=2)
+        ttk.Button(ckr, text="...", width=3, command=lambda: self._ck_folder.set(
+            filedialog.askdirectory() or self._ck_folder.get())).pack(side="left")
         ps = saved.get("page_status", {})
         psr = ttk.Frame(grid); psr.pack(fill="x", padx=6, pady=2)
         self._ps_on = tk.IntVar(value=1 if ps.get("on") else 0)
@@ -5631,6 +5998,8 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
             "follow_pages": {"on": bool(v["follow_pages"]["on"].get()), "count": iv(v["follow_pages"]["count"].get()),
                              "src": v["follow_pages"]["src"].get().strip()},
             "page_status": {"on": bool(self._ps_on.get()), "delete_copyright": bool(self._ps_del.get())},
+            "checkin": {"on": bool(self._ck_on.get()), "photo": bool(self._ck_photo.get()),
+                        "caption": self._ck_cap.get(), "folder": self._ck_folder.get().strip()},
             "loops": iv(self.active_loops.get()) or 1,
         }
 
@@ -5939,6 +6308,17 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
 
     # ---------- Guide page (in-app help, English) ----------
     GUIDE_TEXT = """
+CONTENT SOURCES (sidebar):
+ - Main media folder: make one folder, inside it one folder per page with the
+   page's name (e.g. "Funny Cats Page"). "Match folders to pages" — Posting and
+   API Pages then take each page's videos from its own folder automatically.
+ - TikTok creators: choose a page + paste YOUR TikTok profile link → Add →
+   Fetch. Videos download in HD into that page's folder, each with a .txt
+   caption (original caption, max 4 hashtags) which is used when posting.
+   Auto fetch every X hours.
+ACTIVE → Check-in post: posts on the profile with the location = the city of
+ the ID's IP (e.g. Dallas, Texas), your caption, + a photo from a folder.
+
 SURFSHARK — different IP for every browser (no proxies to buy):
  Proxy Management → "How to get Surfshark files?" → download WireGuard .conf
  files for many US cities → Import .conf files → Check tunnels → tick IDs →
@@ -6794,7 +7174,11 @@ downloads and replaces itself, then restarts. No manual download needed.
                 allow_dup = cfg.get("allow_dup")
                 remaining_daily = page_daily_remaining(page)
                 seen, todo = set(), []
-                for path in files:
+                pf = page_files(page, kind)
+                if pf:
+                    log(T(f"[{account['name']}] Using page folder: {page_media_folder(page)}",
+                          f"[{account['name']}] Page ka folder: {page_media_folder(page)}"))
+                for path in (pf or files):
                     if not os.path.exists(path):
                         continue
                     h = file_hash(path)
@@ -6818,12 +7202,14 @@ downloads and replaces itself, then restarts. No manual download needed.
                             break
                         log(T(f"[{account['name']}] {i}/{len(todo)}: {os.path.basename(path)}", f"[{account['name']}] {i}/{len(todo)}: {os.path.basename(path)}"))
                         try:
+                            sc = sidecar_caption(path)
+                            cap = sc if sc else tags
                             if kind == "reel":
-                                ok = bot.upload_reel(path, tags)
+                                ok = bot.upload_reel(path, cap)
                             elif kind == "photo":
-                                ok = bot.upload_photo(path, tags)
+                                ok = bot.upload_photo(path, cap)
                             else:
-                                ok = bot.upload_video(path, tags)
+                                ok = bot.upload_video(path, cap)
                         except Exception as e:
                             ok = False; bot.last_error = str(e)
                         if ok:
