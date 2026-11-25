@@ -24,3 +24,4 @@ vault/server/vault-data/
 vault/.gradle/
 vault/build/
 vault/app/build/
+__pycache__/
