@@ -2937,8 +2937,8 @@ class Automation:
         """Har tick kiye page par: Flagged / Not recommended / restrictions + monetization maloomat.
         delete_copyright=True ho to copyright wali flagged videos delete."""
         acc = self.current_acc
-        targets = [p for p in (get_account(acc["id"]) or {}).get("pages", []) if p.get("enabled")] \
-            or [{"name": acc.get("page_name") or acc["name"], "url": ""}]
+        targets = [{"name": f"ID: {acc['name']}", "url": "", "_profile": True}] + \
+            [p for p in (get_account(acc["id"]) or {}).get("pages", []) if p.get("enabled")]
         report = {}
         for tgt in targets:
             name = tgt.get("name") or tgt.get("url") or "profile"
@@ -2947,6 +2947,8 @@ class Automation:
                 self.target_page = tgt if tgt.get("url") else None
                 if tgt.get("url"):
                     self._go_to_page()
+                elif tgt.get("_profile"):
+                    self._switch_to_profile()
                 txt = ""
                 for u in self._STATUS_URLS:
                     try:
@@ -2983,6 +2985,16 @@ class Automation:
                             break
                     except Exception:
                         pass
+                ml = money.lower()
+                if any(k in ml for k in ("not eligible", "isn't eligible", "not yet eligible", "doesn't meet",
+                                         "don't meet", "not meet")):
+                    mon = "Monetization: NOT eligible"
+                elif any(k in ml for k in ("you're eligible", "you are eligible", "eligible to", "get started",
+                                           "start earning", "earnings", "onboard", "payout")):
+                    mon = "Monetization: ELIGIBLE / active"
+                else:
+                    mon = "Monetization: unknown"
+                status = f"{status} | {mon}"
                 report[name] = {"time": time.strftime("%Y-%m-%d %H:%M"), "status": status,
                                 "monetization": money, "copyright_removed": removed}
                 self.log(T(f"    → {name}: {status}" + (f" | removed {removed} copyright item(s)" if removed else ""),
@@ -3007,6 +3019,45 @@ class Automation:
             if pg:
                 update_account(acc["id"], pages=pg)
         return report
+
+    def _switch_to_profile(self):
+        """Agar page ke taur par switched hain to wapas apni profile par."""
+        try:
+            self.page.goto(FB_HOME, wait_until="domcontentloaded"); time.sleep(3)
+            if self._click_button(["Your profile", "Account controls and settings"]):
+                time.sleep(2)
+                self._click_button(["Switch to " + self.current_acc.get("name", ""), "See all profiles"])
+                time.sleep(3)
+        except Exception:
+            pass
+
+    def act_professional_mode(self):
+        """ID par Professional mode ON."""
+        self.log(T("  • Turning on Professional mode...", "  • Professional mode ON kar rahe hain..."))
+        try:
+            self.page.goto("https://www.facebook.com/me", wait_until="domcontentloaded"); time.sleep(random.uniform(5, 7))
+            txt = self._page_text().lower()
+            if "professional dashboard" in txt or "turn off professional mode" in txt:
+                self.log(T("    already ON ✔", "    pehle se ON ✔"))
+                update_account(self.current_acc["id"], pro_mode=True)
+                return True
+            opened = self._click_button(["Profile settings see more options", "See more options", "More"])
+            time.sleep(2)
+            if not self._click_button(["Turn on professional mode", "Turn on Professional mode"]):
+                if not opened:
+                    self.log(T("    option not found", "    option nahi mila")); return False
+                self.log(T("    'Turn on professional mode' not found", "    'Turn on professional mode' nahi mila"))
+                return False
+            time.sleep(3)
+            for _ in range(3):
+                if self._click_button(["Turn on", "Continue", "Next", "Done"]):
+                    time.sleep(3)
+            update_account(self.current_acc["id"], pro_mode=True)
+            self.log(T("    Professional mode ON ✔", "    Professional mode ON ✔"))
+            return True
+        except Exception as e:
+            self.log(f"    professional mode error: {e}")
+            return False
 
     def _delete_copyright_items(self):
         """Account status / support inbox mein copyright wale items ke 'Delete/Remove' dabao."""
@@ -3135,6 +3186,8 @@ class Automation:
             if s.get("comments", {}).get("on"):
                 tasks.append(("comments", lambda: self.act_comments(cnt(s["comments"].get("count", 1)),
                                                                      s["comments"].get("text", ""))))
+            if s.get("pro_mode", {}).get("on") and not (get_account(acc["id"]) or {}).get("pro_mode"):
+                tasks.append(("professional mode", self.act_professional_mode))
             if s.get("checkin", {}).get("on"):
                 ck = s["checkin"]
                 tasks.append(("check-in post", lambda: self.act_checkin_post(ck.get("caption", ""), ck.get("folder", ""),
@@ -5370,6 +5423,11 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         lb = ttk.Frame(lg); lb.pack(fill="x", padx=8, pady=3)
         ttk.Button(lb, text=T("LOGIN selected IDs", "LOGIN selected IDs"), command=self._login_selected).pack(side="left")
         ttk.Button(lb, text="STOP", command=self._stop_all).pack(side="left", padx=4)
+        lm = ttk.Frame(lg); lm.pack(fill="x", padx=8, pady=3)
+        ttk.Button(lm, text=T("Check status + monetization", "Status + monetization check"),
+                   command=lambda: self._status_selected(False)).pack(side="left")
+        ttk.Button(lm, text=T("Professional mode ON", "Professional mode ON"),
+                   command=lambda: self._status_selected(True)).pack(side="left", padx=4)
         lc = ttk.Frame(lg); lc.pack(fill="x", padx=8, pady=3)
         ttk.Button(lc, text=T("Capture open ixBrowser profiles (free plan)",
                               "Khule ixBrowser profiles capture (free plan)"),
@@ -5521,6 +5579,50 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
             win.destroy(); self._refresh_all_panels()
             self.log_q.put(T(f"{n} ixBrowser profile(s) linked.", f"{n} ixBrowser profile jur gaye."))
         ttk.Button(win, text=T("Save", "Save"), command=save).pack(pady=10)
+
+    def _status_selected(self, pro):
+        accs = self.acc_table.checked_accounts()
+        if not accs:
+            messagebox.showwarning(T("Wait", "Ruko"), T("Select IDs with ✔ in the table.", "Table mein ✔ se IDs chunein."))
+            return
+        try:
+            n = max(1, int(self.login_threads.get().strip() or "3"))
+        except ValueError:
+            n = 3
+        self.stop_flag.clear()
+        what = "PROFESSIONAL MODE" if pro else "STATUS CHECK"
+        self.log_q.put(f"=== {what}: {len(accs)} IDs ===")
+
+        def one(acc):
+            log = lambda m: self.log_q.put(m)
+            bot = Automation(log=log, headless=False, browser_cfg=load_settings())
+            try:
+                bot.start(acc)
+                if not bot.login(wait_for_2fa_callback=self._wait_2fa):
+                    self.after(0, lambda: self._set_status_all(acc["id"], "Die")); return
+                self.after(0, lambda: self._set_status_all(acc["id"], "Live"))
+                if pro:
+                    bot.act_professional_mode()
+                else:
+                    bot.check_page_status(False)
+                self.after(0, self._refresh_all_panels)
+            except Exception as e:
+                log(f"[{acc['name']}] {e}")
+            finally:
+                time.sleep(2); bot.stop()
+
+        def pool():
+            if not ensure_runtime(log=lambda m: self.log_q.put(m)):
+                return
+            act, pend = [], list(accs)
+            while (pend or act) and not self.stop_flag.is_set():
+                act = [t for t in act if t.is_alive()]
+                while pend and len(act) < n and not self.stop_flag.is_set():
+                    t = threading.Thread(target=one, args=(pend.pop(0),), daemon=True); t.start(); act.append(t)
+                    self.stop_flag.wait(random.uniform(4, 10))
+                time.sleep(2)
+            self.log_q.put(f"=== {what} finished ===")
+        threading.Thread(target=pool, daemon=True).start()
 
     def _set_status_all(self, acc_id, text):
         for p in self._panels:
@@ -5930,7 +6032,12 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         psr = ttk.Frame(grid); psr.pack(fill="x", padx=6, pady=2)
         self._ps_on = tk.IntVar(value=1 if ps.get("on") else 0)
         self._ps_del = tk.IntVar(value=1 if ps.get("delete_copyright") else 0)
-        ttk.Checkbutton(psr, text=T("Page status + monetization", "Page status + monetization"),
+        pm = saved.get("pro_mode", {})
+        pmr = ttk.Frame(grid); pmr.pack(fill="x", padx=6, pady=2)
+        self._pm_on = tk.IntVar(value=1 if pm.get("on") else 0)
+        ttk.Checkbutton(pmr, text=T("Turn ON Professional mode (ID)", "Professional mode ON (ID)"),
+                        variable=self._pm_on).pack(side="left")
+        ttk.Checkbutton(psr, text=T("Status + monetization (ID + pages)", "Status + monetization (ID + pages)"),
                         variable=self._ps_on, width=26).pack(side="left")
         ttk.Checkbutton(psr, text=T("Auto-delete copyright flagged", "Copyright flagged khud delete"),
                         variable=self._ps_del).pack(side="left", padx=4)
@@ -5998,6 +6105,7 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
             "follow_pages": {"on": bool(v["follow_pages"]["on"].get()), "count": iv(v["follow_pages"]["count"].get()),
                              "src": v["follow_pages"]["src"].get().strip()},
             "page_status": {"on": bool(self._ps_on.get()), "delete_copyright": bool(self._ps_del.get())},
+            "pro_mode": {"on": bool(self._pm_on.get())},
             "checkin": {"on": bool(self._ck_on.get()), "photo": bool(self._ck_photo.get()),
                         "caption": self._ck_cap.get(), "folder": self._ck_folder.get().strip()},
             "loops": iv(self.active_loops.get()) or 1,
