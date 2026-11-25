@@ -3273,6 +3273,7 @@ class Automation:
         acc = self.current_acc
         self.log(T("  • Checking primary location...", "  • Primary location check..."))
         urls = [u for u in [load_settings().get("primary_loc_url", "").strip()] if u] + [
+            "https://www.facebook.com/primary_location/info",
             "https://accountscenter.facebook.com/info_and_permissions",
             "https://www.facebook.com/professional_dashboard/account_status/",
             "https://www.facebook.com/settings?tab=account_status"]
@@ -3280,7 +3281,12 @@ class Automation:
         for u in urls:
             try:
                 self.page.goto(u, wait_until="domcontentloaded"); time.sleep(random.uniform(5, 7))
-                lines = [l.strip() for l in self._page_text().splitlines() if l.strip()]
+                full = self._page_text()
+                import re as _re
+                m = _re.search(r"primary (?:location|country)[^\n]*?\b(?:is|:)\s*([A-Z][A-Za-z .,'-]{2,50})", full)
+                if m:
+                    found = m.group(1).strip().rstrip("."); break
+                lines = [l.strip() for l in full.splitlines() if l.strip()]
                 for i, l in enumerate(lines):
                     if "primary location" in l.lower() or "primary country" in l.lower():
                         cand = [x for x in lines[i + 1:i + 4] if 1 < len(x) < 60]
