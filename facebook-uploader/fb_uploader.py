@@ -698,6 +698,36 @@ def _grid_free(i):
         _GRID_USED.discard(i)
 
 
+def _fbb_prepare_profile(user_dir):
+    """Chrome ka password manager / 'Sign in to facebook.com' dabba band karo, saved passwords mitao
+    (bot khud login karta hai — ye dabbe bot ko rokte hain)."""
+    d = os.path.join(user_dir, "Default")
+    os.makedirs(d, exist_ok=True)
+    for fn in ("Login Data", "Login Data-journal", "Login Data For Account", "Login Data For Account-journal"):
+        try:
+            fp = os.path.join(d, fn)
+            if os.path.exists(fp):
+                os.remove(fp)
+        except Exception:
+            pass
+    pf = os.path.join(d, "Preferences")
+    try:
+        prefs = json.load(open(pf, encoding="utf-8")) if os.path.exists(pf) else {}
+    except Exception:
+        prefs = {}
+    prefs["credentials_enable_service"] = False
+    prefs["credentials_enable_autosignin"] = False
+    prefs.setdefault("profile", {})["password_manager_enabled"] = False
+    prefs["profile"]["password_manager_leak_detection"] = False
+    prefs.setdefault("autofill", {})["profile_enabled"] = False
+    prefs["autofill"]["credit_card_enabled"] = False
+    try:
+        with open(pf, "w", encoding="utf-8") as f:
+            json.dump(prefs, f)
+    except Exception:
+        pass
+
+
 def fb_browser_launch(pw, account, cfg, headless=False, log=print):
     """Apna browser kholo. Return (context, slot)."""
     acc = get_account(account["id"]) or account
@@ -724,8 +754,12 @@ def fb_browser_launch(pw, account, cfg, headless=False, log=print):
         x, y, ww, wh = _tile_rect(slot, _TILE_N)     # khud poori screen mein fit
     else:
         x, y = (slot % per_row) * (ww // 2), (slot // per_row % 3) * 60
+    _fbb_prepare_profile(session_dir_for(acc["id"]))
     args = ["--disable-blink-features=AutomationControlled", "--no-first-run",
             "--no-default-browser-check", f"--lang={lang}",
+            "--disable-save-password-bubble",
+            "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection,AutofillServerCommunication,"
+            "FedCm,FedCmAutoReauthn,PasswordGenerationExperiment,Translate",
             "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
             "--webrtc-ip-handling-policy=disable_non_proxied_udp",
             f"--window-position={x},{y}", f"--window-size={ww},{wh}"]
@@ -790,6 +824,11 @@ def fb_browser_launch(pw, account, cfg, headless=False, log=print):
         _pg.goto("about:blank")
     except Exception as e:
         log(T(f"[{acc['name']}] CHECK IP failed: {e.__class__.__name__}", f"[{acc['name']}] CHECK IP nahi hua."))
+        try:
+            time.sleep(1)
+            (ctx.pages[0] if ctx.pages else ctx.new_page()).goto("about:blank")
+        except Exception:
+            pass
     log(T(f"[{acc['name']}] FB Browser opened — {fp['screen_w']}x{fp['screen_h']}, {fp['cpu']} CPU, "
           f"{lang}, {tz or 'local time'}{', proxy ' + proxy['server'] if proxy else ''}.",
           f"[{acc['name']}] FB Browser khula — {fp['screen_w']}x{fp['screen_h']}, {fp['cpu']} CPU, "
