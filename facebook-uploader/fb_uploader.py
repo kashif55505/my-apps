@@ -2504,56 +2504,130 @@ class Automation:
                 wait_for_2fa_callback(acc)
             return self.is_logged_in()
 
-        time.sleep(5)
-
-        # Captcha handling: pehle text-captcha (free local OCR), warna reCAPTCHA (2captcha)
-        if self._has_text_captcha():
-            self.log(T(f"[{acc['name']}] Text captcha detected — solving locally (free)...",
-                       f"[{acc['name']}] Text captcha aaya — locally (free) solve kar rahe hain..."))
-            if self._solve_text_captcha():
-                time.sleep(4)
-        elif self._has_captcha():
-            self.log(T(f"[{acc['name']}] Captcha detected — trying to solve...",
-                       f"[{acc['name']}] Captcha aaya — solve kar rahe hain..."))
-            if self._solve_captcha():
-                time.sleep(4)
-
-        url = self.page.url
-        if "checkpoint" in url or "two_factor" in url or self._looks_like_2fa():
-            # Pehle secret key se khud OTP bana kar daalne ki koshish
-            if acc.get("twofa") and self._auto_2fa(acc):
-                time.sleep(4)
-            if self.is_logged_in():
-                self.log(T(f"[{acc['name']}] Login successful (2FA auto). Session saved.",
-                           f"[{acc['name']}] Login kamyab (2FA auto). Session save ho gaya."))
-                return True
-            # na ho paya to user se maango
-            self.log(T(f"[{acc['name']}] 2FA needed. Enter the code in the browser, then press Resume.", f"[{acc['name']}] 2FA chahiye. Code browser mein daalein, phir Resume dabayein."))
-            if wait_for_2fa_callback:
-                wait_for_2fa_callback(acc)
-            time.sleep(2)
-
-        # Captcha / checkpoint / koi bhi rukawat: browser khula rakho, aap khud hal karein
-        if not self._fb_uid():
-            try:
-                self.page.bring_to_front()
-            except Exception:
-                pass
-            self.log(T(f"[{acc['name']}] Facebook is asking for a check (captcha / verification). "
-                       f"Please complete it in the browser — waiting up to 3 minutes...",
-                       f"[{acc['name']}] Facebook check maang raha hai (captcha / verification). "
-                       f"Browser mein khud complete karein — 3 minute intezaar..."))
-            for _ in range(60):
-                if self._fb_uid() or getattr(self, "stop_event", None) and self.stop_event.is_set():
-                    break
-                time.sleep(3)
-
-        if self.is_logged_in():
+        ok = self._login_flow(acc, wait_for_2fa_callback)
+        if ok:
             self.log(T(f"[{acc['name']}] Login successful. Session saved.", f"[{acc['name']}] Login kamyab. Session save ho gaya."))
+            self.is_logged_in()          # UID save
             return True
         self.last_error = T("Login not confirmed (wrong password / checkpoint / 2FA).", "Login confirm nahi hua (galat password / checkpoint / 2FA).")
         self.log(T(f"[{acc['name']}] {self.last_error}", f"[{acc['name']}] {self.last_error}"))
         return False
+
+    def _ptext(self):
+        try:
+            return (self.page.inner_text("body") or "").lower()
+        except Exception:
+            return ""
+
+    def _login_flow(self, acc, wait_cb=None, max_secs=240):
+        """Login ke baad har 2 sec page dekho aur jo saamne ho wahi karo:
+        captcha -> solve, 'check notifications / another device' -> Try another way -> Authentication app,
+        code box -> TOTP, 'Trust this device / Save browser' -> Continue. Logged in -> done."""
+        t0 = time.time()
+        done_2fa_codes = set()
+        captcha_tries = 0
+        other_way_tries = 0
+        told_user = False
+        last_state = ""
+        while time.time() - t0 < max_secs:
+            if getattr(self, "stop_event", None) and self.stop_event.is_set():
+                return False
+            if self._fb_uid():
+                url = (self.page.url or "").lower()
+                if "checkpoint" not in url and "two_step" not in url and "two_factor" not in url:
+                    return True
+            txt = self._ptext()
+            url = (self.page.url or "").lower()
+
+            # 1) Text captcha (free OCR) / reCAPTCHA (2captcha)
+            if captcha_tries < 3 and self._has_text_captcha():
+                captcha_tries += 1
+                self.log(T(f"[{acc['name']}] Text captcha — solving (free OCR)...", f"[{acc['name']}] Text captcha — OCR se hal..."))
+                self._solve_text_captcha(); time.sleep(3); continue
+            if captcha_tries < 3 and self._has_captcha():
+                captcha_tries += 1
+                self.log(T(f"[{acc['name']}] Captcha — solving with 2Captcha...", f"[{acc['name']}] Captcha — 2Captcha se hal..."))
+                if self._solve_captcha():
+                    time.sleep(3); continue
+
+            # 2) Code box -> TOTP
+            code_box = None
+            for sel in ("input[name='approvals_code']", "input[autocomplete='one-time-code']",
+                        "input[type='text'][maxlength='6']", "input[inputmode='numeric']", "input[type='tel']",
+                        "input[aria-label*='code' i]", "input[placeholder*='code' i]"):
+                try:
+                    el = self.page.query_selector(sel)
+                    if el and el.is_visible():
+                        code_box = el; break
+                except Exception:
+                    continue
+            if code_box and acc.get("twofa"):
+                code = totp_now(acc.get("twofa", ""))
+                if code and code not in done_2fa_codes:
+                    done_2fa_codes.add(code)
+                    self.log(T(f"[{acc['name']}] 2FA code: {code}", f"[{acc['name']}] 2FA code: {code}"))
+                    try:
+                        code_box.click(); code_box.fill(""); code_box.type(code, delay=60)
+                        time.sleep(0.4)
+                        if not self._click_button(["Continue", "Submit", "Submit code", "Next", "Confirm", "Log in", "Log In"]):
+                            self.page.keyboard.press("Enter")
+                    except Exception as e:
+                        self.log(f"2FA: {e}")
+                    time.sleep(3); continue
+
+            # 3) "Check your notifications" / "another device" / approve -> Try another way -> Authentication app
+            if acc.get("twofa") and other_way_tries < 4 and any(k in txt for k in (
+                    "check your notifications", "another device", "approve from", "approve this login",
+                    "waiting for approval", "go to your facebook app", "check your other device",
+                    "we sent a notification", "approve on another", "choose a way to confirm",
+                    "try another way", "confirm it's you")):
+                if self._click_button(["Try another way", "Try Another Way", "Use another way", "Choose another option"]):
+                    other_way_tries += 1
+                    time.sleep(2)
+                    self.log(T(f"[{acc['name']}] 'Try another way' → Authentication app", f"[{acc['name']}] 'Try another way' → Authentication app"))
+                    if not self._click_button(["Authentication app", "Authenticator app", "Code generator",
+                                               "Use authentication app", "Login code"]):
+                        # radio list — text wala element dhoondo
+                        try:
+                            el = self.page.query_selector("text=/authentication app/i")
+                            if el:
+                                el.click()
+                        except Exception:
+                            pass
+                    time.sleep(1)
+                    self._click_button(["Continue", "Next"])
+                    time.sleep(3); continue
+                if "choose a way" in txt or "authentication app" in txt:
+                    try:
+                        el = self.page.query_selector("text=/authentication app/i")
+                        if el:
+                            el.click(); time.sleep(1); self._click_button(["Continue", "Next"]); time.sleep(3)
+                            other_way_tries += 1; continue
+                    except Exception:
+                        pass
+
+            # 4) Trust device / save browser / continue screens
+            if any(k in txt for k in ("trust this device", "save browser", "remember browser", "save your login info",
+                                      "review recent login", "this was me", "continue as")):
+                if self._click_button(["Trust this device", "Save Browser", "Save browser", "This was me",
+                                       "Continue", "OK", "Not now", "Don't save"]):
+                    time.sleep(3); continue
+
+            # 5) kuch samajh nahi aaya -> user ko batao (ek dafa), lekin chalte raho
+            state = url.split("?")[0][-60:]
+            if not told_user and time.time() - t0 > 25:
+                told_user = True
+                try:
+                    self.page.bring_to_front()
+                except Exception:
+                    pass
+                self.log(T(f"[{acc['name']}] Waiting on Facebook check — if you see something I can't do, finish it in the browser "
+                           f"(I keep watching and continue by myself).",
+                           f"[{acc['name']}] Facebook check par ruke hain — jo main na kar sakun browser mein kar dein "
+                           f"(main dekh raha hoon, khud aage barhunga)."))
+            last_state = state
+            time.sleep(2)
+        return bool(self._fb_uid())
 
     def _looks_like_2fa(self):
         try:
