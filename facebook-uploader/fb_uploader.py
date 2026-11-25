@@ -766,7 +766,8 @@ def fb_browser_launch(pw, account, cfg, headless=False, log=print):
     if cfg.get("fbb_mute", True):
         args.append("--mute-audio")
     kw = dict(user_data_dir=session_dir_for(acc["id"]), headless=headless, args=args,
-              no_viewport=True, locale=lang, ignore_default_args=["--enable-automation"])
+              no_viewport=True, locale=lang, chromium_sandbox=True,
+              ignore_default_args=["--enable-automation", "--no-sandbox"])
     if tz:
         kw["timezone_id"] = tz
     if geo and geo.get("lat") is not None:
@@ -2880,6 +2881,17 @@ class Automation:
     # ---------- Captcha (2captcha.com) ----------
     def _has_captcha(self):
         try:
+            # sab frames ke URL dekho (Facebook ka recaptcha frame ke andar frame mein hota hai)
+            for fr in self.page.frames:
+                fu = (fr.url or "").lower()
+                if ("recaptcha" in fu or "hcaptcha" in fu or "/captcha/" in fu) and "about:blank" not in fu:
+                    return True
+            for fr in self.page.frames:
+                try:
+                    if fr.query_selector("iframe[title*='reCAPTCHA' i], iframe[src*='captcha' i], [data-sitekey]"):
+                        return True
+                except Exception:
+                    continue
             if self.page.query_selector("iframe[src*='recaptcha'], iframe[title*='recaptcha' i]"):
                 return True
             if self.page.query_selector("iframe[src*='hcaptcha'], iframe[title*='hcaptcha' i]"):
