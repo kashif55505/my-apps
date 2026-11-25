@@ -315,6 +315,7 @@ def add_account(name, email, password, page_name, proxy="", ix_profile="", folde
     accounts = load_accounts()
     acc_id = email.strip().lower()
     old = next((a for a in accounts if a.get("id") == acc_id), {})
+    pos = next((i for i, a in enumerate(accounts) if a.get("id") == acc_id), None)   # apni jagah par rahe
     accounts = [a for a in accounts if a.get("id") != acc_id]
     ix_profile = ix_profile or old.get("ix_profile", "")
     rec = {
@@ -334,7 +335,10 @@ def add_account(name, email, password, page_name, proxy="", ix_profile="", folde
             rec[_k] = _v
     if old.get("ix_key"):
         rec["ix_key"] = old["ix_key"]    # ixBrowser free-mode link mehfooz
-    accounts.append(rec)
+    if pos is None:
+        accounts.append(rec)
+    else:
+        accounts.insert(pos, rec)        # tarteeb na badle (tick/edit se ID neeche na jaye)
     save_accounts(accounts)
     return acc_id
 
@@ -692,6 +696,9 @@ def _tile_rect(slot, n):
     import math
     X, Y, W, H = _work_area_dip()
     n = max(1, n)
+    if n == 1:
+        # akela browser poori screen cover na kare — fix size, upar baayen
+        return X, Y, int(min(max(W * 0.5, 900), 1200, W)), int(min(H, 1000))
     best = None
     for cols in range(1, n + 1):
         rows = math.ceil(n / cols)
@@ -708,9 +715,12 @@ def _tile_rect(slot, n):
     i = slot % (cols * rows)
     c, r = i % cols, i // cols
     w, h = int(W / cols), int(H / rows)
+    w = min(w, 1200)                          # bohot chaura bhi na ho
     return X + c * w, Y + r * h, max(w, 420), max(h, 360)
 
 
+_MEDIA_LOCK = threading.Lock()
+_MEDIA_TAKEN = set()          # is run mein jo photo/video kisi ID ne le li (doosri ID ko alag mile)
 _GRID_LOCK = threading.Lock()
 _GRID_USED = set()
 
@@ -1305,6 +1315,59 @@ def ix_order_accounts(accounts):
     """Jo sab se pehle nahi chali / sab se purani — woh pehle (rotation)."""
     last = _ix_usage().get("last_run", {})
     return sorted(accounts, key=lambda a: last.get(a["id"], 0))
+
+
+# ---------- Active: gandi posts pehchanne ke lafz + naam se gender ----------
+UNSAFE_WORDS = ("nude", "nudity", "naked", "xxx", "porn", "18+", "onlyfans", "only fans", "sexy", "hot girl", "hot video",
+                "bikini", "lingerie", "leaked", "mms", "boobs", "nsfw", "adult video", "erotic", "seduct", "bra ",
+                "panty", "hookup", "escort", " sex ", "milf", "thirst trap", "viral video girl", "uncensored",
+                "desi bhabhi", "bhabhi", "hot dance", "mujra")
+
+_MALE_NAMES = set("""muhammad mohammad mohammed muhammed m syed sayed ali ahmad ahmed hassan hasan hussain husain usman umar omar
+abdul abdullah bilal hamza zain zaid danish kashif imran irfan asif arif adnan faisal fahad farhan rizwan rehan rehman rahman
+salman sohail suhail shahid shoaib tariq tahir talha waqas waseem wasim yasir yousaf yusuf zubair zeeshan junaid jawad kamran
+khalid nadeem naveed nasir noman nouman qasim raza saad sajid saqib shahzad shakeel sharjeel shehzad sufyan taimoor taimur umair
+uzair waleed walid adil akram altaf amir aamir anwar arsalan asad awais babar daniyal ehsan fawad haris haroon ibrahim ijaz ilyas
+ishaq jamal javed khurram mansoor mubashir mudassar muneeb mustafa nabeel naeem obaid owais rashid rauf sami samiullah sarmad
+shan sheraz tanveer usama yasin zafar zahid zia ghulam malik rana ch chaudhry chaudhary hafiz mian sheikh raja sardar
+john james robert michael william david richard joseph thomas charles christopher daniel matthew anthony mark donald steven paul
+andrew joshua kenneth kevin brian george timothy ronald edward jason jeffrey ryan jacob gary nicholas eric jonathan stephen larry
+justin scott brandon benjamin samuel gregory alexander frank patrick raymond jack dennis jerry tyler aaron jose adam nathan henry
+douglas zachary peter kyle ethan walter noah jeremy christian keith roger terry gerald harold sean austin carl arthur lawrence
+dylan jesse jordan bryan billy joe bruce gabriel logan albert willie alan juan wayne elijah randy roy vincent ralph eugene russell
+bobby mason philip louis mike chris dave steve tom tony jim bob bill rick matt josh nick alex ben sam jake luke liam lucas oliver
+raj rahul amit vijay sanjay suresh ramesh rakesh manoj deepak ravi arjun rohit sachin sunil anil ajay akash vikas vivek
+""".split())
+_FEMALE_NAMES = set("""ayesha aisha fatima fatma zainab maryam mariam khadija sana sara sarah hina hira iqra amna aqsa asma
+bushra farah fiza huma kiran laiba maira mahnoor mehwish nadia naila nimra noor nida rabia rida saba sadia saima samina sobia
+sumaira sundas tayyaba uzma zara zoya anum alina aliza areeba arooj ayza dua eman emaan hafsa hania hareem javeria komal
+kinza mahira mehak minahil momina nazia rimsha rubina sehrish shazia sidra sumbal tahira tooba urooj yasmin zubaida bibi begum
+mary patricia jennifer linda elizabeth barbara susan jessica karen nancy lisa betty margaret sandra ashley kimberly emily donna
+michelle carol amanda dorothy melissa deborah stephanie rebecca sharon laura cynthia kathleen amy angela shirley anna brenda
+pamela emma nicole helen samantha katherine christine debra rachel carolyn janet catherine heather diane ruth julie olivia
+joyce virginia victoria kelly lauren christina joan evelyn judith megan andrea cheryl hannah jacqueline martha gloria teresa
+ann madison frances kathryn janice jean abigail alice judy sophia grace denise amber doris marilyn danielle beverly isabella
+theresa diana natalie brittany charlotte marie kayla alexis lori jenny kate katie sophie mia ella chloe lily zoe ava
+priya pooja neha anjali sunita kavita rekha meena deepika anita riya simran kaur
+""".split())
+
+
+def guess_gender(full_name):
+    """Naam se andaza: 'male' / 'female' / '' (pakka nahi). Pakka na ho to friend request NAHI."""
+    import re as _re
+    toks = [t for t in _re.split(r"[^a-z]+", (full_name or "").lower()) if t]
+    if not toks:
+        return ""
+    if any(t in ("bibi", "begum", "kaur", "khatoon", "bano", "parveen", "sultana") for t in toks):
+        return "female"
+    first = toks[0]
+    if first in ("muhammad", "mohammad", "m", "syed", "malik", "rana", "ch", "hafiz", "mian", "raja", "sardar", "sheikh") and len(toks) > 1:
+        return "male" if toks[1] not in _FEMALE_NAMES else "female"
+    if first in _FEMALE_NAMES:
+        return "female"
+    if first in _MALE_NAMES:
+        return "male"
+    return ""
 
 
 def load_active_settings():
@@ -2519,19 +2582,25 @@ class Automation:
         return ""
 
     def account_state(self):
-        """Login na ho to wajah: Checkpoint / Disabled / Suspended / Die."""
+        """Login na ho to wajah: Disabled / Suspended / Verification / Not login.
+        'Die' sirf tab jab account sach mein mojood na ho."""
         try:
             url = (self.page.url or "").lower()
             txt = self._page_text().lower() if hasattr(self, "_page_text") else ""
         except Exception:
-            return "Die"
+            return "Not login"
+        if "download your information" in txt or "we disabled your account" in txt \
+                or "account has been disabled" in txt or "your account has been disabled" in txt:
+            return "Disabled"
         if "suspended" in txt or "/1501092823525282" in url:
             return "Suspended"
-        if "disabled" in txt or "we disabled" in txt or "account has been disabled" in txt:
-            return "Disabled"
-        if "checkpoint" in url or "confirm your identity" in txt or "we suspect" in txt:
-            return "Checkpoint"
-        return "Die"
+        if "checkpoint" in url or "confirm your identity" in txt or "we suspect" in txt \
+                or "verify your identity" in txt or "upload a photo of yourself" in txt or "verification" in txt:
+            return "Verification"
+        if "account doesn't exist" in txt or "no account found" in txt or "isn't connected to an account" in txt \
+                or "account no longer exists" in txt:
+            return "Die"
+        return "Not login"
 
     def is_logged_in(self):
         self.page.goto(FB_HOME, wait_until="domcontentloaded")
@@ -2716,7 +2785,7 @@ class Automation:
         except Exception:
             return ""
 
-    def _login_flow(self, acc, wait_cb=None, max_secs=240):
+    def _login_flow(self, acc, wait_cb=None, max_secs=420):
         """Login ke baad har 2 sec page dekho aur jo saamne ho wahi karo:
         captcha -> solve, 'check notifications / another device' -> Try another way -> Authentication app,
         code box -> TOTP, 'Trust this device / Save browser' -> Continue. Logged in -> done."""
@@ -2743,7 +2812,7 @@ class Automation:
                 captcha_tries += 1
                 self.log(T(f"[{acc['name']}] Text captcha — solving (free OCR)...", f"[{acc['name']}] Text captcha — OCR se hal..."))
                 self._solve_text_captcha(); time.sleep(3); continue
-            if captcha_tries < 3 and self._has_captcha():
+            if captcha_tries < 6 and self._has_captcha():
                 captcha_tries += 1
                 self.log(T(f"[{acc['name']}] Captcha — solving with 2Captcha...", f"[{acc['name']}] Captcha — 2Captcha se hal..."))
                 if self._solve_captcha():
@@ -2815,10 +2884,12 @@ class Automation:
 
             # 4b) Captcha ke baad FB aksar wapas login form dikhata hai ("login information incorrect")
             #     -> email/password dobara bharo (2 dafa tak)
-            if relogins < 2 and time.time() - last_fill > 10:
+            if relogins < 2 and time.time() - last_fill > 10 and not any(
+                    k in url for k in ("two_step", "two_factor", "checkpoint")):
                 try:
                     e_in, p_in = self._find_login_inputs()
-                    if p_in and p_in.is_visible():
+                    # captcha screen par neeche password box dikhta hai — tab dobara login NAHI (pehle captcha)
+                    if p_in and p_in.is_visible() and not self._has_captcha():
                         relogins += 1
                         last_fill = time.time()
                         self.log(T(f"[{acc['name']}] Login form shown again — clearing browser cache/cookies and retrying fresh ({relogins}/2)...",
@@ -3090,8 +3161,9 @@ class Automation:
             return None
         cid = d["request"]
         t0 = time.time()
+        time.sleep(4)
         while time.time() - t0 < wait_secs:
-            time.sleep(5)
+            time.sleep(3)
             rr = urllib.request.urlopen(
                 f"https://2captcha.com/res.php?key={key}&action=get&id={cid}&json=1", timeout=30)
             rd = _json.loads(rr.read().decode())
@@ -3113,8 +3185,16 @@ class Automation:
                 try:
                     for el in fr.query_selector_all(s):
                         b = el.bounding_box()
-                        if b and b["width"] > 50 and b["height"] > 40:
-                            return el, b
+                        if b and b["width"] > 50 and b["height"] > 40 and b["y"] > -50 and b["x"] > -50 \
+                                and el.is_visible():
+                            try:      # chhupa hua challenge (visibility:hidden parent) ignore
+                                hidden = el.evaluate("e => { let n = e; while (n) { const cs = getComputedStyle(n); "
+                                                     "if (cs.visibility === 'hidden' || cs.display === 'none' || "
+                                                     "parseFloat(cs.opacity) === 0) return true; n = n.parentElement; } return false; }")
+                            except Exception:
+                                hidden = False
+                            if not hidden:
+                                return el, b
                 except Exception:
                     continue
         return None, None
@@ -3126,51 +3206,89 @@ class Automation:
         time.sleep(random.uniform(0.05, 0.2))
         self.page.mouse.click(x, y)
 
+    def _anchor_ticked(self, el):
+        """reCAPTCHA box mein hara tick hai? (frame list na ho tab bhi — tasveer ke rang se)"""
+        try:
+            from PIL import Image
+            import io
+            im = Image.open(io.BytesIO(el.screenshot(scale="css"))).convert("RGB")
+            w, h = im.size
+            im = im.crop((0, 0, min(80, w), h))
+            green = sum(1 for (r, g, b) in im.getdata() if g > 120 and r < 90 and b < 90)
+            return green > 25
+        except Exception:
+            return False
+
     def _solve_recaptcha_by_position(self, key):
-        """Google frame list na ho to: iframe ki jagah par screen click + 2Captcha coordinates."""
+        """Google frame list na ho to: iframe ki jagah par click + tasveerein 2Captcha (coordinates)."""
         import base64
         import re
         el, b = self._find_iframe_el("anchor")
         if not el:
             self.log(T("Captcha box not found on screen.", "Captcha box screen par nahi mila."))
             return False
-        self.log(T("Captcha: clicking 'I'm not a robot' (by position)...",
-                   "Captcha: 'I'm not a robot' click (jagah se)..."))
-        self._click_xy(b["x"] + min(30, b["width"] * 0.1), b["y"] + b["height"] / 2)
-        time.sleep(5)
-        for rnd in range(8):
+        if self._anchor_ticked(el):
+            return True
+        clicks = 0
+        rounds = 0
+        while clicks < 3 and rounds < 8:
+            el, b = self._find_iframe_el("anchor")
+            if el and self._anchor_ticked(el):
+                self.log(T("Captcha ticked ✔", "Captcha tick ho gaya ✔"))
+                return True
             ch, cb = self._find_iframe_el("challenge")
             if not ch:
-                # challenge nahi aaya -> tick lag gaya (ya page aage barh gaya)
-                self.log(T("Captcha ticked in the browser.", "Captcha browser mein tick ho gaya."))
-                return True
+                if not el:
+                    return not self._has_captcha()
+                clicks += 1
+                self.log(T(f"Captcha: clicking 'I'm not a robot' ({clicks})...",
+                           f"Captcha: 'I'm not a robot' click ({clicks})..."))
+                self._click_xy(b["x"] + min(30, b["width"] * 0.1), b["y"] + b["height"] / 2)
+                # tasveerein ya tick aane ka intezaar (12 sec tak)
+                for _ in range(12):
+                    time.sleep(1)
+                    if self._find_iframe_el("challenge")[0]:
+                        break
+                    e2, _b2 = self._find_iframe_el("anchor")
+                    if e2 and self._anchor_ticked(e2):
+                        self.log(T("Captcha ticked ✔", "Captcha tick ho gaya ✔"))
+                        return True
+                continue
+            # tasveerein aayi hain -> 2Captcha
+            rounds += 1
+            time.sleep(1.2)                       # tasveerein poori load hon
+            ch, cb = self._find_iframe_el("challenge")
+            if not ch:
+                continue
             try:
                 png = ch.screenshot(scale="css")
             except Exception:
-                time.sleep(2); continue
-            self.log(T(f"Captcha images → 2Captcha (round {rnd + 1})...",
-                       f"Captcha tasveerein → 2Captcha (round {rnd + 1})..."))
+                time.sleep(1); continue
+            self.log(T(f"Captcha images → 2Captcha (round {rounds})...",
+                       f"Captcha tasveerein → 2Captcha (round {rounds})..."))
             ans = self._twocap(key, {"method": "base64", "body": base64.b64encode(png).decode(),
                                      "coordinatescaptcha": 1,
                                      "textinstructions": "Follow the instruction in the blue header and click every matching "
                                                          "image tile. If none match, click the Skip/Verify button."},
-                               wait_secs=120)
+                               wait_secs=90)
+            ch, cb = self._find_iframe_el("challenge")
+            if not ch:
+                continue
             if ans is None:
-                time.sleep(2); continue
+                # naya challenge lo (reload button: neeche baayen)
+                self._click_xy(cb["x"] + 28, cb["y"] + cb["height"] - 28)
+                time.sleep(3); continue
             pts = re.findall(r"x=(\d+),y=(\d+)", ans)
             for xs, ys in pts:
                 self._click_xy(cb["x"] + int(xs), cb["y"] + int(ys))
-                time.sleep(random.uniform(0.3, 0.8))
-            time.sleep(1.5)
-            # Verify/Skip button (challenge ke neeche daayen)
+                time.sleep(random.uniform(0.25, 0.6))
+            time.sleep(1.2)
             ch2, cb2 = self._find_iframe_el("challenge")
-            if ch2:
+            if ch2:     # Verify / Skip (neeche daayen)
                 self._click_xy(cb2["x"] + cb2["width"] - 50, cb2["y"] + cb2["height"] - 28)
-            time.sleep(5)
-            if not self._find_iframe_el("challenge")[0]:
-                self.log(T("Captcha passed in the browser.", "Captcha browser mein pass ho gaya."))
-                return True
-        return False
+            time.sleep(4)
+        el, b = self._find_iframe_el("anchor")
+        return bool(el and self._anchor_ticked(el))
 
     def _solve_recaptcha_click(self, key):
         import base64
@@ -3421,67 +3539,212 @@ class Automation:
         except Exception as e:
             self.log(T(f"    notification skipped: {e}", f"    notification skip: {e}"))
 
+    # ---------- insaan jaisi harkat ----------
+    def _unsafe_text(self, txt):
+        t = (txt or "").lower()
+        return any(w in t for w in UNSAFE_WORDS)
+
+    def _visible_posts(self):
+        """Screen par nazar aane wali posts (article)."""
+        out = []
+        try:
+            vh = self.page.viewport_size["height"] if self.page.viewport_size else 900
+        except Exception:
+            vh = 900
+        try:
+            for el in self.page.query_selector_all("div[role='article'], div[aria-posinset]"):
+                try:
+                    b = el.bounding_box()
+                    if b and b["y"] < vh * 0.7 and b["y"] + b["height"] > vh * 0.25 and b["height"] > 120:
+                        out.append(el)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return out
+
+    def _like_visible_post(self):
+        """Saamne wali (saaf) post ko Like. Gandi / nudity wali skip."""
+        for post in self._visible_posts():
+            try:
+                if self._unsafe_text(post.inner_text()):
+                    continue
+                btn = None
+                for b in post.query_selector_all("div[aria-label='Like'][role='button'], span[aria-label='Like'][role='button']"):
+                    if b.is_visible():
+                        btn = b; break
+                if not btn:
+                    continue
+                self._human_click(None, btn)
+                time.sleep(random.uniform(1, 2.5))
+                return True
+            except Exception:
+                continue
+        return False
+
+    def _comment_visible_post(self, text):
+        for post in self._visible_posts():
+            try:
+                if self._unsafe_text(post.inner_text()):
+                    continue
+                box = post.query_selector("div[contenteditable='true'][role='textbox']")
+                if not box:
+                    cb = post.query_selector("div[aria-label='Leave a comment'][role='button'], div[aria-label='Comment'][role='button']")
+                    if cb:
+                        cb.click(); time.sleep(random.uniform(1.5, 3))
+                    box = self.page.query_selector("div[contenteditable='true'][role='textbox'][aria-label*='comment' i]")
+                if not box:
+                    continue
+                box.click(); time.sleep(random.uniform(0.6, 1.5))
+                box.type(spin(text), delay=random.randint(40, 110))
+                time.sleep(random.uniform(0.5, 1.2))
+                self.page.keyboard.press("Enter")
+                time.sleep(random.uniform(2, 4))
+                try:
+                    self.page.keyboard.press("Escape")
+                except Exception:
+                    pass
+                return True
+            except Exception:
+                continue
+        return False
+
+    def _human_feed(self, seconds, like_max=0, comment_max=0, comment_text=""):
+        """Feed insaan ki tarah: thora scroll, kabhi ruk kar parhna, kabhi upar, kabhi like/comment."""
+        end = time.time() + seconds
+        likes = comments = 0
+        while time.time() < end:
+            try:
+                if random.random() < 0.12:
+                    self.page.mouse.wheel(0, -random.randint(150, 400))       # thora wapas
+                else:
+                    self.page.mouse.wheel(0, random.randint(300, 750))
+            except Exception:
+                pass
+            time.sleep(random.uniform(1.2, 3.5))
+            if random.random() < 0.25:
+                time.sleep(random.uniform(3, 9))                                # post parh raha hai
+            if likes < like_max and random.random() < 0.35:
+                if self._like_visible_post():
+                    likes += 1
+                    self.log(f"    like {likes}/{like_max}")
+            if comments < comment_max and comment_text and random.random() < 0.25:
+                if self._comment_visible_post(comment_text):
+                    comments += 1
+                    self.log(f"    comment {comments}/{comment_max}")
+        return likes, comments
+
+    def _scroll_for(self, seconds, label=""):
+        self._human_feed(seconds)
+
     def act_scroll_feed(self, minutes):
         secs = int(minutes * 60)
-        self.log(T(f"  • Scrolling feed ~{minutes} min...", f"  • Feed scroll ~{minutes} min..."))
+        self.log(T(f"  • Scrolling feed ~{minutes:.1f} min (1-2 likes)...", f"  • Feed scroll ~{minutes:.1f} min (1-2 like)..."))
         try:
             self.page.goto(FB_HOME, wait_until="domcontentloaded")
-            time.sleep(2)
-            self._scroll_for(secs)
+            time.sleep(random.uniform(2, 4))
+            self._human_feed(secs, like_max=random.randint(1, 2))
         except Exception as e:
             self.log(T(f"    feed skipped: {e}", f"    feed skip: {e}"))
 
     def act_check_stories(self, minutes):
         secs = int(minutes * 60)
-        self.log(T(f"  • Watching stories ~{minutes} min...", f"  • Stories dekh rahe ~{minutes} min..."))
+        self.log(T(f"  • Watching stories ~{minutes:.1f} min...", f"  • Stories dekh rahe ~{minutes:.1f} min..."))
         try:
             self.page.goto(FB_HOME, wait_until="domcontentloaded")
-            time.sleep(2)
-            self._scroll_for(secs)
+            time.sleep(random.uniform(3, 5))
+            st = None
+            for el in self.page.query_selector_all("a[href*='/stories/']"):
+                try:
+                    if el.is_visible() and "create" not in (el.get_attribute("href") or ""):
+                        st = el; break
+                except Exception:
+                    continue
+            if not st:
+                self._human_feed(min(secs, 20)); return
+            st.click(); time.sleep(random.uniform(2, 4))
+            end = time.time() + secs
+            while time.time() < end:
+                time.sleep(random.uniform(3, 9))                 # story dekho
+                if random.random() < 0.3:
+                    self.page.keyboard.press("ArrowRight")       # kabhi agli par
+            self.page.keyboard.press("Escape")
         except Exception as e:
             self.log(T(f"    stories skipped: {e}", f"    stories skip: {e}"))
 
+    def _watch_secs(self, short=False):
+        r = random.random()
+        if short:                    # reels
+            return random.uniform(2, 7) if r < 0.6 else (random.uniform(10, 25) if r < 0.92 else random.uniform(30, 60))
+        return random.uniform(3, 12) if r < 0.55 else (random.uniform(20, 60) if r < 0.88 else random.uniform(60, 150))
+
+    def _media_watch(self, secs, reels):
+        """Videos/Reels insaan ki tarah: koi skip, koi lambi, achhi par kabhi like (max 2), gandi foran skip."""
+        end = time.time() + secs
+        likes, like_max = 0, random.randint(1, 2)
+        while time.time() < end:
+            try:
+                main = self.page.query_selector("[role='main']")
+                txt = (main.inner_text() if main else "")[:1500]
+            except Exception:
+                txt = ""
+            if self._unsafe_text(txt):
+                time.sleep(random.uniform(0.5, 1.5))              # gandi — foran aage
+            else:
+                w = min(self._watch_secs(short=reels), max(1, end - time.time()))
+                time.sleep(w)
+                if likes < like_max and w > 12 and random.random() < 0.4:
+                    try:
+                        for b in self.page.query_selector_all("div[aria-label='Like'][role='button']"):
+                            if b.is_visible():
+                                self._human_click(None, b); likes += 1
+                                self.log(f"    like {likes}"); time.sleep(random.uniform(1, 2)); break
+                    except Exception:
+                        pass
+            try:
+                if reels:
+                    self.page.keyboard.press("ArrowDown")
+                else:
+                    self.page.mouse.wheel(0, random.randint(550, 900))
+            except Exception:
+                pass
+            time.sleep(random.uniform(1, 2.5))
+
     def act_scroll_videos(self, minutes):
         secs = int(minutes * 60)
-        self.log(T(f"  • Scrolling videos ~{minutes} min...", f"  • Videos scroll ~{minutes} min..."))
+        self.log(T(f"  • Watching videos ~{minutes:.1f} min...", f"  • Videos dekh rahe ~{minutes:.1f} min..."))
         try:
             self.page.goto("https://www.facebook.com/watch/", wait_until="domcontentloaded")
-            time.sleep(2)
-            self._scroll_for(secs)
+            time.sleep(random.uniform(3, 5))
+            self._media_watch(secs, reels=False)
         except Exception as e:
             self.log(T(f"    videos skipped: {e}", f"    videos skip: {e}"))
 
     def act_scroll_reels(self, minutes):
         secs = int(minutes * 60)
-        self.log(T(f"  • Scrolling reels ~{minutes} min...", f"  • Reels scroll ~{minutes} min..."))
+        self.log(T(f"  • Watching reels ~{minutes:.1f} min...", f"  • Reels dekh rahe ~{minutes:.1f} min..."))
         try:
             self.page.goto("https://www.facebook.com/reel/", wait_until="domcontentloaded")
-            time.sleep(2)
-            self._scroll_for(secs)
+            time.sleep(random.uniform(3, 5))
+            self._media_watch(secs, reels=True)
         except Exception as e:
             self.log(T(f"    reels skipped: {e}", f"    reels skip: {e}"))
 
     def act_reactions(self, count):
-        self.log(T(f"  • Reacting (Like) on {count} posts...", f"  • {count} post par reaction (Like)..."))
+        self.log(T(f"  • Liking {count} posts (clean posts only)...", f"  • {count} post like (sirf saaf posts)..."))
         try:
             self.page.goto(FB_HOME, wait_until="domcontentloaded")
-            time.sleep(3)
+            time.sleep(random.uniform(3, 5))
             done = 0
-            for _ in range(count * 4):
+            for _ in range(count * 8):
                 if done >= count:
                     break
-                btns = self.page.query_selector_all("div[aria-label='Like'][role='button']")
-                for b in btns:
-                    try:
-                        b.click()
-                        done += 1
-                        self.log(T(f"    Like {done}/{count}", f"    Like {done}/{count}"))
-                        time.sleep(random.uniform(2, 5))
-                        break
-                    except Exception:
-                        continue
-                self.page.mouse.wheel(0, random.randint(600, 1000))
-                time.sleep(random.uniform(2, 4))
+                self.page.mouse.wheel(0, random.randint(400, 900))
+                time.sleep(random.uniform(1.5, 4))
+                if random.random() < 0.5 and self._like_visible_post():     # har post nahi — kuch chhor ke
+                    done += 1
+                    self.log(T(f"    Like {done}/{count}", f"    Like {done}/{count}"))
+                    time.sleep(random.uniform(2, 5))
         except Exception as e:
             self.log(T(f"    reaction skipped: {e}", f"    reaction skip: {e}"))
 
@@ -3489,54 +3752,95 @@ class Automation:
         self.log(T(f"  • Commenting on {count} posts...", f"  • {count} post par comment..."))
         try:
             self.page.goto(FB_HOME, wait_until="domcontentloaded")
-            time.sleep(3)
+            time.sleep(random.uniform(3, 5))
             done = 0
-            for _ in range(count * 4):
+            for _ in range(count * 8):
                 if done >= count:
                     break
-                box = self.page.query_selector("div[aria-label*='Comment' i][contenteditable='true']")
-                if box:
-                    try:
-                        box.click()
-                        time.sleep(1)
-                        box.type(spin(text), delay=20)
-                        self.page.keyboard.press("Enter")
-                        done += 1
-                        self.log(T(f"    Comment {done}/{count}", f"    Comment {done}/{count}"))
-                        time.sleep(random.uniform(3, 6))
-                    except Exception:
-                        pass
-                self.page.mouse.wheel(0, random.randint(700, 1100))
+                self.page.mouse.wheel(0, random.randint(500, 1000))
                 time.sleep(random.uniform(2, 4))
+                if random.random() < 0.45 and self._comment_visible_post(text):
+                    done += 1
+                    self.log(T(f"    Comment {done}/{count}", f"    Comment {done}/{count}"))
         except Exception as e:
             self.log(T(f"    comment skipped: {e}", f"    comment skip: {e}"))
 
+    def _msg_today(self, add=0):
+        acc = get_account(self.current_acc["id"]) or {}
+        d = acc.get("msg_daily") or {}
+        today = time.strftime("%Y-%m-%d")
+        n = d.get("n", 0) if d.get("date") == today else 0
+        if add:
+            n += add
+            update_account(self.current_acc["id"], msg_daily={"date": today, "n": n})
+        return n
+
     def act_messages_reply(self, count, reply_on, text):
-        self.log(T(f"  • Checking messages ({count})...", f"  • Messages check ({count})..."))
+        """Naye messages hon to un mein se (max 2) ka jawab. Na hon to kisi friend ko halka sa message
+        (din mein 1-2 se zyada nahi). Friends hi na hon to pehle 2 naye friends add."""
+        self.log(T(f"  • Checking messages...", f"  • Messages check..."))
+        text = text or "{Hi|Hey|Hello} {how are you?|kaise ho?|🙂}"
         try:
             self.page.goto("https://www.facebook.com/messages/t/", wait_until="domcontentloaded")
-            time.sleep(4)
-            if not reply_on:
-                self._scroll_for(random.uniform(4, 7))
+            time.sleep(random.uniform(4, 6))
+            unread = self.page.evaluate("""() => {
+                const out = [];
+                document.querySelectorAll("a[href*='/messages/t/']").forEach((a, i) => {
+                    const spans = Array.from(a.querySelectorAll('span')).filter(s => s.children.length === 0 && s.innerText.trim());
+                    if (spans.length < 2) return;
+                    const last = spans[spans.length - 1];
+                    const w = parseInt(getComputedStyle(last).fontWeight || '400');
+                    if (w >= 600 || /unread/i.test(a.getAttribute('aria-label') || '')) out.push(a.getAttribute('href'));
+                });
+                return out;
+            }""") or []
+            replied = 0
+            if unread and reply_on:
+                for href in unread[:min(max(1, count), 2)]:
+                    try:
+                        self.page.goto("https://www.facebook.com" + href if href.startswith("/") else href,
+                                       wait_until="domcontentloaded")
+                        time.sleep(random.uniform(3, 6))           # message parho
+                        box = self.page.query_selector("div[aria-label*='Message' i][contenteditable='true']")
+                        if box:
+                            box.click(); box.type(spin(text), delay=random.randint(50, 120))
+                            time.sleep(random.uniform(0.5, 1.5)); self.page.keyboard.press("Enter")
+                            replied += 1
+                            self.log(T(f"    Reply {replied}", f"    Reply {replied}"))
+                            time.sleep(random.uniform(3, 6))
+                    except Exception:
+                        continue
                 return
-            threads = self.page.query_selector_all("a[href*='/messages/t/']")
-            opened = 0
-            for t in threads:
-                if opened >= count:
-                    break
-                try:
-                    t.click()
-                    time.sleep(3)
-                    box = self.page.query_selector("div[aria-label*='Message' i][contenteditable='true']")
-                    if box:
-                        box.click()
-                        box.type(spin(text), delay=20)
-                        self.page.keyboard.press("Enter")
-                        opened += 1
-                        self.log(T(f"    Reply {opened}/{count}", f"    Reply {opened}/{count}"))
-                        time.sleep(random.uniform(2, 5))
-                except Exception:
-                    continue
+            if not unread:
+                self._scroll_for(random.uniform(3, 6))
+            if not reply_on or self._msg_today() >= 2:
+                return
+            # kisi friend ko halka message
+            self.page.goto("https://www.facebook.com/me/friends", wait_until="domcontentloaded")
+            time.sleep(random.uniform(4, 6))
+            links = self.page.evaluate("""() => Array.from(document.querySelectorAll("[role='main'] a[href]"))
+                .map(a => a.href).filter(h => /facebook\\.com\\/(profile\\.php\\?id=\\d+|[A-Za-z0-9.]+)$/.test(h.split('&')[0])
+                    && !/\\/(friends|me|photos|videos|about)/.test(h))""") or []
+            links = list(dict.fromkeys(links))
+            if not links:
+                self.log(T("    no friends yet — adding 2 new friends first", "    abhi friends nahi — pehle 2 naye friends add"))
+                self.act_add_friends_suggest(2)
+                return
+            target = random.choice(links[:30])
+            self.page.goto(target, wait_until="domcontentloaded"); time.sleep(random.uniform(4, 7))
+            if self._click_button(["Message"]):
+                time.sleep(random.uniform(3, 5))
+                box = self.page.query_selector("div[aria-label*='Message' i][contenteditable='true']")
+                if box:
+                    box.click(); box.type(spin(text), delay=random.randint(50, 120))
+                    time.sleep(random.uniform(0.5, 1.2)); self.page.keyboard.press("Enter")
+                    self._msg_today(add=1)
+                    self.log(T("    sent a friendly message to a friend", "    ek friend ko message bheja"))
+                    time.sleep(random.uniform(2, 4))
+                    try:
+                        self.page.keyboard.press("Escape")
+                    except Exception:
+                        pass
         except Exception as e:
             self.log(T(f"    message skipped: {e}", f"    message skip: {e}"))
 
@@ -3588,29 +3892,58 @@ class Automation:
         update_account(self.current_acc["id"], **{key: lst[-2000:]})
 
     def act_add_friends_suggest(self, count):
-        """People You May Know se friend requests."""
-        self.log(T(f"  • Adding friends from suggestions ({count})...", f"  • Suggestions se friends add ({count})..."))
+        """People You May Know se friend requests — SIRF larkon ko (naam se pehchaan; shak ho to skip),
+        har dafa alag tarteeb (kabhi pehla, kabhi chautha...)."""
+        self.log(T(f"  • Adding friends from suggestions — boys only ({count})...",
+                   f"  • Suggestions se friends add — sirf larke ({count})..."))
         done = 0
+        seen = set()
         try:
             self.page.goto("https://www.facebook.com/friends/suggestions", wait_until="domcontentloaded")
             time.sleep(random.uniform(4, 6))
-            for _ in range(count * 4):
+            for _ in range(count * 6):
                 if done >= count:
                     break
-                btns = self.page.query_selector_all("div[aria-label='Add friend'][role='button'], "
-                                                    "div[aria-label='Add Friend'][role='button']")
-                btns = [b for b in btns if b.is_visible()]
-                if btns:
+                cards = self.page.evaluate("""() => {
+                    const out = [];
+                    document.querySelectorAll("div[aria-label='Add friend'][role='button'], div[aria-label='Add Friend'][role='button']")
+                      .forEach((b, i) => {
+                        let n = b, name = '';
+                        for (let k = 0; k < 8 && n; k++) {
+                            n = n.parentElement;
+                            if (!n) break;
+                            const a = n.querySelector("a[href*='facebook.com/'] span, a[role='link'] span");
+                            if (a && a.innerText.trim()) { name = a.innerText.trim().split('\\n')[0]; break; }
+                        }
+                        const r = b.getBoundingClientRect();
+                        out.push({i, name, vis: r.width > 0 && r.top > 0 && r.top < innerHeight});
+                      });
+                    return out;
+                }""") or []
+                btns = self.page.query_selector_all("div[aria-label='Add friend'][role='button'], div[aria-label='Add Friend'][role='button']")
+                picked = None
+                for c in cards:
+                    if not c.get("vis") or c["name"] in seen:
+                        continue
+                    seen.add(c["name"])
+                    g = guess_gender(c["name"])
+                    if g != "male":
+                        self.log(f"    skip ({'girl' if g == 'female' else 'not sure'}): {c['name']}")
+                        continue
+                    if random.random() < 0.4:             # kuch chhor ke (har dafa alag tarteeb)
+                        continue
+                    picked = c; break
+                if picked and picked["i"] < len(btns):
                     try:
-                        rnd_b = random.choice(btns)
-                        rnd_b.scroll_into_view_if_needed(); time.sleep(random.uniform(0.8, 2))
-                        rnd_b.click(); done += 1
-                        self.log(f"    add friend {done}/{count}")
-                        time.sleep(random.uniform(4, 9))
+                        b = btns[picked["i"]]
+                        b.scroll_into_view_if_needed(); time.sleep(random.uniform(0.8, 2))
+                        self._human_click(None, b); done += 1
+                        self.log(f"    add friend {done}/{count}: {picked['name']}")
+                        time.sleep(random.uniform(3, 7))
                         continue
                     except Exception:
                         pass
-                self.page.mouse.wheel(0, random.randint(500, 900)); time.sleep(random.uniform(1.5, 3))
+                self.page.mouse.wheel(0, random.randint(400, 800)); time.sleep(random.uniform(1.5, 3))
         except Exception as e:
             self.log(T(f"    add friends skipped: {e}", f"    add friends skip: {e}"))
         return done
@@ -3963,20 +4296,21 @@ class Automation:
                 self.log(f"    copyright cleanup: {e}")
         return removed
 
-    def act_checkin_post(self, caption="", photo_folder="", with_photo=False):
-        """Profile par CHECK-IN post: location = IP wali city (US), optional photo + caption."""
+    def act_checkin_post(self, caption="", photo_folder="", with_photo=False, do_checkin=True):
+        """Profile par post: CHECK-IN (IP wali city) aur/ya photo + caption.
+        do_checkin=False -> sirf photo post (folder se, har ID ki alag photo)."""
         acc = get_account(self.current_acc["id"]) or self.current_acc
         info = acc.get("ip_info") or {}
-        city = info.get("city") or ""
-        place = ", ".join(x for x in (city, info.get("regionName", "")) if x)
+        city = info.get("city") or "" if do_checkin else ""
+        place = ", ".join(x for x in (city, info.get("regionName", "")) if x) if do_checkin else ""
         photo = ""
         if with_photo and photo_folder and os.path.isdir(photo_folder):
-            used = self._done_set("checkin_photos")
-            pics = [p for p in list_media_in_folder(photo_folder, "photo") if os.path.basename(p) not in used]
-            if pics:
-                photo = random.choice(pics)
-        self.log(T(f"  • Check-in post: {place or '(no IP city)'}" + (f" + photo {os.path.basename(photo)}" if photo else ""),
-                   f"  • Check-in post: {place or '(IP city nahi)'}" + (f" + photo {os.path.basename(photo)}" if photo else "")))
+            photo = self._pick_media(photo_folder, "checkin_photos", "photo")
+        if not do_checkin and not photo:
+            self.log(T("  • Photo post: no unused photo in folder — skipped.", "  • Photo post: folder mein nayi photo nahi — skip."))
+            return False
+        self.log(T((f"  • Check-in post: {place or '(no IP city)'}" if do_checkin else "  • Photo post") + (f" + photo {os.path.basename(photo)}" if photo else ""),
+                   (f"  • Check-in post: {place or '(IP city nahi)'}" if do_checkin else "  • Photo post") + (f" + photo {os.path.basename(photo)}" if photo else "")))
         try:
             self.page.goto(FB_HOME, wait_until="domcontentloaded"); time.sleep(random.uniform(4, 7))
             if not self._click_button(["What's on your mind", "Create a post", "Create post"]):
@@ -4018,6 +4352,60 @@ class Automation:
         except Exception as e:
             self.log(f"    check-in error: {e}")
             return False
+
+    def _pick_media(self, folder, done_key, kind):
+        """Folder se ek file jo is ID par pehle use nahi hui (har ID ki alag). kind: photo / video / any."""
+        if not folder or not os.path.isdir(folder):
+            return ""
+        used = self._done_set(done_key)
+        files = []
+        for k in (("photo", "video") if kind == "any" else (kind,)):
+            try:
+                files += list_media_in_folder(folder, k)
+            except Exception:
+                pass
+        fresh = [p for p in files if os.path.basename(p) not in used]
+        # doosri IDs ne jo abhi isi run mein li, woh bhi kam se kam chuno
+        with _MEDIA_LOCK:
+            pool = [p for p in fresh if p not in _MEDIA_TAKEN] or fresh
+            if not pool:
+                return ""
+            p = random.choice(pool)
+            _MEDIA_TAKEN.add(p)
+        return p
+
+    def act_create_story(self, folder, count=1):
+        """Story lagao: folder se photo ya video (har ID ki alag)."""
+        done = 0
+        for _ in range(max(1, int(count or 1))):
+            media = self._pick_media(folder, "story_media", "any")
+            if not media:
+                self.log(T("  • Story: no unused photo/video in folder — skipped.", "  • Story: folder mein nayi photo/video nahi — skip."))
+                break
+            self.log(T(f"  • Creating story: {os.path.basename(media)}", f"  • Story laga rahe hain: {os.path.basename(media)}"))
+            try:
+                self.page.goto("https://www.facebook.com/stories/create", wait_until="domcontentloaded")
+                time.sleep(random.uniform(4, 6))
+                fi = None
+                for el in self.page.query_selector_all("input[type='file']"):
+                    fi = el; break
+                if not fi:
+                    self._click_button(["Create a photo story", "Create a Photo Story", "Create photo story"])
+                    time.sleep(2)
+                    fi = self.page.query_selector("input[type='file']")
+                if not fi:
+                    self.log(T("    story upload box not found", "    story upload box nahi mila")); break
+                fi.set_input_files(media)
+                time.sleep(random.uniform(8, 14) if media.lower().endswith((".mp4", ".mov", ".m4v", ".webm")) else random.uniform(5, 8))
+                ok = self._click_button(["Share to story", "Share to Story", "Share"])
+                time.sleep(random.uniform(5, 8))
+                if ok:
+                    done += 1
+                    self._mark_done("story_media", os.path.basename(media))
+                    self.log(T("    story shared ✔", "    story lag gayi ✔"))
+            except Exception as e:
+                self.log(f"    story error: {e}")
+        return done
 
     def run_active(self, s, stop_check=None):
         """Warm-up / Active. Har ID (har browser) ka apna RANDOM plan:
@@ -4063,8 +4451,16 @@ class Automation:
                 tasks.append(("professional mode", self.act_professional_mode))
             if s.get("checkin", {}).get("on"):
                 ck = s["checkin"]
-                tasks.append(("check-in post", lambda: self.act_checkin_post(ck.get("caption", ""), ck.get("folder", ""),
+                tasks.append(("check-in post", lambda: self.act_checkin_post(ck.get("caption", ""),
+                                                                            ck.get("folder", "") or s.get("photo_post", {}).get("folder", ""),
                                                                             bool(ck.get("photo")))))
+            if s.get("photo_post", {}).get("on"):
+                pp = s["photo_post"]
+                tasks.append(("photo post", lambda: self.act_checkin_post(pp.get("caption", ""), pp.get("folder", ""),
+                                                                         True, do_checkin=False)))
+            if s.get("story", {}).get("on"):
+                sy = s["story"]
+                tasks.append(("story", lambda: self.act_create_story(sy.get("folder", ""), cnt(sy.get("count", 1)))))
             if s.get("add_friends", {}).get("on"):
                 tasks.append(("add friends", lambda: self.act_add_friends_suggest(cnt(s["add_friends"].get("count", 3)))))
             if s.get("add_friends_uid", {}).get("on"):
@@ -4085,9 +4481,7 @@ class Automation:
             if lp == 1 and s.get("page_status", {}).get("on"):
                 tasks.append(("page status", lambda: self.check_page_status(
                     bool(s["page_status"].get("delete_copyright")))))
-            # kabhi kabhi 1 kaam chhor do (insaan har roz sab kuch nahi karta)
-            if len(tasks) > 3 and rnd.random() < 0.35:
-                tasks.pop(rnd.randrange(len(tasks) - (1 if tasks[-1][0] == "page status" else 0)))
+            # jo tick kiya woh har dafa hoga (koi kaam skip nahi) — sirf tarteeb random
             self.log(T(f"[{acc['name']}] Active loop {lp}/{loops} — plan: " + " → ".join(t[0] for t in tasks),
                        f"[{acc['name']}] Active loop {lp}/{loops} — plan: " + " → ".join(t[0] for t in tasks)))
             for name, fn in tasks:
@@ -4097,8 +4491,8 @@ class Automation:
                     fn()
                 except Exception as e:
                     self.log(f"[{acc['name']}] {name}: {e}")
-                # insaani waqfa (har ID ka alag)
-                time.sleep(rnd.uniform(4, 25))
+                # insaani waqfa (har ID ka alag) — chhota, taake kaam jaldi ho
+                time.sleep(rnd.uniform(3, 10))
         self.log(T(f"[{acc['name']}] Active session complete.", f"[{acc['name']}] Active session mukammal."))
 
     @staticmethod
@@ -4356,12 +4750,30 @@ class Automation:
             self.log(T(f"[{acc['name']}] Not logged in — cannot detect pages.",
                        f"[{acc['name']}] Login nahi — pages nahi dhoond sakte."))
             return []
-        found = {}
-        skip = ("/pages/", "/recover", "/r.php", "/reg/", "/signup", "/login", "/groups", "/events", "/watch", "/marketplace", "/gaming",
-                "/settings", "/help", "/privacy", "/policies", "/notifications",
-                "/messages", "/friends", "/bookmarks", "/saved", "/reel", "/stories",
-                "/login", "/ads", "/business", "/latest", "/memories", "/hashtag", "/photo",
-                "/search", "/profile.php?id=" + "0")
+        import re as _re
+        cands = {}            # url -> [naam ke umeedwar]
+        bad_url = ("/pages/", "/recover", "/r.php", "/reg/", "/signup", "/login", "/groups", "/events", "/watch",
+                   "/marketplace", "/gaming", "/settings", "/help", "/privacy", "/policies", "/notifications",
+                   "/messages", "/friends", "/bookmarks", "/saved", "/reel", "/stories", "/ads", "/ad_center",
+                   "adsmanager", "/business", "/latest", "/memories", "/hashtag", "/photo", "/search",
+                   "/professional_dashboard", "/insights", "/boost", "/promote", "/create", "/inbox", "/l.php",
+                   "/sharer", "/dialog", "/composer", "/videos", "/live", "/meta", "/policy")
+        junk = ("see all", "create new page", "create", "invites", "your pages", "pages", "discover", "liked pages",
+                "followed pages", "promote", "create ad", "boost", "boost post", "messages", "notifications",
+                "insights", "manage", "switch", "switch now", "posts", "post", "more", "verified", "edit",
+                "ad center", "meta business suite", "professional dashboard", "followers", "likes")
+
+        def _clean(t):
+            t = (t or "").split("\n")[0].strip()
+            t = _re.sub(r"^(profile picture (for|of)\s+)", "", t, flags=_re.I)
+            t = _re.sub(r"('s)?\s*profile picture$", "", t, flags=_re.I).strip()
+            t = t.strip(" ·•✓✔")
+            if not t or len(t) > 80 or t.lower() in junk or _re.fullmatch(r"[\d\s.,kKmM+]+", t):
+                return ""
+            if any(w in t.lower() for w in ("promote", "create ad", "boost", "ad center")):
+                return ""
+            return t
+
         for url in ["https://www.facebook.com/pages/?category=your_pages",
                     "https://www.facebook.com/bookmarks/pages/"]:
             try:
@@ -4372,26 +4784,39 @@ class Automation:
                 links = self.page.evaluate("""() => {
                     const root = document.querySelector('[role="main"]') || document.body;
                     return Array.from(root.querySelectorAll('a[href]')).map(a => [
-                        a.href, (a.innerText || a.getAttribute('aria-label') || '').trim()]);
+                        a.href, (a.innerText || '').trim(), (a.getAttribute('aria-label') || '').trim(),
+                        (a.querySelector('svg image, img') && a.innerText.trim() === '') ? 1 : 0]);
                 }""")
-                for href, text in links:
+                for href, text, aria, is_pic in links:
                     if not href or "facebook.com" not in href:
                         continue
-                    h = href.split("?")[0] if "profile.php" not in href else href.split("&")[0]
-                    h = h.rstrip("/")
-                    if any(s in h for s in skip) or h.endswith("facebook.com"):
+                    if "profile.php" in href:
+                        m = _re.search(r"[?&]id=(\d+)", href)
+                        if not m:
+                            continue
+                        h = "https://www.facebook.com/profile.php?id=" + m.group(1)
+                    else:
+                        h = href.split("?")[0].split("#")[0].rstrip("/")
+                        path = h.split("facebook.com", 1)[-1].strip("/")
+                        if not path or "/" in path:      # page ka link ek hi hissa hota hai (facebook.com/NaamPage)
+                            continue
+                        if any(b in "/" + path.lower() for b in bad_url):
+                            continue
+                    if any(b in href.lower() for b in ("ad_center", "adsmanager", "/promote", "boost")):
                         continue
-                    name = (text or "").split("\n")[0].strip()
-                    if not name or len(name) > 80 or name.lower() in (
-                            "see all", "create new page", "create", "invites", "your pages",
-                            "pages", "discover", "liked pages", "followed pages"):
-                        continue
-                    if h not in found:
-                        found[h] = name
+                    for t in (text, aria):
+                        c = _clean(t)
+                        if c:
+                            cands.setdefault(h, []).append((1 if t is text else 0, c))
             except Exception as e:
                 self.log(f"  page detect error: {e}")
-            if found:
+            if cands:
                 break
+        found = {}
+        for h, lst in cands.items():
+            # text wala naam behtar (aria 'Profile picture for X' se bhi X hi aata hai)
+            lst.sort(key=lambda x: (-x[0], len(x[1])))
+            found[h] = lst[0][1]
         pages = [{"name": n, "url": u} for u, n in found.items()]
         self.log(T(f"[{acc['name']}] Found {len(pages)} page(s).",
                    f"[{acc['name']}] {len(pages)} page mile."))
@@ -4688,7 +5113,7 @@ class AccountPanel:
         self.tree.column("#0", width=int(48 * k), minwidth=int(40 * k), anchor="center", stretch=False)
         self.tree.heading("#0", text="✔")
         for c in cols:
-            self.tree.heading(c, text=heads[c])
+            self.tree.heading(c, text=heads[c], anchor="w")   # heading usi column ke upar seedha
             self.tree.column(c, width=int(widths[c] * k), minwidth=int(40 * k), anchor="w",
                              stretch=(not detail and c in ("name", "email")))
         xs = ttk.Scrollbar(tf, orient="horizontal", command=self.tree.xview)
@@ -4716,10 +5141,11 @@ class AccountPanel:
             ttk.Button(ph, text=T("Tick all", "Sab tick"), command=lambda: self._tick_all_pages(True)).pack(side="right", padx=2)
             self.ptree = ttk.Treeview(pb, columns=("pname", "purl"), show="tree headings", height=3, selectmode="none")
             self.ptree.column("#0", width=46, anchor="center", stretch=False)
-            self.ptree.heading("#0", text="Post")
-            self.ptree.heading("pname", text=T("Page name", "Page ka naam"))
-            self.ptree.heading("purl", text="Link")
-            self.ptree.column("pname", width=240, anchor="w"); self.ptree.column("purl", width=320, anchor="w")
+            self.ptree.heading("#0", text="Post", anchor="center")
+            self.ptree.heading("pname", text=T("Page name", "Page ka naam"), anchor="w")
+            self.ptree.heading("purl", text="Link", anchor="w")
+            self.ptree.column("pname", width=280, minwidth=160, anchor="w", stretch=True)
+            self.ptree.column("purl", width=380, minwidth=200, anchor="w", stretch=True)
             pys = ttk.Scrollbar(pb, orient="vertical", command=self.ptree.yview)
             self.ptree.configure(yscrollcommand=pys.set)
             pys.pack(side="right", fill="y")
@@ -6649,7 +7075,8 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
             try:
                 bot.start(acc)
                 if not bot.login(wait_for_2fa_callback=self._wait_2fa):
-                    self.after(0, lambda: self._set_status_all(acc["id"], "Die")); return
+                    _st = bot.account_state()
+                    self.after(0, lambda: self._set_status_all(acc["id"], _st)); return
                 self.after(0, lambda: self._set_status_all(acc["id"], "Live"))
                 if pro:
                     bot.act_professional_mode()
@@ -6713,6 +7140,12 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
             self.after(0, lambda: self._set_status_all(acc["id"], "Live"))
             add_id_history(acc["id"], "login ok", "")
             if not self.stop_flag.is_set():
+                try:      # insaan ki tarah thora feed scroll, phir details
+                    bot.page.goto(FB_HOME, wait_until="domcontentloaded")
+                    time.sleep(random.uniform(2, 4))
+                    bot._scroll_for(random.uniform(10, 20))
+                except Exception:
+                    pass
                 try:
                     bot.detect_profile_info()
                     bot.check_primary_location()
@@ -6935,7 +7368,7 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
             try:
                 bot.start(acc)
                 ok = bot.login(wait_for_2fa_callback=self._wait_2fa)
-                self.after(0, lambda: self._set_status_all(acc["id"], "Live" if ok else (bot.account_state() or "Die")))
+                self.after(0, lambda: self._set_status_all(acc["id"], "Live" if ok else (bot.account_state() or "Not login")))
                 log(T(f"[{acc['name']}] Browser is open — close the window when done.",
                       f"[{acc['name']}] Browser khula hai — kaam ke baad window band kar dein."))
                 while bot.context and bot.context.pages:
@@ -7312,10 +7745,38 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         ttk.Checkbutton(ckr, text=T("Check-in post (IP city)", "Check-in post (IP city)"), variable=self._ck_on,
                         width=20).pack(side="left")
         ttk.Entry(ckr, textvariable=self._ck_cap, width=18).pack(side="left", padx=2)
-        ttk.Checkbutton(ckr, text=T("+ photo", "+ photo"), variable=self._ck_photo).pack(side="left", padx=2)
-        ttk.Entry(ckr, textvariable=self._ck_folder, width=12).pack(side="left", padx=2)
-        ttk.Button(ckr, text="...", width=3, command=lambda: self._ck_folder.set(
-            filedialog.askdirectory() or self._ck_folder.get())).pack(side="left")
+        ttk.Checkbutton(ckr, text=T("+ photo (from photo folder)", "+ photo (photo folder se)"),
+                        variable=self._ck_photo).pack(side="left", padx=2)
+
+        # ---- Photo post (bina check-in) + photo folder ----
+        pp = saved.get("photo_post", {})
+        self._pp_on = tk.IntVar(value=1 if pp.get("on") else 0)
+        self._pp_cap = tk.StringVar(value=pp.get("caption", ""))
+        if not self._ck_folder.get():
+            self._ck_folder.set(pp.get("folder", ""))
+        ppr = ttk.Frame(grid); ppr.pack(fill="x", padx=6, pady=2)
+        ttk.Checkbutton(ppr, text=T("Photo post (no check-in)", "Photo post (bina check-in)"), variable=self._pp_on,
+                        width=20).pack(side="left")
+        ttk.Entry(ppr, textvariable=self._pp_cap, width=18).pack(side="left", padx=2)
+        pfr = ttk.Frame(grid); pfr.pack(fill="x", padx=6, pady=2)
+        ttk.Label(pfr, text=T("   Photo folder:", "   Photo folder:"), width=20).pack(side="left")
+        ttk.Entry(pfr, textvariable=self._ck_folder, width=30).pack(side="left", padx=2)
+        ttk.Button(pfr, text=T("Select folder", "Folder chuno"), command=lambda: self._ck_folder.set(
+            filedialog.askdirectory(title=T("Photo folder (one photo per ID)", "Photo folder (har ID ki alag photo)"))
+            or self._ck_folder.get())).pack(side="left", padx=2)
+
+        # ---- Create story (photo ya video) ----
+        sy = saved.get("story", {})
+        self._sy_on = tk.IntVar(value=1 if sy.get("on") else 0)
+        self._sy_cnt = tk.StringVar(value=str(sy.get("count", 1)))
+        self._sy_folder = tk.StringVar(value=sy.get("folder", ""))
+        syr = ttk.Frame(grid); syr.pack(fill="x", padx=6, pady=2)
+        ttk.Checkbutton(syr, text=T("Create story", "Story lagao"), variable=self._sy_on, width=20).pack(side="left")
+        tk.Spinbox(syr, from_=1, to=10, textvariable=self._sy_cnt, width=5).pack(side="left")
+        ttk.Entry(syr, textvariable=self._sy_folder, width=22).pack(side="left", padx=4)
+        ttk.Button(syr, text=T("Select folder", "Folder chuno"), command=lambda: self._sy_folder.set(
+            filedialog.askdirectory(title=T("Story folder (photos or videos)", "Story folder (photo ya video)"))
+            or self._sy_folder.get())).pack(side="left", padx=2)
         ps = saved.get("page_status", {})
         psr = ttk.Frame(grid); psr.pack(fill="x", padx=6, pady=2)
         self._ps_on = tk.IntVar(value=1 if ps.get("on") else 0)
@@ -7408,6 +7869,10 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
             "primary_loc": {"on": bool(self._pl_on.get())},
             "checkin": {"on": bool(self._ck_on.get()), "photo": bool(self._ck_photo.get()),
                         "caption": self._ck_cap.get(), "folder": self._ck_folder.get().strip()},
+            "photo_post": {"on": bool(self._pp_on.get()), "caption": self._pp_cap.get(),
+                           "folder": self._ck_folder.get().strip()},
+            "story": {"on": bool(self._sy_on.get()), "count": iv(self._sy_cnt.get()) or 1,
+                      "folder": self._sy_folder.get().strip()},
             "loops": iv(self.active_loops.get()) or 1,
         }
 
@@ -8584,7 +9049,7 @@ downloads and replaces itself, then restarts. No manual download needed.
         try:
             bot.start(account)
             if not bot.login(wait_for_2fa_callback=self._wait_2fa):
-                if panel: panel.set_status(account["id"], "Die")
+                if panel: panel.set_status(account["id"], bot.account_state())
                 add_id_history(account["id"], "login failed", bot.last_error or T("login did not happen", "login nahi hui"))
                 return
             if panel: panel.set_status(account["id"], "Live")
@@ -8668,7 +9133,7 @@ downloads and replaces itself, then restarts. No manual download needed.
         except Exception as e:
             log(T(f"[{account['name']}] Error: {e}", f"[{account['name']}] Error: {e}"))
             add_id_history(account["id"], "error", str(e))
-            if panel: panel.set_status(account["id"], "Die")
+            if panel: panel.set_status(account["id"], "Error")
         finally:
             time.sleep(3); bot.stop()
 
@@ -8733,7 +9198,7 @@ downloads and replaces itself, then restarts. No manual download needed.
             log(f"[{account['name']}] LD done.")
         except Exception as e:
             log(f"[{account['name']}] LD error: {e}")
-            if panel: panel.set_status(account["id"], "Die")
+            if panel: panel.set_status(account["id"], "Error")
 
     def _run_active(self, account, settings, start_at=None):
         log = lambda m: self.log_q.put(m)
@@ -8758,7 +9223,7 @@ downloads and replaces itself, then restarts. No manual download needed.
         try:
             bot.start(account)
             if not bot.login(wait_for_2fa_callback=self._wait_2fa):
-                if panel: panel.set_status(account["id"], "Die")
+                if panel: panel.set_status(account["id"], bot.account_state())
                 add_id_history(account["id"], "login failed", bot.last_error or T("login did not happen", "login nahi hui"))
                 return
             if panel: panel.set_status(account["id"], "Live")
