@@ -3934,6 +3934,9 @@ class AccountPanel:
         if show_delete:
             ttk.Button(head, text="Delete selected", command=self.app._delete_checked).pack(side="left", padx=2)
         if detail:
+            ttk.Button(head, text=T("✎ Edit", "✎ Edit"), style="Accent.TButton",
+                       command=self._edit_selected).pack(side="left", padx=2)
+        if detail:
             ttk.Label(head, text="  Group:").pack(side="left")
             self.group_cb = ttk.Combobox(head, textvariable=self.filter_group, width=12, state="readonly")
             self.group_cb.pack(side="left", padx=2)
@@ -3980,6 +3983,8 @@ class AccountPanel:
         tf.grid_rowconfigure(0, weight=1); tf.grid_columnconfigure(0, weight=1)
         if detail:
             self.tree.bind("<Button-3>", self._row_menu)
+            self.tree.bind("<Double-1>", lambda e: (lambda r: r and self.on_pick and get_account(r) and
+                                                    self.on_pick(get_account(r)))(self.tree.identify_row(e.y)))
         self.tree.bind("<Button-1>", self._on_click)
 
         if show_pages:
@@ -4004,6 +4009,16 @@ class AccountPanel:
 
         self.app._panels.append(self)
         self.refresh()
+
+    def _edit_selected(self):
+        ids = [i for i in self.checked] or ([self.cur_acc_id] if self.cur_acc_id else [])
+        if not ids:
+            messagebox.showwarning(T("Edit", "Edit"), T("Click or tick one ID, then press Edit.",
+                                                       "Kisi ID par click ya tick karein, phir Edit dabayein."))
+            return
+        a = get_account(ids[0])
+        if a and self.on_pick:
+            self.on_pick(a)
 
     def _row_menu(self, e):
         row = self.tree.identify_row(e.y)
@@ -5692,6 +5707,7 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
                    command=self._ix_capture_click).pack(side="left")
 
         form = ttk.LabelFrame(left, text=T("Add / edit ID", "ID add / edit karein"))
+        self.a_form = form
         form.pack(fill="y")
 
         self.a_name = self._row(form, T("Name:", "Name:"))
@@ -5740,7 +5756,8 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         self.a_hash.pack(fill="x", padx=8, pady=2)
 
         btns = ttk.Frame(form); btns.pack(fill="x", padx=8, pady=6)
-        ttk.Button(btns, text=T("Save ID", "Save ID"), command=self._save_account).pack(side="left")
+        self.a_save_btn = ttk.Button(btns, text=T("Save ID", "Save ID"), style="Accent.TButton", command=self._save_account)
+        self.a_save_btn.pack(side="left")
         ttk.Button(btns, text=T("New / clear form", "New / clear form"), command=self._clear_form).pack(side="left", padx=4)
 
         # ---- ADD ACCOUNTS (Bob Prime jaisa: format khud chuno) ----
@@ -6004,10 +6021,24 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
                   self.a_country, self.a_dob, self.a_gender):
             v.set("")
         self.a_daily.set("0")
+        self._editing_id = None
+        try:
+            self.a_form.config(text=T("Add / edit ID", "ID add / edit karein"))
+            self.a_save_btn.config(text=T("Save ID", "Save ID"))
+        except Exception:
+            pass
         self.a_hash.delete("1.0", tk.END)
         self.a_video_list.delete(0, tk.END)
 
     def _load_account_into_form(self, a):
+        self._editing_id = a.get("id")
+        try:
+            self.a_form.config(text=T(f"✎ EDITING: {a.get('name') or a.get('email')}  (change anything → SAVE CHANGES)",
+                                      f"✎ EDIT: {a.get('name') or a.get('email')}  (jo badalna ho badlo → SAVE CHANGES)"))
+            self.a_save_btn.config(text=T("SAVE CHANGES", "SAVE CHANGES"))
+            self._show("Accounts")
+        except Exception:
+            pass
         self.a_name.set(a.get("name", "")); self.a_email.set(a.get("email", ""))
         self.a_pass.set(a.get("password", "")); self.a_page.set(a.get("page_name", ""))
         self.a_ix.set(a.get("ix_profile", "")); self.a_proxy.set(a.get("proxy", ""))
@@ -6027,6 +6058,16 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
             messagebox.showwarning(T("Wait", "Ruko"), T("Email and password are required.", "Email aur password zaroori hain."))
             return
         page = self.a_page.get().strip()
+        old_id = getattr(self, "_editing_id", None)
+        new_id = self.a_email.get().strip().lower()
+        if old_id and old_id != new_id:
+            # email badli: purani entry ki saari maloomat (pages, status, profile...) nayi ID par le jao
+            old = get_account(old_id) or {}
+            accs = [x for x in load_accounts() if x.get("id") != old_id]
+            save_accounts(accs)
+            carry = {k: v for k, v in old.items() if k not in ("id", "email")}
+        else:
+            carry = {}
         aid = add_account(self.a_name.get() or self.a_email.get(), self.a_email.get(),
                           self.a_pass.get(), page, self.a_proxy.get(), self.a_ix.get(),
                           self.a_folder.get(), self.a_twofa.get(), self.a_ld.get())
@@ -6035,6 +6076,12 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
                        primary_loc=self.a_primary.get().strip(), created=self.a_created.get().strip(),
                        country=self.a_country.get().strip(), dob=self.a_dob.get().strip(),
                        gender=self.a_gender.get().strip(), last_update=_now_str()[:16])
+        if carry:
+            keep = {k: v for k, v in carry.items() if k not in (
+                "name", "password", "page_name", "proxy", "ix_profile", "folder", "twofa", "ld_index", "uid", "email2",
+                "profile", "group", "primary_loc", "created", "country", "dob", "gender", "last_update")}
+            update_account(aid, **keep)
+        self.log_q.put(T(f"ID saved: {self.a_name.get() or self.a_email.get()}", f"ID save ho gayi: {self.a_name.get() or self.a_email.get()}"))
         if page:
             set_hashtags_for_page(page, self.a_hash.get("1.0", tk.END))
             try:
