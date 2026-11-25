@@ -2593,6 +2593,57 @@ class Automation:
         except Exception:
             pass
 
+    def _choose_auth_app_in_dialog(self):
+        """FB ka 'Choose a way to confirm it's you' dialog: usi dialog ke andar 'Authentication app' chuno + Continue."""
+        try:
+            dlg = None
+            for d in self.page.query_selector_all("[role='dialog']"):
+                try:
+                    if d.is_visible() and "authentication app" in (d.inner_text() or "").lower():
+                        dlg = d
+                except Exception:
+                    continue
+            if not dlg:
+                return False
+            opt = None
+            for sel in ("[role='radio']:has-text('Authentication app')", "label:has-text('Authentication app')",
+                        "[role='button']:has-text('Authentication app')", "text=/^\\s*Authentication app\\s*$/i",
+                        "text=/authentication app/i"):
+                try:
+                    opt = dlg.query_selector(sel)
+                    if opt and opt.is_visible():
+                        break
+                    opt = None
+                except Exception:
+                    opt = None
+            if not opt:
+                return False
+            opt.click()
+            time.sleep(0.8)
+            # radio sach mein laga? warna radio input khud dabao
+            try:
+                r = dlg.query_selector("input[type='radio'][value*='totp' i], input[type='radio'][value*='app' i]")
+                if r and not r.is_checked():
+                    r.check(force=True)
+            except Exception:
+                pass
+            cont = None
+            for sel in ("[role='button']:has-text('Continue')", "button:has-text('Continue')",
+                        "[role='button']:has-text('Next')", "button:has-text('Next')"):
+                try:
+                    cont = dlg.query_selector(sel)
+                    if cont and cont.is_visible():
+                        break
+                    cont = None
+                except Exception:
+                    cont = None
+            if cont:
+                cont.click()
+                return True
+        except Exception:
+            pass
+        return False
+
     def _click_css(self, sel):
         try:
             el = self.page.query_selector(sel)
@@ -2707,36 +2758,24 @@ class Automation:
                         self.log(f"2FA: {e}")
                     time.sleep(3); continue
 
-            # 3) "Check your notifications" / "another device" / approve -> Try another way -> Authentication app
-            if acc.get("twofa") and not auth_page and other_way_tries < 4 and any(k in txt for k in (
-                    "check your notifications", "another device", "approve from", "approve this login",
-                    "waiting for approval", "go to your facebook app", "check your other device",
-                    "we sent a notification", "approve on another", "choose a way to confirm",
-                    "try another way", "confirm it's you")):
-                if self._click_button(["Try another way", "Try Another Way", "Use another way", "Choose another option"]):
+            # 3) "Check your notifications" / "another device" -> Try another way -> (dialog) Authentication app -> Continue
+            if acc.get("twofa") and not auth_page and other_way_tries < 5:
+                if self._choose_auth_app_in_dialog():
                     other_way_tries += 1
-                    time.sleep(2)
-                    self.log(T(f"[{acc['name']}] 'Try another way' → Authentication app", f"[{acc['name']}] 'Try another way' → Authentication app"))
-                    if not self._click_button(["Authentication app", "Authenticator app", "Code generator",
-                                               "Use authentication app", "Login code"]):
-                        # radio list — text wala element dhoondo
-                        try:
-                            el = self.page.query_selector("text=/authentication app/i")
-                            if el:
-                                el.click()
-                        except Exception:
-                            pass
-                    time.sleep(1)
-                    self._click_button(["Continue", "Next"])
+                    self.log(T(f"[{acc['name']}] 2FA: chose 'Authentication app'", f"[{acc['name']}] 2FA: 'Authentication app' chuna"))
                     time.sleep(3); continue
-                if "choose a way" in txt or "authentication app" in txt:
-                    try:
-                        el = self.page.query_selector("text=/authentication app/i")
-                        if el:
-                            el.click(); time.sleep(1); self._click_button(["Continue", "Next"]); time.sleep(3)
-                            other_way_tries += 1; continue
-                    except Exception:
-                        pass
+                if any(k in txt for k in (
+                        "check your notifications", "another device", "approve from", "approve this login",
+                        "waiting for approval", "go to your facebook app", "check your other device",
+                        "we sent a notification", "approve on another", "try another way")):
+                    if self._click_button(["Try another way", "Try Another Way", "Use another way", "Choose another option"]):
+                        other_way_tries += 1
+                        self.log(T(f"[{acc['name']}] 'Try another way' → Authentication app", f"[{acc['name']}] 'Try another way' → Authentication app"))
+                        for _ in range(6):
+                            time.sleep(1)
+                            if self._choose_auth_app_in_dialog():
+                                break
+                        time.sleep(3); continue
 
             # 4) Trust device / save browser / continue screens
             if any(k in txt for k in ("trust this device", "save browser", "remember browser", "save your login info",
@@ -4658,6 +4697,8 @@ class AccountPanel:
             return
         m = tk.Menu(self.tree, tearoff=0)
         m.add_command(label=T("Open browser (this ID)", "Browser kholo (is ID ka)"), command=lambda: self.app._open_browser_for(a))
+        m.add_command(label=T("Open browser — I'll log in myself (manual)", "Browser kholo — main khud login karunga (manual)"),
+                      command=lambda: self.app._open_browser_manual(a))
         m.add_command(label=T("Edit", "Edit"), command=lambda: self.on_pick and self.on_pick(a))
         m.add_separator()
         m.add_command(label=T("Select", "Select"), command=lambda: (self.checked.add(row), self.refresh()))
@@ -6845,6 +6886,43 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
                       f"[{acc['name']}] Browser khula hai — kaam ke baad window band kar dein."))
                 while bot.context and bot.context.pages:
                     time.sleep(2)
+            except Exception as e:
+                log(f"[{acc['name']}] {e}")
+            finally:
+                bot.stop()
+        threading.Thread(target=work, daemon=True).start()
+
+    def _open_browser_manual(self, acc):
+        """Is ID ka FB Browser (apni profile + proxy/VPN + fingerprint) kholo, bot login NAHI karega.
+        Aap khud login karein; login hote hi bot UID save karke ID 'Live' kar dega."""
+        def work():
+            log = lambda m: self.log_q.put(m)
+            if not ensure_runtime(log=log):
+                return
+            bot = Automation(log=log, headless=False, browser_cfg=load_settings())
+            try:
+                bot.start(acc)
+                try:
+                    bot.page.goto(FB_HOME, wait_until="domcontentloaded")
+                except Exception:
+                    pass
+                log(T(f"[{acc['name']}] Browser open — log in yourself. I'll save it when you're in. Close the window when done.",
+                      f"[{acc['name']}] Browser khul gaya — khud login karein. Login hote hi main save kar dunga. Kaam ke baad window band kar dein."))
+                marked = False
+                while bot.context and bot.context.pages:
+                    time.sleep(4)
+                    if not marked:
+                        try:
+                            uid = bot._fb_uid()
+                            url = (bot.page.url or "").lower()
+                            if uid and "checkpoint" not in url and "two_step" not in url:
+                                marked = True
+                                bot.is_logged_in()
+                                self.after(0, lambda: self._set_status_all(acc["id"], "Live"))
+                                log(T(f"[{acc['name']}] Logged in (manual) — session saved.",
+                                      f"[{acc['name']}] Login ho gaya (manual) — session save."))
+                        except Exception:
+                            pass
             except Exception as e:
                 log(f"[{acc['name']}] {e}")
             finally:
