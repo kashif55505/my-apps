@@ -2680,6 +2680,19 @@ class Automation:
                         code_box = el; break
                 except Exception:
                     continue
+            auth_page = (("authentication app" in txt or "6-digit" in txt or "login code" in txt)
+                         and "code" in txt and "choose a way to confirm" not in txt)
+            if not code_box and auth_page:
+                # FB ka naya 2FA page: saada text input (koi khaas attribute nahi)
+                for sel in ("input[type='text']", "input[type='number']", "input:not([type])"):
+                    try:
+                        for el in self.page.query_selector_all(sel):
+                            if el.is_visible() and el.is_enabled():
+                                code_box = el; break
+                    except Exception:
+                        pass
+                    if code_box:
+                        break
             if code_box and acc.get("twofa"):
                 code = totp_now(acc.get("twofa", ""))
                 if code and code not in done_2fa_codes:
@@ -2695,7 +2708,7 @@ class Automation:
                     time.sleep(3); continue
 
             # 3) "Check your notifications" / "another device" / approve -> Try another way -> Authentication app
-            if acc.get("twofa") and other_way_tries < 4 and any(k in txt for k in (
+            if acc.get("twofa") and not auth_page and other_way_tries < 4 and any(k in txt for k in (
                     "check your notifications", "another device", "approve from", "approve this login",
                     "waiting for approval", "go to your facebook app", "check your other device",
                     "we sent a notification", "approve on another", "choose a way to confirm",
