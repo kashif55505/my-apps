@@ -3064,7 +3064,7 @@ class Automation:
                 self.log(T("Captcha ticked in the browser.", "Captcha browser mein tick ho gaya."))
                 return True
             try:
-                png = ch.screenshot()
+                png = ch.screenshot(scale="css")
             except Exception:
                 time.sleep(2); continue
             self.log(T(f"Captcha images → 2Captcha (round {rnd + 1})...",
@@ -3129,7 +3129,7 @@ class Automation:
                 rows = tbl.query_selector_all("tr")
                 n_rows = len(rows) or 3
                 n_cols = len(rows[0].query_selector_all("td")) if rows else 3
-                png = tbl.screenshot()
+                png = tbl.screenshot(scale="css")
                 dynamic = "none left" in inst.lower()
                 self.log(T(f"Captcha images ({n_rows}x{n_cols}): '{inst[:60]}' → 2Captcha...",
                            f"Captcha tasveerein ({n_rows}x{n_cols}): '{inst[:60]}' → 2Captcha..."))
