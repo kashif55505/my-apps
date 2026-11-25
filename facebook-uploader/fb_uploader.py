@@ -2811,6 +2811,238 @@ class Automation:
         except Exception as e:
             self.log(T(f"    confirm skipped: {e}", f"    confirm skip: {e}"))
 
+    # ================= Bob Prime jaise naye Active kaam =================
+    def _read_list(self, path_or_text):
+        """File path ho to file ki lines, warna text ki lines/commas."""
+        src = (path_or_text or "").strip()
+        if src and os.path.isfile(src):
+            try:
+                src = open(src, encoding="utf-8", errors="ignore").read()
+            except Exception:
+                src = ""
+        out = []
+        for part in src.replace(",", "\n").splitlines():
+            part = part.strip()
+            if part and not part.startswith("#"):
+                out.append(part)
+        return out
+
+    def _done_set(self, key):
+        acc = get_account(self.current_acc["id"]) or {}
+        return set(acc.get(key, []))
+
+    def _mark_done(self, key, val):
+        acc = get_account(self.current_acc["id"]) or {}
+        lst = list(acc.get(key, []))
+        if val not in lst:
+            lst.append(val)
+        update_account(self.current_acc["id"], **{key: lst[-2000:]})
+
+    def act_add_friends_suggest(self, count):
+        """People You May Know se friend requests."""
+        self.log(T(f"  • Adding friends from suggestions ({count})...", f"  • Suggestions se friends add ({count})..."))
+        done = 0
+        try:
+            self.page.goto("https://www.facebook.com/friends/suggestions", wait_until="domcontentloaded")
+            time.sleep(random.uniform(4, 6))
+            for _ in range(count * 4):
+                if done >= count:
+                    break
+                btns = self.page.query_selector_all("div[aria-label='Add friend'][role='button'], "
+                                                    "div[aria-label='Add Friend'][role='button']")
+                btns = [b for b in btns if b.is_visible()]
+                if btns:
+                    try:
+                        rnd_b = random.choice(btns)
+                        rnd_b.scroll_into_view_if_needed(); time.sleep(random.uniform(0.8, 2))
+                        rnd_b.click(); done += 1
+                        self.log(f"    add friend {done}/{count}")
+                        time.sleep(random.uniform(4, 9))
+                        continue
+                    except Exception:
+                        pass
+                self.page.mouse.wheel(0, random.randint(500, 900)); time.sleep(random.uniform(1.5, 3))
+        except Exception as e:
+            self.log(T(f"    add friends skipped: {e}", f"    add friends skip: {e}"))
+        return done
+
+    def act_add_friends_uid(self, count, src):
+        """UID / profile link list se friend request (jo pehle bheji, dobara nahi)."""
+        lst = self._read_list(src)
+        sent = self._done_set("friend_sent")
+        todo = [u for u in lst if u not in sent]
+        random.shuffle(todo)
+        self.log(T(f"  • Add friends from UID list ({min(count, len(todo))})...",
+                   f"  • UID list se friends add ({min(count, len(todo))})..."))
+        done = 0
+        for u in todo:
+            if done >= count:
+                break
+            try:
+                self.page.goto(self._norm_target(u), wait_until="domcontentloaded")
+                time.sleep(random.uniform(4, 7))
+                self._scroll_for(random.uniform(2, 5))
+                self.page.mouse.wheel(0, -3000); time.sleep(1)
+                if self._click_button(["Add friend", "Add Friend"]):
+                    done += 1
+                    self.log(f"    request sent {done}/{count}: {u}")
+                self._mark_done("friend_sent", u)
+                time.sleep(random.uniform(6, 14))
+            except Exception as e:
+                self.log(f"    {u}: {e}")
+        return done
+
+    def act_follow_pages(self, count, src):
+        """Page / profile list ko follow ya like karo (jo pehle kiye, dobara nahi)."""
+        lst = self._read_list(src)
+        dn = self._done_set("followed")
+        todo = [u for u in lst if u not in dn]
+        random.shuffle(todo)
+        self.log(T(f"  • Following pages ({min(count, len(todo))})...", f"  • Pages follow ({min(count, len(todo))})..."))
+        done = 0
+        for u in todo:
+            if done >= count:
+                break
+            try:
+                self.page.goto(self._norm_target(u), wait_until="domcontentloaded")
+                time.sleep(random.uniform(4, 7))
+                self._scroll_for(random.uniform(3, 8))
+                self.page.mouse.wheel(0, -4000); time.sleep(1)
+                if self._click_button(["Follow", "Like"]):
+                    done += 1
+                    self.log(f"    followed {done}/{count}: {u}")
+                self._mark_done("followed", u)
+                time.sleep(random.uniform(5, 12))
+            except Exception as e:
+                self.log(f"    {u}: {e}")
+        return done
+
+    # ---------- Page status / copyright / monetization ----------
+    _STATUS_URLS = ["https://www.facebook.com/professional_dashboard/account_status/",
+                    "https://www.facebook.com/professional_dashboard/",
+                    "https://www.facebook.com/accountquality/"]
+    _MON_URLS = ["https://www.facebook.com/professional_dashboard/monetization/",
+                 "https://www.facebook.com/professional_dashboard/monetization_overview/"]
+
+    def _page_text(self):
+        try:
+            return (self.page.inner_text("[role='main']") or "")
+        except Exception:
+            try:
+                return self.page.inner_text("body")
+            except Exception:
+                return ""
+
+    def check_page_status(self, delete_copyright=False):
+        """Har tick kiye page par: Flagged / Not recommended / restrictions + monetization maloomat.
+        delete_copyright=True ho to copyright wali flagged videos delete."""
+        acc = self.current_acc
+        targets = [p for p in (get_account(acc["id"]) or {}).get("pages", []) if p.get("enabled")] \
+            or [{"name": acc.get("page_name") or acc["name"], "url": ""}]
+        report = {}
+        for tgt in targets:
+            name = tgt.get("name") or tgt.get("url") or "profile"
+            self.log(T(f"  • Page status: {name}", f"  • Page status: {name}"))
+            try:
+                self.target_page = tgt if tgt.get("url") else None
+                if tgt.get("url"):
+                    self._go_to_page()
+                txt = ""
+                for u in self._STATUS_URLS:
+                    try:
+                        self.page.goto(u, wait_until="domcontentloaded"); time.sleep(random.uniform(5, 8))
+                        txt += "\n" + self._page_text()
+                    except Exception:
+                        pass
+                low = txt.lower()
+                flags = []
+                for k, lab in (("not recommended", "Not Recommended"), ("isn't recommended", "Not Recommended"),
+                               ("not eligible", "Not eligible"), ("restricted", "Restricted"),
+                               ("flagged", "Flagged"), ("copyright", "Copyright issue"),
+                               ("intellectual property", "Copyright issue"), ("violat", "Violation"),
+                               ("at risk", "At risk"), ("unpublished", "Unpublished")):
+                    if k in low and lab not in flags:
+                        flags.append(lab)
+                ok_words = ("no restrictions" in low or "you're all set" in low or "no issues" in low
+                            or "can be recommended" in low)
+                status = ", ".join(flags) if flags else ("OK" if ok_words else "Unknown")
+                removed = 0
+                if delete_copyright and ("copyright" in low or "intellectual property" in low):
+                    removed = self._delete_copyright_items()
+                money = ""
+                for u in self._MON_URLS:
+                    try:
+                        self.page.goto(u, wait_until="domcontentloaded"); time.sleep(random.uniform(5, 8))
+                        mt = self._page_text()
+                        lines = [l.strip() for l in mt.splitlines() if l.strip()]
+                        keep = [l for l in lines if any(w in l.lower() for w in
+                                ("$", "earning", "eligib", "monetiz", "payout", "estimated", "in-stream", "reels",
+                                 "bonus", "followers", "minutes viewed", "requirement"))]
+                        if keep:
+                            money = " | ".join(keep[:10])[:600]
+                            break
+                    except Exception:
+                        pass
+                report[name] = {"time": time.strftime("%Y-%m-%d %H:%M"), "status": status,
+                                "monetization": money, "copyright_removed": removed}
+                self.log(T(f"    → {name}: {status}" + (f" | removed {removed} copyright item(s)" if removed else ""),
+                           f"    → {name}: {status}" + (f" | {removed} copyright item delete" if removed else "")))
+                if money:
+                    self.log(f"    $ {money[:200]}")
+                add_page_history(name, "-", "status", status)
+            except Exception as e:
+                self.log(f"    status error: {e}")
+        self.target_page = None
+        if report:
+            old = (get_account(acc["id"]) or {}).get("page_status", {})
+            old.update(report)
+            update_account(acc["id"], page_status=old)
+            # pages list mein bhi status dikhao
+            a2 = get_account(acc["id"]) or {}
+            pg = a2.get("pages") or []
+            for p in pg:
+                r = report.get(p.get("name") or p.get("url"))
+                if r:
+                    p["status"] = r["status"]
+            if pg:
+                update_account(acc["id"], pages=pg)
+        return report
+
+    def _delete_copyright_items(self):
+        """Account status / support inbox mein copyright wale items ke 'Delete/Remove' dabao."""
+        removed = 0
+        for u in ["https://www.facebook.com/professional_dashboard/account_status/",
+                  "https://www.facebook.com/support/"]:
+            try:
+                self.page.goto(u, wait_until="domcontentloaded"); time.sleep(6)
+                for _ in range(10):
+                    items = self.page.query_selector_all("[role='main'] [role='listitem'], [role='main'] [role='row'], "
+                                                         "[role='main'] div[role='button']")
+                    hit = None
+                    for it in items:
+                        try:
+                            t = (it.inner_text() or "").lower()
+                        except Exception:
+                            continue
+                        if "copyright" in t or "intellectual property" in t:
+                            hit = it; break
+                    if not hit:
+                        break
+                    hit.click(); time.sleep(4)
+                    if self._click_button(["Delete video", "Remove video", "Delete post", "Remove post",
+                                           "Delete", "Remove"]):
+                        time.sleep(2)
+                        self._click_button(["Delete", "Remove", "Confirm"])
+                        removed += 1
+                        self.log(f"    copyright item removed ({removed})")
+                        time.sleep(4)
+                        self.page.goto(u, wait_until="domcontentloaded"); time.sleep(5)
+                    else:
+                        break
+            except Exception as e:
+                self.log(f"    copyright cleanup: {e}")
+        return removed
+
     def run_active(self, s, stop_check=None):
         """Warm-up / Active. Har ID (har browser) ka apna RANDOM plan:
         kaamon ki tarteeb, ginti aur waqfe sab alag — taake insaan jaisa lage."""
@@ -2847,6 +3079,14 @@ class Automation:
             if s.get("comments", {}).get("on"):
                 tasks.append(("comments", lambda: self.act_comments(cnt(s["comments"].get("count", 1)),
                                                                      s["comments"].get("text", ""))))
+            if s.get("add_friends", {}).get("on"):
+                tasks.append(("add friends", lambda: self.act_add_friends_suggest(cnt(s["add_friends"].get("count", 3)))))
+            if s.get("add_friends_uid", {}).get("on"):
+                fu = s["add_friends_uid"]
+                tasks.append(("add friends (UID list)", lambda: self.act_add_friends_uid(cnt(fu.get("count", 3)), fu.get("src", ""))))
+            if s.get("follow_pages", {}).get("on"):
+                fp = s["follow_pages"]
+                tasks.append(("follow pages", lambda: self.act_follow_pages(cnt(fp.get("count", 3)), fp.get("src", ""))))
             if s.get("group_join", {}).get("on"):
                 tasks.append(("join groups", lambda: self.join_trending_groups(cnt(s["group_join"].get("count", 5)))))
             gp_text = s.get("group_post", {}).get("text", "") if s.get("group_post", {}).get("on") else ""
@@ -2855,9 +3095,13 @@ class Automation:
                 tasks.append(("groups", lambda: self.groups_active(ga.get("min", 3) if ga.get("on") else 0,
                                                                    ga.get("like", True), ga.get("comment", True), gp_text)))
             rnd.shuffle(tasks)
+            # page status / copyright / monetization — loop ke aakhir mein (har loop nahi, sirf pehle)
+            if lp == 1 and s.get("page_status", {}).get("on"):
+                tasks.append(("page status", lambda: self.check_page_status(
+                    bool(s["page_status"].get("delete_copyright")))))
             # kabhi kabhi 1 kaam chhor do (insaan har roz sab kuch nahi karta)
             if len(tasks) > 3 and rnd.random() < 0.35:
-                tasks.pop(rnd.randrange(len(tasks)))
+                tasks.pop(rnd.randrange(len(tasks) - (1 if tasks[-1][0] == "page status" else 0)))
             self.log(T(f"[{acc['name']}] Active loop {lp}/{loops} — plan: " + " → ".join(t[0] for t in tasks),
                        f"[{acc['name']}] Active loop {lp}/{loops} — plan: " + " → ".join(t[0] for t in tasks)))
             for name, fn in tasks:
@@ -3484,7 +3728,8 @@ class AccountPanel:
                                      f"{a['name']}: {len(pg)} pages, {on} tick"))
         for i, p in enumerate(pg):
             img = self.app.img_check if p.get("enabled") else self.app.img_empty
-            self.ptree.insert("", "end", iid=str(i), image=img, values=(p.get("name", ""), p.get("url", "")))
+            nm = p.get("name", "") + (f"   [{p['status']}]" if p.get("status") else "")
+            self.ptree.insert("", "end", iid=str(i), image=img, values=(nm, p.get("url", "")))
 
     def show_pages_of(self, acc_id):
         if self.show_pages:
@@ -5236,7 +5481,8 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
                                            start_label="START", show_pages=False)
 
     def _build_active_config(self, f):
-        grid = ttk.LabelFrame(f, text=T("ACTIVITIES", "ACTIVITIES")); grid.pack(side="left", fill="y", padx=8, pady=8)
+        _sc = self._scroll_area(f, width=640)
+        grid = ttk.LabelFrame(_sc, text=T("ACTIVITIES", "ACTIVITIES")); grid.pack(fill="both", expand=True, padx=4, pady=4)
         self._active_grid = grid
         ttk.Label(grid, text=T("Tick IDs in the table, then press START.\n"
                                "These IDs will only scroll/like/comment etc. — they will NOT post anything.",
@@ -5295,6 +5541,33 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
         tk.Spinbox(crow, from_=0, to=100, textvariable=self._c_cnt, width=5).pack(side="left")
         ttk.Entry(crow, textvariable=self._c_txt, width=24).pack(side="left", padx=4)
 
+        count_row("add_friends", T("Add friends (suggest)", "Friends add (suggest)"), False, 3)
+
+        def list_row(key, label, d_c, hint):
+            d = saved.get(key, {})
+            row = ttk.Frame(grid); row.pack(fill="x", padx=6, pady=2)
+            onv = tk.IntVar(value=1 if d.get("on") else 0)
+            cnt = tk.StringVar(value=str(d.get("count", d_c)))
+            src = tk.StringVar(value=d.get("src", ""))
+            ttk.Checkbutton(row, text=label, variable=onv, width=20).pack(side="left")
+            tk.Spinbox(row, from_=0, to=100, textvariable=cnt, width=5).pack(side="left")
+            ttk.Entry(row, textvariable=src, width=18).pack(side="left", padx=4)
+            ttk.Button(row, text="...", width=3, command=lambda: src.set(
+                filedialog.askopenfilename(title=hint, filetypes=[("Text", "*.txt"), ("All", "*.*")]) or src.get())
+                       ).pack(side="left")
+            self.active_vars[key] = {"on": onv, "count": cnt, "src": src}
+
+        list_row("add_friends_uid", T("Add friends (UID list)", "Friends add (UID list)"), 3, "UID / profile links .txt")
+        list_row("follow_pages", T("Follow pages (list)", "Pages follow (list)"), 3, "Page links / IDs .txt")
+        ps = saved.get("page_status", {})
+        psr = ttk.Frame(grid); psr.pack(fill="x", padx=6, pady=2)
+        self._ps_on = tk.IntVar(value=1 if ps.get("on") else 0)
+        self._ps_del = tk.IntVar(value=1 if ps.get("delete_copyright") else 0)
+        ttk.Checkbutton(psr, text=T("Page status + monetization", "Page status + monetization"),
+                        variable=self._ps_on, width=26).pack(side="left")
+        ttk.Checkbutton(psr, text=T("Auto-delete copyright flagged", "Copyright flagged khud delete"),
+                        variable=self._ps_del).pack(side="left", padx=4)
+
         # ---- GROUP activities (ab isi list me) ----
         ttk.Separator(grid, orient="horizontal").pack(fill="x", padx=6, pady=4)
         gj = saved.get("group_join", {})
@@ -5352,6 +5625,12 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
             "group_active": {"on": bool(self._ga_on.get()), "min": iv(self._ga_min.get()) or 3,
                              "like": bool(self._ga_like.get()), "comment": bool(self._ga_comment.get())},
             "group_post": {"on": bool(self._gp_on.get()), "text": self._gp_txt.get()},
+            "add_friends": {"on": bool(v["add_friends"]["on"].get()), "count": iv(v["add_friends"]["count"].get())},
+            "add_friends_uid": {"on": bool(v["add_friends_uid"]["on"].get()), "count": iv(v["add_friends_uid"]["count"].get()),
+                                "src": v["add_friends_uid"]["src"].get().strip()},
+            "follow_pages": {"on": bool(v["follow_pages"]["on"].get()), "count": iv(v["follow_pages"]["count"].get()),
+                             "src": v["follow_pages"]["src"].get().strip()},
+            "page_status": {"on": bool(self._ps_on.get()), "delete_copyright": bool(self._ps_del.get())},
             "loops": iv(self.active_loops.get()) or 1,
         }
 
@@ -5660,6 +5939,20 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
 
     # ---------- Guide page (in-app help, English) ----------
     GUIDE_TEXT = """
+SURFSHARK — different IP for every browser (no proxies to buy):
+ Proxy Management → "How to get Surfshark files?" → download WireGuard .conf
+ files for many US cities → Import .conf files → Check tunnels → tick IDs →
+ "Assign tunnels to ticked IDs". Each browser shows CHECK IP (IP, city,
+ country) when it opens. If a tunnel fails, that ID's browser is NOT opened.
+
+ACTIVE (Bob Prime style) — every browser does a different random plan:
+ notifications, feed, stories, videos, reels, likes, comments, inbox + reply,
+ confirm friends, add friends (suggestions), add friends from a UID list,
+ follow pages from a list, groups join/active/post, page status
+ (Flagged / Not Recommended / restrictions) + monetization info, optional
+ auto-delete of copyright-flagged items. Lists = .txt, one link/UID per line;
+ already-done entries are skipped next time.
+
 NEW LOOK: left sidebar → Dashboard (cards + recent activity), Accounts,
 Proxy Management, Posting, API Pages, Active & Groups, Schedule, LDPlayer,
 Logs, System Settings, Guide.
