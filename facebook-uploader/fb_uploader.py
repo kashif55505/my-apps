@@ -5822,23 +5822,25 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         self.a_proxy = self._row(form, T("Proxy (optional):", "Proxy (optional):"))
         self.a_twofa = self._row(form, T("2FA secret key (optional):", "2FA secret key (optional):"))
         self.a_ld = self._row(form, T("LDPlayer index (emulator, optional):", "LDPlayer index (emulator, optional):"))
-        self.a_uid = self._row(form, "UID:")
+        ttk.Label(form, text=T("— filled automatically by the bot on login / Active —",
+                               "— ye bot login / Active par khud bharta hai —"), style="Muted.TLabel").pack(anchor="w", padx=8, pady=(6, 0))
+        self.a_uid = self._auto_row(form, "UID:")
         self.a_email2 = self._row(form, T("Email2 / recovery:", "Email2 / recovery:"))
         pr_ = ttk.Frame(form); pr_.pack(fill="x", padx=8, pady=3)
         ttk.Label(pr_, text=T("Browser profile:", "Browser profile:"), width=18).pack(side="left")
         self.a_profile = tk.StringVar()
-        self.a_profile_cb = ttk.Combobox(pr_, textvariable=self.a_profile, width=24)
+        self.a_profile_cb = ttk.Combobox(pr_, textvariable=self.a_profile, width=24, state="readonly")
         self.a_profile_cb.pack(side="left", fill="x", expand=True)
-        self.a_group = self._row(form, T("Group:", "Group:"))
-        self.a_primary = self._row(form, T("Primary location:", "Primary location:"))
-        self.a_created = self._row(form, T("Creation date:", "Banne ki tareekh:"))
-        self.a_country = self._row(form, T("Country:", "Country:"))
-        self.a_dob = self._row(form, T("DOB (date of birth):", "DOB (paidaish):"))
+        self.a_group = self._auto_row(form, T("Group:", "Group:"))
+        self.a_primary = self._auto_row(form, T("Primary location:", "Primary location:"))
+        self.a_created = self._auto_row(form, T("Creation date:", "Banne ki tareekh:"))
+        self.a_country = self._auto_row(form, T("Country:", "Country:"))
+        self.a_dob = self._auto_row(form, T("DOB (date of birth):", "DOB (paidaish):"))
         gr_ = ttk.Frame(form); gr_.pack(fill="x", padx=8, pady=3)
         ttk.Label(gr_, text=T("Gender:", "Gender:"), width=18).pack(side="left")
         self.a_gender = tk.StringVar()
-        ttk.Combobox(gr_, textvariable=self.a_gender, values=("", "Male", "Female", "Other"), width=24,
-                     state="readonly").pack(side="left", fill="x", expand=True)
+        ttk.Entry(gr_, textvariable=self.a_gender, width=26, state="readonly").pack(side="left", fill="x", expand=True)
+        ttk.Label(gr_, text=" auto", style="Muted.TLabel").pack(side="left")
 
         fr = ttk.Frame(form); fr.pack(fill="x", padx=8, pady=3)
         ttk.Label(fr, text=T("Videos folder:", "Videos folder:"), width=18).pack(side="left")
@@ -6090,6 +6092,7 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
             if not self.stop_flag.is_set():
                 try:
                     bot.detect_profile_info()
+                    bot.check_primary_location()
                 except Exception:
                     pass
             if detect and not self.stop_flag.is_set():
@@ -6116,6 +6119,15 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
             self.a_video_list.insert(tk.END, os.path.basename(p))
         if not vids and folder:
             self.a_video_list.insert(tk.END, T("(folder empty or invalid path)", "(folder khali ya galat path)"))
+
+    def _auto_row(self, parent, label):
+        """Sirf dikhane ke liye — bot khud bharta hai."""
+        row = ttk.Frame(parent); row.pack(fill="x", padx=8, pady=2)
+        ttk.Label(row, text=label, width=18).pack(side="left")
+        var = tk.StringVar()
+        ttk.Entry(row, textvariable=var, width=26, state="readonly").pack(side="left", fill="x", expand=True)
+        ttk.Label(row, text=" auto", style="Muted.TLabel").pack(side="left")
+        return var
 
     def _row(self, parent, label, show=None):
         row = ttk.Frame(parent); row.pack(fill="x", padx=8, pady=3)
@@ -6180,15 +6192,16 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         aid = add_account(self.a_name.get() or self.a_email.get(), self.a_email.get(),
                           self.a_pass.get(), page, self.a_proxy.get(), self.a_ix.get(),
                           self.a_folder.get(), self.a_twofa.get(), self.a_ld.get())
-        update_account(aid, uid=self.a_uid.get().strip(), email2=self.a_email2.get().strip(),
-                       profile=self.a_profile.get().strip(), group=self.a_group.get().strip(),
-                       primary_loc=self.a_primary.get().strip(), created=self.a_created.get().strip(),
-                       country=self.a_country.get().strip(), dob=self.a_dob.get().strip(),
-                       gender=self.a_gender.get().strip(), last_update=_now_str()[:16])
+        _upd = {"email2": self.a_email2.get().strip(), "last_update": _now_str()[:16]}
+        if self.a_profile.get().strip():
+            _upd["profile"] = self.a_profile.get().strip()
+        update_account(aid, **_upd)
+        if not (get_account(aid) or {}).get("profile"):
+            profiles_auto_assign({aid})
         if carry:
             keep = {k: v for k, v in carry.items() if k not in (
-                "name", "password", "page_name", "proxy", "ix_profile", "folder", "twofa", "ld_index", "uid", "email2",
-                "profile", "group", "primary_loc", "created", "country", "dob", "gender", "last_update")}
+                "name", "password", "page_name", "proxy", "ix_profile", "folder", "twofa", "ld_index", "email2",
+                "last_update")}
             update_account(aid, **keep)
         self.log_q.put(T(f"ID saved: {self.a_name.get() or self.a_email.get()}", f"ID save ho gayi: {self.a_name.get() or self.a_email.get()}"))
         if page:
@@ -6323,7 +6336,8 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         fmt = [v.get() for v in getattr(self, "imp_fmt", [])]
         auto = bool(getattr(self, "imp_auto", None) is None or self.imp_auto.get())
         save_settings({"import_fmt": fmt, "import_auto": auto})
-        group = getattr(self, "imp_group", None) and self.imp_group.get().strip()
+        group = (getattr(self, "imp_group", None) and self.imp_group.get().strip()) or \
+            os.path.splitext(os.path.basename(path))[0][:30]
         new_ids = []
         for raw in lines:
             extra = {}
