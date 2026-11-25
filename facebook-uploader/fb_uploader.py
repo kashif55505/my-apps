@@ -2865,41 +2865,54 @@ class Automation:
         except Exception:
             return False
         try:
-            # sitekey + type dhoondo
-            sitekey = None
-            captype = None
-            for sel, typ in [("[data-sitekey]", "recaptcha"),
-                             (".g-recaptcha[data-sitekey]", "recaptcha"),
-                             (".h-captcha[data-sitekey]", "hcaptcha")]:
-                el = self.page.query_selector(sel)
-                if el:
-                    sitekey = el.get_attribute("data-sitekey")
-                    captype = typ
-                    if sitekey:
+            # sitekey + type dhoondo — Facebook ka captcha frame ke andar frame mein hota hai,
+            # is liye SAARE frames dekho (main page + fbsbx iframe + google iframe)
+            import re as _re
+            sitekey = captype = None
+            host_frame = None            # jis frame mein widget laga hai (token yahin jayega)
+            for fr in self.page.frames:
+                furl = fr.url or ""
+                m = _re.search(r"(?:recaptcha|hcaptcha)[^?]*/(?:api2|enterprise)?/?anchor.*?[?&]k=([^&]+)", furl) \
+                    or _re.search(r"recaptcha/(?:api2|enterprise)/anchor\?.*?k=([^&]+)", furl)
+                if m:
+                    sitekey = m.group(1); captype = "recaptcha"
+                    host_frame = fr.parent_frame or self.page.main_frame
+                    if "enterprise" in furl:
+                        captype = "recaptcha_ent"
+                    break
+                if "hcaptcha.com" in furl and "sitekey=" in furl:
+                    m = _re.search(r"sitekey=([^&#]+)", furl)
+                    if m:
+                        sitekey = m.group(1); captype = "hcaptcha"
+                        host_frame = fr.parent_frame or self.page.main_frame
                         break
             if not sitekey:
-                # iframe src se recaptcha sitekey
-                fr = self.page.query_selector("iframe[src*='recaptcha']")
-                if fr:
-                    src = fr.get_attribute("src") or ""
-                    import re as _re
-                    m = _re.search(r"[?&]k=([^&]+)", src)
-                    if m:
-                        sitekey = m.group(1); captype = "recaptcha"
+                for fr in self.page.frames:
+                    try:
+                        el = fr.query_selector("[data-sitekey]")
+                        if el and el.get_attribute("data-sitekey"):
+                            sitekey = el.get_attribute("data-sitekey")
+                            cls = (el.get_attribute("class") or "")
+                            captype = "hcaptcha" if "h-captcha" in cls else "recaptcha"
+                            host_frame = fr
+                            break
+                    except Exception:
+                        continue
             if not sitekey:
                 self.log(T("Captcha sitekey not found — solve manually.",
                            "Captcha sitekey nahi mili — khud solve karein."))
                 return False
-
-            method = "userrecaptcha" if captype == "recaptcha" else "hcaptcha"
-            page_url = self.page.url
+            self.log(f"Captcha: {captype}, key {sitekey[:12]}…")
+            method = "hcaptcha" if captype == "hcaptcha" else "userrecaptcha"
+            page_url = (host_frame.url if host_frame and (host_frame.url or "").startswith("http") else self.page.url)
             # 1) submit job
-            params = urllib.parse.urlencode({
-                "key": key, "method": method,
-                "googlekey" if method == "userrecaptcha" else "sitekey": sitekey,
-                "pageurl": page_url, "json": 1,
-            })
-            r = urllib.request.urlopen(f"http://2captcha.com/in.php?{params}", timeout=30)
+            q = {"key": key, "method": method,
+                 ("sitekey" if method == "hcaptcha" else "googlekey"): sitekey,
+                 "pageurl": page_url, "json": 1}
+            if captype == "recaptcha_ent":
+                q["enterprise"] = 1
+            params = urllib.parse.urlencode(q)
+            r = urllib.request.urlopen(f"https://2captcha.com/in.php?{params}", timeout=30)
             data = _json.loads(r.read().decode())
             if str(data.get("status")) != "1":
                 self.log(f"2captcha submit error: {data.get('request')}")
@@ -2912,7 +2925,7 @@ class Automation:
             for _ in range(24):   # ~2 min
                 time.sleep(5)
                 res = urllib.request.urlopen(
-                    f"http://2captcha.com/res.php?key={key}&action=get&id={cap_id}&json=1", timeout=30)
+                    f"https://2captcha.com/res.php?key={key}&action=get&id={cap_id}&json=1", timeout=30)
                 rd = _json.loads(res.read().decode())
                 if str(rd.get("status")) == "1":
                     token = rd["request"]; break
@@ -2922,22 +2935,31 @@ class Automation:
             if not token:
                 self.log(T("2captcha timeout.", "2captcha timeout."))
                 return False
-            # 3) token page me daalo + callback
-            self.page.evaluate(
-                """(tok) => {
-                    document.querySelectorAll('textarea[name="g-recaptcha-response"], textarea#g-recaptcha-response').forEach(t=>{t.style.display='block'; t.value=tok;});
-                    document.querySelectorAll('textarea[name="h-captcha-response"]').forEach(t=>{t.value=tok;});
-                    try { if (typeof ___grecaptcha_cfg !== 'undefined') {
-                        for (const k in ___grecaptcha_cfg.clients) {
-                            const c = ___grecaptcha_cfg.clients[k];
-                            for (const a in c) { const o=c[a];
-                                if (o && o.callback) { try{o.callback(tok);}catch(e){} }
-                                for (const b in o){ const o2=o[b];
-                                    if (o2 && o2.callback){ try{o2.callback(tok);}catch(e){} } }
-                            }
-                        }
-                    }} catch(e){}
-                }""", token)
+            # 3) token us frame me daalo jahan widget hai + callback (sab frames try)
+            _js = """(tok) => {
+                document.querySelectorAll('textarea[name="g-recaptcha-response"], textarea#g-recaptcha-response, textarea[name="h-captcha-response"]')
+                    .forEach(t => { t.style.display = 'block'; t.value = tok; t.innerHTML = tok; });
+                let called = 0;
+                const walk = (o, d) => {
+                    if (!o || d > 5 || typeof o !== 'object') return;
+                    for (const k in o) {
+                        try {
+                            const v = o[k];
+                            if (k === 'callback' && typeof v === 'function') { v(tok); called++; }
+                            else if (k === 'callback' && typeof v === 'string' && typeof window[v] === 'function') { window[v](tok); called++; }
+                            else if (v && typeof v === 'object') walk(v, d + 1);
+                        } catch (e) {}
+                    }
+                };
+                try { if (typeof ___grecaptcha_cfg !== 'undefined') walk(___grecaptcha_cfg.clients, 0); } catch (e) {}
+                return called;
+            }"""
+            frames = ([host_frame] if host_frame else []) + [f for f in self.page.frames if f is not host_frame]
+            for fr in frames:
+                try:
+                    fr.evaluate(_js, token)
+                except Exception:
+                    pass
             self.log(T("Captcha solved.", "Captcha hal ho gaya."))
             time.sleep(2)
             # agar koi submit/continue button ho to dabao
