@@ -98,5 +98,5 @@ jobs:
           gh release create "fbu-v${VERSION}" \
             "Facebook_Uploader-v${VERSION}.exe" \
             "Facebook_Uploader_Setup-v${VERSION}.exe" \
-            --title "Facebook Uploader ${VERSION}" --latest=false \
+            --title "DK Facebook Uploader ${VERSION}" --latest=false \
             --notes "$NOTES" --target "$GITHUB_SHA"

@@ -11,7 +11,8 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-APP_NAME = "Facebook Uploader"
+APP_NAME = "Facebook Uploader"          # install folder (same rakha, updates ke liye)
+DISPLAY_NAME = "DK Facebook Uploader"
 APP_EXE = "Facebook Uploader.exe"
 ICON = "app_icon.ico"
 
@@ -57,7 +58,7 @@ def make_shortcut(lnk_path, target_exe, icon, workdir):
 class Setup(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_NAME} Setup")
+        self.title(f"{DISPLAY_NAME} Setup")
         self.geometry("580x380")
         self.resizable(False, False)
         try:
@@ -84,7 +85,7 @@ class Setup(tk.Tk):
         self.desktop = tk.IntVar(value=1)
         self.launch = tk.IntVar(value=1)
 
-        tk.Label(self, text=f"{APP_NAME} Setup", font=("Segoe UI", 16, "bold")).pack(pady=(22, 6))
+        tk.Label(self, text=f"{DISPLAY_NAME} Setup", font=("Segoe UI", 16, "bold")).pack(pady=(22, 6))
         tk.Label(self, text="This will install the software on your computer.",
                  font=("Segoe UI", 10)).pack()
 
@@ -132,11 +133,16 @@ class Setup(tk.Tk):
             exe_path = os.path.join(target, APP_EXE)
             if self.desktop.get():
                 desktop = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
-                make_shortcut(os.path.join(desktop, APP_NAME + ".lnk"), exe_path, icon_dest, target)
+                for _old in (APP_NAME,):
+                    try:
+                        os.remove(os.path.join(desktop, _old + ".lnk"))
+                    except Exception:
+                        pass
+                make_shortcut(os.path.join(desktop, DISPLAY_NAME + ".lnk"), exe_path, icon_dest, target)
             sm = os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs")
             try:
                 os.makedirs(sm, exist_ok=True)
-                make_shortcut(os.path.join(sm, APP_NAME + ".lnk"), exe_path, icon_dest, target)
+                make_shortcut(os.path.join(sm, DISPLAY_NAME + ".lnk"), exe_path, icon_dest, target)
             except Exception:
                 pass
 
@@ -144,12 +150,12 @@ class Setup(tk.Tk):
             unin = os.path.join(target, "uninstall.bat")
             with open(unin, "w", encoding="utf-8") as f:
                 f.write("@echo off\r\n")
-                f.write(f'del "%USERPROFILE%\\Desktop\\{APP_NAME}.lnk" >nul 2>&1\r\n')
-                f.write(f'del "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\{APP_NAME}.lnk" >nul 2>&1\r\n')
+                f.write(f'del "%USERPROFILE%\\Desktop\\{DISPLAY_NAME}.lnk" >nul 2>&1\r\n')
+                f.write(f'del "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\{DISPLAY_NAME}.lnk" >nul 2>&1\r\n')
                 f.write(f'rmdir /S /Q "{target}" >nul 2>&1\r\n')
 
             self.status.config(text="Installation complete!")
-            messagebox.showinfo("Done", f"{APP_NAME} installed at:\n{target}")
+            messagebox.showinfo("Done", f"{DISPLAY_NAME} installed at:\n{target}")
             if self.launch.get():
                 try:
                     os.startfile(exe_path)

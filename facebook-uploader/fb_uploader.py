@@ -3915,12 +3915,12 @@ class ProUIMixin:
         side = tk.Frame(self, bg=P["side"], width=int(215 * ui_zoom()))
         side.pack(side="left", fill="y"); side.pack_propagate(False)
         brand = tk.Frame(side, bg=P["side"]); brand.pack(fill="x", padx=16, pady=(16, 10))
-        tk.Label(brand, text="F", bg=P["accent2"], fg="white", font=("Segoe UI", 16, "bold"),
-                 width=2).pack(side="left")
+        tk.Label(brand, text="DK", bg=P["accent2"], fg="white", font=("Segoe UI", 15, "bold"),
+                 width=3).pack(side="left")
         bt = tk.Frame(brand, bg=P["side"]); bt.pack(side="left", padx=10)
-        tk.Label(bt, text=f"FB Uploader  v{APP_VERSION}", bg=P["side"], fg=P["text"],
+        tk.Label(bt, text="DK Facebook Uploader", bg=P["side"], fg=P["text"],
                  font=("Segoe UI", 12, "bold")).pack(anchor="w")
-        tk.Label(bt, text="FACEBOOK SUITE", bg=P["side"], fg=P["accent"],
+        tk.Label(bt, text=f"FACEBOOK SUITE  ·  v{APP_VERSION}", bg=P["side"], fg=P["accent"],
                  font=("Segoe UI", 9, "bold")).pack(anchor="w")
         self._nav_items = {}
         for sec, items in NAV:
@@ -4215,7 +4215,7 @@ class ProUIMixin:
 class App(ProUIMixin, ApiPagesMixin, tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Facebook Uploader")
+        self.title("DK Facebook Uploader")
         self.geometry("1240x720")
         try:
             self.state("zoomed")          # poori screen par khule
@@ -5940,7 +5940,7 @@ downloads and replaces itself, then restarts. No manual download needed.
                 pystray.MenuItem("Open", self._tray_show),
                 pystray.MenuItem("Quit", self._tray_quit),
             )
-            self._tray = pystray.Icon("fbuploader", img, "Facebook Uploader", menu)
+            self._tray = pystray.Icon("fbuploader", img, "DK Facebook Uploader", menu)
             threading.Thread(target=self._tray.run, daemon=True).start()
             self.protocol("WM_DELETE_WINDOW", self._tray_hide)
             if load_settings().get("autostart"):
@@ -6565,7 +6565,7 @@ def main():
         try:
             from ctypes import windll
             # purani window saamne lao
-            hwnd = windll.user32.FindWindowW(None, "Facebook Uploader")
+            hwnd = windll.user32.FindWindowW(None, "DK Facebook Uploader")
             if hwnd:
                 windll.user32.ShowWindow(hwnd, 9)   # SW_RESTORE
                 windll.user32.SetForegroundWindow(hwnd)
