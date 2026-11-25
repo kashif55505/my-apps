@@ -110,6 +110,40 @@ def check_update():
         return False, "", str(e)
 
 
+def _download_resume(url, dest, log=print, tries=8):
+    """Bari file download — internet toote to wahin se resume (Range)."""
+    import urllib.request
+    total = None
+    for attempt in range(1, tries + 1):
+        have = os.path.getsize(dest) if os.path.exists(dest) else 0
+        headers = {"User-Agent": "dkfbu"}
+        if have:
+            headers["Range"] = f"bytes={have}-"
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=60) as r:
+                if have and r.status != 206:      # server ne resume nahi kiya
+                    have = 0
+                    mode = "wb"
+                else:
+                    mode = "ab" if have else "wb"
+                cl = r.headers.get("Content-Length")
+                if cl:
+                    total = have + int(cl)
+                with open(dest, mode) as f:
+                    while True:
+                        ch = r.read(1024 * 256)
+                        if not ch:
+                            break
+                        f.write(ch)
+            if total is None or os.path.getsize(dest) >= total:
+                return dest
+        except Exception as e:
+            log(f"Update: download toota ({e.__class__.__name__}) — dobara koshish {attempt}/{tries}...")
+            time.sleep(3)
+    raise RuntimeError("download incomplete after retries")
+
+
 def do_update(log=print):
     """Nayi version download kar ke apply karo.
     - Source (.py) mode: naya fb_uploader.py replace, restart bolo.
@@ -136,7 +170,7 @@ def do_update(log=print):
             cur = sys.executable
             new = cur + ".new"
             log("Update: naya version download ho raha hai...")
-            urllib.request.urlretrieve(url, new)
+            _download_resume(url, new, log)
             # helper bat: app band hone ka intezaar, swap, relaunch
             bat = os.path.join(os.path.dirname(cur), "_update.bat")
             with open(bat, "w", encoding="utf-8") as f:
