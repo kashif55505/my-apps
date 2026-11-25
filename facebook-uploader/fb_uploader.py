@@ -2927,7 +2927,176 @@ class Automation:
         except Exception:
             return False
 
+    # ----- reCAPTCHA: apne browser mein checkbox click + image challenge 2Captcha (grid) se -----
+    # Token wala tareeqa (worker kisi aur IP se solve kare) Facebook reject kar deta hai
+    # ("login information incorrect"). Is liye pehle asli browser mein khud click karo —
+    # token isi browser/IP ka banta hai aur FB accept karta hai.
+    def _cap_frames(self):
+        anchor = bframe = None
+        for fr in self.page.frames:
+            fu = (fr.url or "").lower()
+            if "recaptcha" in fu and "/anchor" in fu:
+                anchor = fr
+            elif "recaptcha" in fu and "/bframe" in fu:
+                bframe = fr
+        return anchor, bframe
+
+    def _anchor_checked(self, anchor):
+        try:
+            return (anchor.get_attribute("#recaptcha-anchor", "aria-checked", timeout=2000) or "") == "true"
+        except Exception:
+            return False
+
+    def _human_click(self, frame, el):
+        try:
+            box = el.bounding_box()
+            if box:
+                x = box["x"] + box["width"] * random.uniform(0.3, 0.7)
+                y = box["y"] + box["height"] * random.uniform(0.3, 0.7)
+                self.page.mouse.move(x - random.randint(40, 120), y - random.randint(20, 60), steps=8)
+                time.sleep(random.uniform(0.1, 0.3))
+                self.page.mouse.move(x, y, steps=random.randint(6, 14))
+                time.sleep(random.uniform(0.05, 0.2))
+                self.page.mouse.click(x, y)
+                return True
+        except Exception:
+            pass
+        try:
+            el.click(); return True
+        except Exception:
+            return False
+
+    def _twocap(self, key, fields, wait_secs=150):
+        """2Captcha: POST job, poll answer. Return answer string ya None."""
+        import urllib.request, urllib.parse, json as _json
+        body = dict(fields); body.update({"key": key, "json": 1})
+        r = urllib.request.urlopen("https://2captcha.com/in.php",
+                                   data=urllib.parse.urlencode(body).encode(), timeout=40)
+        d = _json.loads(r.read().decode())
+        if str(d.get("status")) != "1":
+            self.log(f"2captcha submit error: {d.get('request')}")
+            return None
+        cid = d["request"]
+        t0 = time.time()
+        while time.time() - t0 < wait_secs:
+            time.sleep(5)
+            rr = urllib.request.urlopen(
+                f"https://2captcha.com/res.php?key={key}&action=get&id={cid}&json=1", timeout=30)
+            rd = _json.loads(rr.read().decode())
+            if str(rd.get("status")) == "1":
+                return str(rd.get("request") or "")
+            if rd.get("request") != "CAPCHA_NOT_READY":
+                self.log(f"2captcha: {rd.get('request')}")
+                return None
+        self.log("2captcha timeout.")
+        return None
+
+    def _solve_recaptcha_click(self, key):
+        import base64
+        anchor, bframe = self._cap_frames()
+        if not anchor:
+            return False
+        try:
+            cb = anchor.wait_for_selector("#recaptcha-anchor", timeout=8000)
+        except Exception:
+            cb = None
+        if not cb:
+            return False
+        if not self._anchor_checked(anchor):
+            self.log(T("Captcha: clicking 'I'm not a robot' in the browser...",
+                       "Captcha: browser mein 'I'm not a robot' click..."))
+            self._human_click(anchor, cb)
+            time.sleep(4)
+        for rnd in range(10):
+            if self._anchor_checked(anchor):
+                self.log(T("Captcha passed in the browser.", "Captcha browser mein pass ho gaya."))
+                return True
+            anchor, bframe = self._cap_frames()
+            if not bframe:
+                time.sleep(2)
+                if anchor and self._anchor_checked(anchor):
+                    continue
+                return False
+            try:
+                tbl = bframe.query_selector("table[class*='rc-imageselect-table']")
+                if not tbl or not tbl.is_visible():
+                    time.sleep(2)
+                    if rnd >= 2:
+                        return self._anchor_checked(anchor)
+                    continue
+                inst_el = bframe.query_selector(".rc-imageselect-desc-wrapper, .rc-imageselect-instructions")
+                inst = " ".join((inst_el.inner_text() if inst_el else "").split())
+                rows = tbl.query_selector_all("tr")
+                n_rows = len(rows) or 3
+                n_cols = len(rows[0].query_selector_all("td")) if rows else 3
+                png = tbl.screenshot()
+                dynamic = "none left" in inst.lower()
+                self.log(T(f"Captcha images ({n_rows}x{n_cols}): '{inst[:60]}' → 2Captcha...",
+                           f"Captcha tasveerein ({n_rows}x{n_cols}): '{inst[:60]}' → 2Captcha..."))
+                ans = self._twocap(key, {"method": "base64", "body": base64.b64encode(png).decode(),
+                                         "recaptcha": 1, "textinstructions": inst or "Select all matching images",
+                                         "recaptcharows": n_rows, "recaptchacols": n_cols,
+                                         "can_no_answer": 1}, wait_secs=120)
+                if ans is None:
+                    # na hal hua — naya challenge (reload) le kar dobara
+                    try:
+                        bframe.click("#recaptcha-reload-button", timeout=3000)
+                    except Exception:
+                        pass
+                    time.sleep(3); continue
+                tiles = tbl.query_selector_all("td")
+                picks = []
+                if ans.lower().startswith("click:"):
+                    for part in ans.split(":", 1)[1].split("/"):
+                        try:
+                            picks.append(int(part.strip()))
+                        except Exception:
+                            pass
+                for n in picks:
+                    if 1 <= n <= len(tiles):
+                        self._human_click(bframe, tiles[n - 1])
+                        time.sleep(random.uniform(0.3, 0.8))
+                if dynamic and picks:
+                    time.sleep(5)            # nayi tasveerein aane do, phir dobara dekho
+                    continue
+                time.sleep(1)
+                try:
+                    vb = bframe.query_selector("#recaptcha-verify-button")
+                    if vb:
+                        self._human_click(bframe, vb)
+                except Exception:
+                    pass
+                time.sleep(4)
+            except Exception as e:
+                self.log(f"captcha click-solve: {e}")
+                time.sleep(2)
+        return self._anchor_checked(anchor) if anchor else False
+
     def _solve_captcha(self):
+        """reCAPTCHA: pehle browser mein khud (click + image grid via 2Captcha);
+        na ho to purana token tareeqa."""
+        key = (load_settings().get("captcha_key") or "").strip()
+        if key:
+            anchor, _ = self._cap_frames()
+            if anchor:
+                try:
+                    if self._solve_recaptcha_click(key):
+                        time.sleep(2)
+                        for lbl in ["Continue", "Submit", "Next"]:
+                            b = self.page.query_selector(f"button:has-text('{lbl}'), [role='button']:has-text('{lbl}')")
+                            if b:
+                                try:
+                                    b.click(); break
+                                except Exception:
+                                    pass
+                        return True
+                except Exception as e:
+                    self.log(f"captcha click-solve error: {e}")
+                self.log(T("Browser captcha solve failed — trying token method...",
+                           "Browser mein captcha hal nahi hua — token tareeqa aazma rahe hain..."))
+        return self._solve_captcha_token()
+
+    def _solve_captcha_token(self):
         """2captcha.com se reCAPTCHA/hCaptcha solve kare. Key settings se."""
         key = (load_settings().get("captcha_key") or "").strip()
         if not key:
