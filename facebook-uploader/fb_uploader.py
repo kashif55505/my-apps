@@ -4514,16 +4514,27 @@ class Automation:
         self._click_button(["Publish", "Share", "Post"])
 
     def _click_button(self, labels):
+        """Asli BUTTON dabao (heading/paragraph mein wahi lafz hon to unhe nahi).
+        Har selector ke sab matches mein se sab se andar wala (aakhri) nazar aane wala button."""
         for label in labels:
+            lab = label.replace("'", "\\'")
             for sel in [
-                f"div[aria-label='{label}'][role='button']",
-                f"span:has-text('{label}')",
-                f"div[role='button']:has-text('{label}')",
+                f"[role='button'][aria-label='{lab}']",
+                f"button:text-is('{lab}')",
+                f"[role='button']:text-is('{lab}')",
+                f"button:has-text('{lab}')",
+                f"[role='button']:has-text('{lab}')",
+                f"span:text-is('{lab}')",
             ]:
-                el = self.page.query_selector(sel)
-                if el:
+                try:
+                    els = self.page.query_selector_all(sel)
+                except Exception:
+                    continue
+                for el in reversed(els):
                     try:
-                        el.click()
+                        if not el.is_visible():
+                            continue
+                        el.click(timeout=4000)
                         self.log(T(f"Clicked '{label}'.", f"'{label}' dabaya."))
                         time.sleep(2)
                         return True
