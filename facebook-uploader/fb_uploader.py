@@ -2561,7 +2561,7 @@ class Automation:
                     self._click_button(["Continue", "Next"]); time.sleep(3)
                     _, p = self._find_login_inputs()
                 if p:
-                    p.click(); p.type(acc["password"], delay=40)
+                    p.click(); p.fill(""); p.type(acc["password"], delay=40)
                     time.sleep(0.5)
                     if not self._click_css("button[name='login']"):
                         p.press("Enter")
@@ -2624,6 +2624,8 @@ class Automation:
         other_way_tries = 0
         told_user = False
         last_state = ""
+        relogins = 0
+        last_fill = time.time()
         while time.time() - t0 < max_secs:
             if getattr(self, "stop_event", None) and self.stop_event.is_set():
                 return False
@@ -2707,6 +2709,27 @@ class Automation:
                 if self._click_button(["Trust this device", "Save Browser", "Save browser", "This was me",
                                        "Continue", "OK", "Not now", "Don't save"]):
                     time.sleep(3); continue
+
+            # 4b) Captcha ke baad FB aksar wapas login form dikhata hai ("login information incorrect")
+            #     -> email/password dobara bharo (2 dafa tak)
+            if relogins < 2 and time.time() - last_fill > 10:
+                try:
+                    e_in, p_in = self._find_login_inputs()
+                    if p_in and p_in.is_visible():
+                        relogins += 1
+                        last_fill = time.time()
+                        self.log(T(f"[{acc['name']}] Login form shown again — re-entering email/password ({relogins}/2)...",
+                                   f"[{acc['name']}] Login form dobara aaya — email/password dobara bhar rahe hain ({relogins}/2)..."))
+                        if e_in and e_in.is_visible():
+                            self._fill_login_form(acc)
+                        else:
+                            p_in.click(); p_in.fill(""); p_in.type(acc["password"], delay=40)
+                            if not self._click_css("button[name='login']"):
+                                p_in.press("Enter")
+                        captcha_tries = min(captcha_tries, 1)
+                        time.sleep(4); continue
+                except Exception:
+                    pass
 
             # 5) kuch samajh nahi aaya -> user ko batao (ek dafa), lekin chalte raho
             state = url.split("?")[0][-60:]
