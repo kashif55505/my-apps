@@ -3202,6 +3202,106 @@ class Automation:
         except Exception:
             pass
 
+    def detect_profile_info(self):
+        """Facebook se khud: naam, DOB, gender, city/country. Account mein save."""
+        import re as _re
+        acc = self.current_acc
+        self.log(T("  • Detecting profile info (name, DOB, gender, location)...",
+                   "  • Profile info dhoondh rahe hain (naam, DOB, gender, location)..."))
+        upd = {}
+        try:
+            self.page.goto("https://www.facebook.com/me", wait_until="domcontentloaded"); time.sleep(random.uniform(4, 6))
+            try:
+                h1 = self.page.query_selector("[role='main'] h1")
+                nm = (h1.inner_text() if h1 else "").split("\n")[0].strip()
+                if nm and len(nm) < 80:
+                    upd["name"] = nm
+            except Exception:
+                pass
+            uid = self._fb_uid()
+            if uid:
+                upd["uid"] = uid
+            for slug in ("about_contact_and_basic_info", "about_places", "about_overview"):
+                try:
+                    self.page.goto(f"https://www.facebook.com/me/{slug}", wait_until="domcontentloaded")
+                    time.sleep(random.uniform(3, 5))
+                    lines = [l.strip() for l in self._page_text().splitlines() if l.strip()]
+                except Exception:
+                    continue
+                for i, l in enumerate(lines):
+                    low = l.lower()
+                    nxt = lines[i + 1] if i + 1 < len(lines) else ""
+                    prv = lines[i - 1] if i > 0 else ""
+                    if low in ("birth date", "birthday") and prv and "dob" not in upd:
+                        upd["dob"] = prv
+                    elif low == "birth year" and prv:
+                        upd["dob"] = (upd.get("dob", "") + " " + prv).strip()
+                    elif low == "gender" and prv in ("Male", "Female", "Non-binary", "Custom"):
+                        upd["gender"] = prv
+                    elif low in ("current city", "lives in") and prv and "city" not in upd:
+                        upd["city"] = prv
+                    elif low.startswith("lives in "):
+                        upd["city"] = l[9:].strip()
+                    elif low == "hometown" and prv and "hometown" not in upd:
+                        upd["hometown"] = prv
+                    if low.startswith(("joined facebook", "joined on")) and "created" not in upd:
+                        m = _re.search(r"(\w+ \d{4}|\d{4})", l)
+                        if m:
+                            upd["created"] = m.group(1)
+            if upd.get("city") and not upd.get("country"):
+                parts = [x.strip() for x in upd["city"].split(",")]
+                if len(parts) >= 2:
+                    upd["country"] = parts[-1]
+            if not upd.get("country"):
+                ii = (get_account(acc["id"]) or {}).get("ip_info") or {}
+                if ii.get("country"):
+                    upd.setdefault("country", ii["country"])
+        except Exception as e:
+            self.log(f"    profile info error: {e}")
+        if upd:
+            upd["last_update"] = _now_str()[:16]
+            update_account(acc["id"], **upd)
+            self.log("    → " + ", ".join(f"{k}: {v}" for k, v in upd.items() if k != "last_update"))
+            try:
+                APP_INSTANCE.after(0, APP_INSTANCE._refresh_all_panels)
+            except Exception:
+                pass
+        return upd
+
+    def check_primary_location(self):
+        """Account ki PRIMARY LOCATION (Facebook jo mulk maanta hai)."""
+        acc = self.current_acc
+        self.log(T("  • Checking primary location...", "  • Primary location check..."))
+        urls = [u for u in [load_settings().get("primary_loc_url", "").strip()] if u] + [
+            "https://accountscenter.facebook.com/info_and_permissions",
+            "https://www.facebook.com/professional_dashboard/account_status/",
+            "https://www.facebook.com/settings?tab=account_status"]
+        found = ""
+        for u in urls:
+            try:
+                self.page.goto(u, wait_until="domcontentloaded"); time.sleep(random.uniform(5, 7))
+                lines = [l.strip() for l in self._page_text().splitlines() if l.strip()]
+                for i, l in enumerate(lines):
+                    if "primary location" in l.lower() or "primary country" in l.lower():
+                        cand = [x for x in lines[i + 1:i + 4] if 1 < len(x) < 60]
+                        if cand:
+                            found = cand[0]; break
+                if found:
+                    break
+            except Exception:
+                continue
+        if found:
+            update_account(acc["id"], primary_loc=found, last_update=_now_str()[:16])
+            self.log(T(f"    → Primary location: {found}", f"    → Primary location: {found}"))
+            try:
+                APP_INSTANCE.after(0, APP_INSTANCE._refresh_all_panels)
+            except Exception:
+                pass
+        else:
+            self.log(T("    primary location not found (send me the page link to add it)",
+                       "    primary location nahi mili (link do to add kar dunga)"))
+        return found
+
     def act_professional_mode(self):
         """ID par Professional mode ON."""
         self.log(T("  • Turning on Professional mode...", "  • Professional mode ON kar rahe hain..."))
@@ -3357,6 +3457,10 @@ class Automation:
             if s.get("comments", {}).get("on"):
                 tasks.append(("comments", lambda: self.act_comments(cnt(s["comments"].get("count", 1)),
                                                                      s["comments"].get("text", ""))))
+            if s.get("detect_info", {}).get("on", True) and lp == 1:
+                tasks.append(("profile info", self.detect_profile_info))
+            if s.get("primary_loc", {}).get("on") and lp == 1:
+                tasks.append(("primary location", self.check_primary_location))
             if s.get("pro_mode", {}).get("on") and not (get_account(acc["id"]) or {}).get("pro_mode"):
                 tasks.append(("professional mode", self.act_professional_mode))
             if s.get("checkin", {}).get("on"):
@@ -5983,6 +6087,11 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
                 return
             self.after(0, lambda: self._set_status_all(acc["id"], "Live"))
             add_id_history(acc["id"], "login ok", "")
+            if not self.stop_flag.is_set():
+                try:
+                    bot.detect_profile_info()
+                except Exception:
+                    pass
             if detect and not self.stop_flag.is_set():
                 pages = bot.detect_pages()
                 if pages:
@@ -6508,6 +6617,16 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         psr = ttk.Frame(grid); psr.pack(fill="x", padx=6, pady=2)
         self._ps_on = tk.IntVar(value=1 if ps.get("on") else 0)
         self._ps_del = tk.IntVar(value=1 if ps.get("delete_copyright") else 0)
+        di = saved.get("detect_info", {"on": True})
+        dir_ = ttk.Frame(grid); dir_.pack(fill="x", padx=6, pady=2)
+        self._di_on = tk.IntVar(value=1 if di.get("on", True) else 0)
+        ttk.Checkbutton(dir_, text=T("Detect name, DOB, gender, location", "Naam, DOB, gender, location khud lao"),
+                        variable=self._di_on).pack(side="left")
+        pl = saved.get("primary_loc", {})
+        plr = ttk.Frame(grid); plr.pack(fill="x", padx=6, pady=2)
+        self._pl_on = tk.IntVar(value=1 if pl.get("on") else 0)
+        ttk.Checkbutton(plr, text=T("Check primary location", "Primary location check"),
+                        variable=self._pl_on).pack(side="left")
         pm = saved.get("pro_mode", {})
         pmr = ttk.Frame(grid); pmr.pack(fill="x", padx=6, pady=2)
         self._pm_on = tk.IntVar(value=1 if pm.get("on") else 0)
@@ -6582,6 +6701,8 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
                              "src": v["follow_pages"]["src"].get().strip()},
             "page_status": {"on": bool(self._ps_on.get()), "delete_copyright": bool(self._ps_del.get())},
             "pro_mode": {"on": bool(self._pm_on.get())},
+            "detect_info": {"on": bool(self._di_on.get())},
+            "primary_loc": {"on": bool(self._pl_on.get())},
             "checkin": {"on": bool(self._ck_on.get()), "photo": bool(self._ck_photo.get()),
                         "caption": self._ck_cap.get(), "folder": self._ck_folder.get().strip()},
             "loops": iv(self.active_loops.get()) or 1,
