@@ -3837,6 +3837,15 @@ PAL = {"bg": "#0b1220", "side": "#0a101c", "panel": "#111a2b", "panel2": "#16213
        "ok": "#34d399", "warn": "#fbbf24", "bad": "#f87171", "field": "#0e1626"}
 
 
+def ui_px(root):
+    """Pixel multiplier = Text size x screen DPI."""
+    try:
+        d = root.winfo_fpixels("1i") / 96.0
+    except Exception:
+        d = 1.0
+    return ui_zoom() * d
+
+
 def apply_dark_theme(root, style):
     P = PAL
     try:
@@ -3886,7 +3895,7 @@ def apply_dark_theme(root, style):
     style.map("TCombobox", fieldbackground=[("readonly", P["field"])], foreground=[("readonly", P["text"])],
               selectbackground=[("readonly", P["field"])])
     style.configure("Treeview", background=P["panel"], fieldbackground=P["panel"], foreground=P["text"],
-                    rowheight=int(26 * ui_zoom()), font=("Segoe UI", 11), bordercolor=P["border"])
+                    rowheight=int(24 * ui_px(root)), font=("Segoe UI", 11), bordercolor=P["border"])
     style.map("Treeview", background=[("selected", "#1b3a5c")], foreground=[("selected", "#ffffff")])
     style.configure("Treeview.Heading", background=P["panel2"], foreground=P["muted"],
                     font=("Segoe UI", 10, "bold"), relief="flat", padding=6)
@@ -4253,7 +4262,7 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
         # Checkbox par asli TICK (cross nahi) — apni image wala indicator
         try:
             style.element_create("tick.indicator", "image", self.img_empty, ("selected", self.img_check),
-                                 sticky="w", width=26)
+                                 sticky="w", width=int(26 * max(1, round(ui_px(self) * 0.75))))
             style.layout("TCheckbutton", [("Checkbutton.padding", {"sticky": "nswe", "children": [
                 ("tick.indicator", {"side": "left", "sticky": ""}),
                 ("Checkbutton.focus", {"side": "left", "sticky": "w", "children": [
@@ -4272,8 +4281,11 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
                             im.put(c, (xx, yy))
                 return im
             self.img_r0, self.img_r1 = _circ("#0e1626", None), _circ("#0e1626", "#22c3e6")
+            _f = max(1, int(round(ui_px(self) * 0.75)))
+            if _f > 1:
+                self.img_r0, self.img_r1 = self.img_r0.zoom(_f, _f), self.img_r1.zoom(_f, _f)
             style.element_create("dot.indicator", "image", self.img_r0, ("selected", self.img_r1),
-                                 sticky="w", width=26)
+                                 sticky="w", width=int(26 * max(1, round(ui_px(self) * 0.75))))
             style.layout("TRadiobutton", [("Radiobutton.padding", {"sticky": "nswe", "children": [
                 ("dot.indicator", {"side": "left", "sticky": ""}),
                 ("Radiobutton.focus", {"side": "left", "sticky": "w", "children": [
@@ -4388,6 +4400,9 @@ class App(ProUIMixin, ApiPagesMixin, tk.Tk):
             if 0 <= x < size and 0 <= y < size:
                 g[y][x] = green
         checked = to_img(g)
+        f = max(1, int(round(ui_px(self) * 0.75)))
+        if f > 1:
+            checked, empty = checked.zoom(f, f), empty.zoom(f, f)
         return checked, empty
 
     # ---------- Top tabs ----------
