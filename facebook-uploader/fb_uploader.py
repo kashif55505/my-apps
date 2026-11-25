@@ -755,7 +755,7 @@ def fb_browser_launch(pw, account, cfg, headless=False, log=print):
     else:
         x, y = (slot % per_row) * (ww // 2), (slot // per_row % 3) * 60
     _fbb_prepare_profile(session_dir_for(acc["id"]))
-    args = ["--disable-blink-features=AutomationControlled", "--no-first-run",
+    args = ["--no-first-run",
             "--no-default-browser-check", f"--lang={lang}",
             "--disable-save-password-bubble",
             "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection,AutofillServerCommunication,"
@@ -2571,6 +2571,28 @@ class Automation:
             time.sleep(2)
         return False
 
+    def _clear_browser_data(self):
+        """Is browser ka cache + cookies + storage saaf karo (fresh session jaisa)."""
+        try:
+            cdp = self.page.context.new_cdp_session(self.page)
+            cdp.send("Network.clearBrowserCache")
+            cdp.send("Network.clearBrowserCookies")
+            try:
+                cdp.send("Storage.clearDataForOrigin", {"origin": "https://www.facebook.com", "storageTypes": "all"})
+            except Exception:
+                pass
+            cdp.detach()
+        except Exception:
+            pass
+        try:
+            self.page.context.clear_cookies()
+        except Exception:
+            pass
+        try:
+            self.page.evaluate("() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} }")
+        except Exception:
+            pass
+
     def _click_css(self, sel):
         try:
             el = self.page.query_selector(sel)
@@ -2718,8 +2740,17 @@ class Automation:
                     if p_in and p_in.is_visible():
                         relogins += 1
                         last_fill = time.time()
-                        self.log(T(f"[{acc['name']}] Login form shown again — re-entering email/password ({relogins}/2)...",
-                                   f"[{acc['name']}] Login form dobara aaya — email/password dobara bhar rahe hain ({relogins}/2)..."))
+                        self.log(T(f"[{acc['name']}] Login form shown again — clearing browser cache/cookies and retrying fresh ({relogins}/2)...",
+                                   f"[{acc['name']}] Login form dobara aaya — browser cache/cookies saaf kar ke fresh dobara ({relogins}/2)..."))
+                        self._clear_browser_data()
+                        try:
+                            self.page.goto(FB_HOME, wait_until="domcontentloaded")
+                        except Exception:
+                            pass
+                        time.sleep(random.uniform(4, 7))
+                        e_in, p_in = self._find_login_inputs()
+                        if not p_in:
+                            continue
                         if e_in and e_in.is_visible():
                             self._fill_login_form(acc)
                         else:
