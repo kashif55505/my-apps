@@ -4076,7 +4076,10 @@ class AccountPanel:
             widths = {"no": 50, "name": 140, "email": 200, "page": 160, "mode": 170, "status": 100}
             heads = {"no": "No", "name": "Account", "email": "Email",
                      "page": "Pages (ticked)", "mode": "IP / Proxy", "status": "Status"}
-        tf = ttk.Frame(wrap); tf.pack(fill="both", expand=True, padx=6, pady=4)
+        self._pw = ttk.PanedWindow(wrap, orient="vertical")
+        self._pw.pack(fill="both", expand=True, padx=6, pady=4)
+        tf = ttk.Frame(self._pw)
+        self._pw.add(tf, weight=3)
         self.tree = ttk.Treeview(tf, columns=cols, show="tree headings",
                                  height=(7 if show_pages else 14), selectmode="none")
         self.tree.column("#0", width=int(48 * k), minwidth=int(40 * k), anchor="center", stretch=False)
@@ -4098,9 +4101,9 @@ class AccountPanel:
         self.tree.bind("<Button-1>", self._on_click)
 
         if show_pages:
-            pb = ttk.LabelFrame(wrap, text=T("PAGES OF CLICKED ID  (✔ = post on this page)",
-                                             "CLICK KI GAYI ID KE PAGES  (✔ = is page par post)"))
-            pb.pack(fill="both", expand=True, padx=6, pady=4)
+            pb = ttk.LabelFrame(self._pw, text=T("PAGES OF CLICKED ID  (✔ = post on this page)  — drag the bar above to resize",
+                                                 "CLICK KI GAYI ID KE PAGES  (✔ = is page par post)  — upar wali patti kheench kar bada karein"))
+            self._pw.add(pb, weight=2)
             ph = ttk.Frame(pb); ph.pack(fill="x", padx=4, pady=2)
             self.lbl_pages = ttk.Label(ph, text=T("Click an ID row above to see its pages.",
                                                   "Upar kisi ID ki row par click karein, pages yahan aayenge."))
@@ -4108,13 +4111,19 @@ class AccountPanel:
             ttk.Button(ph, text=T("Detect pages", "Pages dhoondo"), command=self._detect_cur).pack(side="right", padx=2)
             ttk.Button(ph, text=T("Untick all", "Sab untick"), command=lambda: self._tick_all_pages(False)).pack(side="right", padx=2)
             ttk.Button(ph, text=T("Tick all", "Sab tick"), command=lambda: self._tick_all_pages(True)).pack(side="right", padx=2)
-            self.ptree = ttk.Treeview(pb, columns=("pname", "purl"), show="tree headings", height=4, selectmode="none")
+            self.ptree = ttk.Treeview(pb, columns=("pname", "purl"), show="tree headings", height=3, selectmode="none")
             self.ptree.column("#0", width=46, anchor="center", stretch=False)
             self.ptree.heading("#0", text="Post")
             self.ptree.heading("pname", text=T("Page name", "Page ka naam"))
             self.ptree.heading("purl", text="Link")
             self.ptree.column("pname", width=240, anchor="w"); self.ptree.column("purl", width=320, anchor="w")
+            pys = ttk.Scrollbar(pb, orient="vertical", command=self.ptree.yview)
+            self.ptree.configure(yscrollcommand=pys.set)
+            pys.pack(side="right", fill="y")
             self.ptree.pack(fill="both", expand=True, padx=4, pady=2)
+            # table aur pages ke beech aadha aadha
+            self.tree.after(600, lambda: self._pw.sashpos(0, int(self._pw.winfo_height() * 0.5))
+                            if self._pw.winfo_height() > 50 else None)
             self.ptree.bind("<Button-1>", self._on_page_click)
 
         self.app._panels.append(self)
@@ -8094,8 +8103,24 @@ downloads and replaces itself, then restarts. No manual download needed.
 
     # ---------- Log ----------
     def _build_logbar(self):
-        lf = ttk.LabelFrame(self.right, text="Live log"); lf.pack(fill="x", padx=16, pady=(0, 6))
-        self.log_text = tk.Text(lf, height=6, state="disabled", bg="#060b14", fg="#5eead4", font=("Consolas", 10, "bold"),
+        lh = tk.Frame(self.right, bg=PAL["bg"]); lh.pack(fill="x", padx=16)
+        self._log_open = load_settings().get("log_open", True)
+        self._log_btn = tk.Label(lh, text="", bg=PAL["bg"], fg=PAL["accent"], font=("Segoe UI", 10, "bold"), cursor="hand2")
+        self._log_btn.pack(side="left")
+        lf = ttk.Frame(self.right); self._log_frame = lf
+        def _toggle(e=None, init=False):
+            if not init:
+                self._log_open = not self._log_open
+                save_settings({"log_open": self._log_open})
+            if self._log_open:
+                lf.pack(fill="x", padx=16, pady=(0, 6), after=lh)
+                self._log_btn.config(text="▾ Live log  (click to hide)")
+            else:
+                lf.pack_forget()
+                self._log_btn.config(text="▸ Live log  (click to show)")
+        self._log_btn.bind("<Button-1>", _toggle)
+        self.after(50, lambda: _toggle(init=True))
+        self.log_text = tk.Text(lf, height=5, state="disabled", bg="#060b14", fg="#5eead4", font=("Consolas", 10, "bold"),
                                 relief="flat", highlightthickness=0)
         self.log_text.pack(fill="both", expand=True, padx=4, pady=4)
 
