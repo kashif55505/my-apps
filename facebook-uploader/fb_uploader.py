@@ -313,6 +313,237 @@ def set_page_enabled(acc_id, key, enabled):
     update_account(acc_id, pages=pages)
 
 
+# ============================================================
+# FB BROWSER — apna built-in anti-detect browser (ixBrowser ki zaroorat nahi)
+# Har ID: alag profile folder, alag fingerprint (screen, CPU, RAM, WebGL,
+# canvas/audio noise), proxy ke hisaab se timezone + language, WebRTC leak band.
+# ============================================================
+_GPUS = [
+    ("Google Inc. (NVIDIA)", "ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 Direct3D11 vs_5_0 ps_5_0, D3D11)"),
+    ("Google Inc. (NVIDIA)", "ANGLE (NVIDIA, NVIDIA GeForce GTX 1060 6GB Direct3D11 vs_5_0 ps_5_0, D3D11)"),
+    ("Google Inc. (NVIDIA)", "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)"),
+    ("Google Inc. (Intel)", "ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)"),
+    ("Google Inc. (Intel)", "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)"),
+    ("Google Inc. (Intel)", "ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)"),
+    ("Google Inc. (AMD)", "ANGLE (AMD, AMD Radeon(TM) Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)"),
+    ("Google Inc. (AMD)", "ANGLE (AMD, AMD Radeon RX 580 Series Direct3D11 vs_5_0 ps_5_0, D3D11)"),
+]
+_SCREENS = [(1920, 1080), (1366, 768), (1536, 864), (1440, 900), (1600, 900), (1280, 720), (1680, 1050)]
+
+
+def make_fingerprint(acc_id):
+    """Har ID ka apna pakka (hamesha same) fingerprint."""
+    import random as _r, hashlib as _h
+    rnd = _r.Random(int(_h.md5(str(acc_id).encode()).hexdigest()[:12], 16))
+    w, h = rnd.choice(_SCREENS)
+    vendor, renderer = rnd.choice(_GPUS)
+    return {"screen_w": w, "screen_h": h, "cpu": rnd.choice([4, 6, 8, 8, 12, 16]),
+            "ram": rnd.choice([4, 8, 8, 16]), "webgl_vendor": vendor, "webgl_renderer": renderer,
+            "noise": rnd.randint(1, 10 ** 6)}
+
+
+def _geo_for_proxy(proxy):
+    """Proxy ke IP se timezone / language / location. Na mile to None."""
+    import urllib.request
+    try:
+        handlers = []
+        if proxy and proxy.get("server", "").startswith("http"):
+            srv = proxy["server"]
+            if proxy.get("username"):
+                scheme, rest = srv.split("://", 1)
+                srv = f"{scheme}://{proxy['username']}:{proxy.get('password', '')}@{rest}"
+            handlers.append(urllib.request.ProxyHandler({"http": srv, "https": srv}))
+        elif proxy:
+            return None      # socks: python se check nahi; local settings
+        op = urllib.request.build_opener(*handlers)
+        j = json.loads(op.open("http://ip-api.com/json/?fields=status,countryCode,timezone,lat,lon,query",
+                               timeout=12).read().decode())
+        if j.get("status") == "success":
+            return j
+    except Exception:
+        pass
+    return None
+
+
+_CC_LANG = {"US": "en-US", "GB": "en-GB", "CA": "en-CA", "AU": "en-AU", "IN": "en-IN", "PK": "en-US",
+            "DE": "de-DE", "FR": "fr-FR", "ES": "es-ES", "IT": "it-IT", "BR": "pt-BR", "TR": "tr-TR",
+            "AE": "en-US", "SA": "en-US", "NL": "nl-NL", "PL": "pl-PL", "RU": "ru-RU", "JP": "ja-JP"}
+
+
+def _stealth_js(fp, lang):
+    langs = json.dumps([lang, lang.split("-")[0]] if "-" in lang else [lang])
+    return """
+(() => {
+  const fp = %s;
+  const def = (o, k, v) => { try { Object.defineProperty(o, k, {get: () => v, configurable: true}); } catch (e) {} };
+  def(Navigator.prototype, 'webdriver', false);
+  def(Navigator.prototype, 'hardwareConcurrency', fp.cpu);
+  def(Navigator.prototype, 'deviceMemory', fp.ram);
+  def(Navigator.prototype, 'languages', %s);
+  def(Navigator.prototype, 'platform', 'Win32');
+  def(Screen.prototype, 'width', fp.screen_w); def(Screen.prototype, 'height', fp.screen_h);
+  def(Screen.prototype, 'availWidth', fp.screen_w); def(Screen.prototype, 'availHeight', fp.screen_h - 40);
+  if (!window.chrome) { window.chrome = {runtime: {}}; }
+  for (const P of [window.WebGLRenderingContext, window.WebGL2RenderingContext]) {
+    if (!P) continue;
+    const gp = P.prototype.getParameter;
+    P.prototype.getParameter = function (p) {
+      if (p === 37445) return fp.webgl_vendor;
+      if (p === 37446) return fp.webgl_renderer;
+      return gp.apply(this, arguments);
+    };
+  }
+  // canvas noise (har ID ka apna)
+  const seed = fp.noise;
+  const tdu = HTMLCanvasElement.prototype.toDataURL;
+  HTMLCanvasElement.prototype.toDataURL = function () {
+    try {
+      const c = this.getContext('2d');
+      if (c && this.width && this.height) {
+        const x = seed %% this.width, y = (seed >> 3) %% this.height;
+        const d = c.getImageData(x, y, 1, 1); d.data[0] = (d.data[0] + (seed %% 3) + 1) %% 255;
+        c.putImageData(d, x, y);
+      }
+    } catch (e) {}
+    return tdu.apply(this, arguments);
+  };
+  const gcd = AudioBuffer.prototype.getChannelData;
+  AudioBuffer.prototype.getChannelData = function () {
+    const r = gcd.apply(this, arguments);
+    try { for (let i = 0; i < r.length; i += 100) r[i] += ((seed %% 7) + 1) * 1e-7; } catch (e) {}
+    return r;
+  };
+  const oq = window.navigator.permissions && window.navigator.permissions.query;
+  if (oq) window.navigator.permissions.query = (p) =>
+    p && p.name === 'notifications' ? Promise.resolve({state: Notification.permission}) : oq(p);
+})();
+""" % (json.dumps(fp), langs)
+
+
+_GRID_LOCK = threading.Lock()
+_GRID_USED = set()
+
+
+def _grid_slot():
+    with _GRID_LOCK:
+        i = 0
+        while i in _GRID_USED:
+            i += 1
+        _GRID_USED.add(i)
+        return i
+
+
+def _grid_free(i):
+    with _GRID_LOCK:
+        _GRID_USED.discard(i)
+
+
+def fb_browser_launch(pw, account, cfg, headless=False, log=print):
+    """Apna browser kholo. Return (context, slot)."""
+    acc = get_account(account["id"]) or account
+    fp = acc.get("fingerprint")
+    if not fp:
+        fp = make_fingerprint(acc["id"])
+        update_account(acc["id"], fingerprint=fp)
+    proxy = parse_proxy(acc.get("proxy", ""))
+    geo = acc.get("geo") if acc.get("geo_proxy") == acc.get("proxy", "") else None
+    if not geo:
+        geo = _geo_for_proxy(proxy)
+        if geo:
+            update_account(acc["id"], geo=geo, geo_proxy=acc.get("proxy", ""))
+    lang = cfg.get("fbb_lang") or (_CC_LANG.get((geo or {}).get("countryCode", ""), "en-US"))
+    tz = (geo or {}).get("timezone") or None
+    per_row = max(1, int(cfg.get("fbb_per_row", 4) or 4))
+    ww, wh = int(cfg.get("fbb_w", 900) or 900), int(cfg.get("fbb_h", 800) or 800)
+    slot = _grid_slot()
+    x, y = (slot % per_row) * (ww // 2), (slot // per_row % 3) * 60
+    args = ["--disable-blink-features=AutomationControlled", "--no-first-run",
+            "--no-default-browser-check", f"--lang={lang}",
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+            "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+            f"--window-position={x},{y}", f"--window-size={ww},{wh}"]
+    if cfg.get("fbb_mute", True):
+        args.append("--mute-audio")
+    kw = dict(user_data_dir=session_dir_for(acc["id"]), headless=headless, args=args,
+              no_viewport=True, locale=lang, ignore_default_args=["--enable-automation"])
+    if tz:
+        kw["timezone_id"] = tz
+    if geo and geo.get("lat") is not None:
+        kw["geolocation"] = {"latitude": geo["lat"], "longitude": geo["lon"]}
+        kw["permissions"] = ["geolocation"]
+    if proxy:
+        kw["proxy"] = proxy
+    eng = cfg.get("fbb_engine", "chrome")      # asli Chrome = zyada natural
+    if eng == "chrome":
+        kw["channel"] = "chrome"
+    elif eng == "msedge":
+        kw["channel"] = "msedge"
+    try:
+        try:
+            ctx = pw.chromium.launch_persistent_context(**kw)
+        except Exception as e:
+            if kw.pop("channel", None):
+                log(T(f"[{acc['name']}] Chrome not found — using built-in Chromium.",
+                      f"[{acc['name']}] Chrome nahi mila — built-in Chromium use ho raha hai."))
+            try:
+                ctx = pw.chromium.launch_persistent_context(**kw)
+            except Exception as e2:
+                if "Executable doesn't exist" in str(e2) or "playwright install" in str(e2):
+                    _pw_install_chromium(log)
+                    ctx = pw.chromium.launch_persistent_context(**kw)
+                else:
+                    raise
+    except Exception:
+        _grid_free(slot)
+        raise
+    ctx.add_init_script(_stealth_js(fp, lang))
+    for _pg in list(ctx.pages):        # pehle se khula tab bhi naye fingerprint ke sath
+        try:
+            _pg.goto("about:blank")
+        except Exception:
+            pass
+    log(T(f"[{acc['name']}] FB Browser opened — {fp['screen_w']}x{fp['screen_h']}, {fp['cpu']} CPU, "
+          f"{lang}, {tz or 'local time'}{', proxy ' + proxy['server'] if proxy else ''}.",
+          f"[{acc['name']}] FB Browser khula — {fp['screen_w']}x{fp['screen_h']}, {fp['cpu']} CPU, "
+          f"{lang}, {tz or 'local time'}{', proxy ' + proxy['server'] if proxy else ''}."))
+    return ctx, slot
+
+
+def _pw_install_chromium(log=print):
+    """Playwright ka Chromium download (exe mode mein bhi)."""
+    log(T("Downloading built-in Chromium (one time, please wait)...",
+          "Built-in Chromium download ho raha hai (sirf 1 dafa, intezaar karein)..."))
+    try:
+        from playwright._impl._driver import compute_driver_executable, get_driver_env
+        exe = compute_driver_executable()
+        cmd = list(exe) if isinstance(exe, (tuple, list)) else [str(exe)]
+        subprocess.run(cmd + ["install", "chromium"], env=get_driver_env(), check=True, **_NOWIN)
+    except Exception:
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True, **_NOWIN)
+    log(T("Chromium ready.", "Chromium tayyar."))
+
+
+def check_proxy(text, timeout=12):
+    """Proxy check: return (ok, latency_ms, ip/country or error)."""
+    import urllib.request
+    p = parse_proxy(text)
+    if not p:
+        return False, 0, "invalid"
+    if not p["server"].startswith("http"):
+        return None, 0, "socks (check in browser)"
+    srv = p["server"]
+    if p.get("username"):
+        scheme, rest = srv.split("://", 1)
+        srv = f"{scheme}://{p['username']}:{p.get('password', '')}@{rest}"
+    op = urllib.request.build_opener(urllib.request.ProxyHandler({"http": srv, "https": srv}))
+    t0 = time.time()
+    try:
+        j = json.loads(op.open("http://ip-api.com/json/?fields=status,countryCode,query", timeout=timeout).read().decode())
+        return True, int((time.time() - t0) * 1000), f"{j.get('query')} {j.get('countryCode')}"
+    except Exception as e:
+        return False, 0, str(e)[:80]
+
+
 # ============ ixBrowser FREE mode (bina Local API) ============
 # ixBrowser profile ko jab aap khud kholte ho, to uski poori launch command
 # (fingerprint settings samet) Windows process se parh kar save kar lete hain.
@@ -607,8 +838,8 @@ def save_active_settings(s):
 
 
 def load_settings():
-    return _load(SETTINGS_FILE, {"browser": "ixbrowser", "browser_path": "",
-                                 "use_ixbrowser": True, "ix_max_per_day": 10,
+    return _load(SETTINGS_FILE, {"browser": "fbbrowser", "browser_path": "",
+                                 "use_ixbrowser": False, "ix_max_per_day": 10,
                                  "ix_limit_on": False, "daily_auto": False,
                                  "daily_time": "20:00", "daily_kind": "reel",
                                  "daily_threads": 5, "autostart": False,
@@ -623,6 +854,10 @@ def load_settings():
 
 
 def save_settings(s):
+    cur = _load(SETTINGS_FILE, {})
+    if isinstance(cur, dict):
+        cur.update(s)
+        s = cur
     _save(SETTINGS_FILE, s)
 
 
@@ -1546,6 +1781,12 @@ class Automation:
                            f"phir Accounts mein 'Capture open ixBrowser profiles' dabayein."))
             self.log(T(f"[{account['name']}] Could not connect to ixBrowser — using normal browser.", f"[{account['name']}] ixBrowser se connect nahi hua — normal browser par chal rahe hain."))
 
+        b0 = cfg.get("browser", "fbbrowser")
+        if b0 in ("fbbrowser", "chromium", "") or b0 is None:
+            self.context, self._grid_slot = fb_browser_launch(self._pw, account, cfg, self.headless, self.log)
+            self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
+            return
+
         user_dir = session_dir_for(account["id"])
 
         launch_kwargs = dict(
@@ -1774,6 +2015,8 @@ class Automation:
                 self._pw.stop()
         except Exception:
             pass
+        if getattr(self, "_grid_slot", None) is not None:
+            _grid_free(self._grid_slot); self._grid_slot = None
         self.context = self.page = self._pw = None
 
     # ---------- Login ----------
@@ -3577,7 +3820,390 @@ class ApiPagesMixin:
                                          self.after(0, self._api_refresh)), daemon=True).start()
 
 
-class App(ApiPagesMixin, tk.Tk):
+# ============================================================
+# PRO DARK UI — sidebar, header, dashboard, proxy manager, logs
+# ============================================================
+PAL = {"bg": "#0b1220", "side": "#0a101c", "panel": "#111a2b", "panel2": "#16213a", "border": "#22304d",
+       "text": "#e5edf7", "muted": "#8ea0bd", "accent": "#22c3e6", "accent2": "#1aa6c6",
+       "ok": "#34d399", "warn": "#fbbf24", "bad": "#f87171", "field": "#0e1626"}
+
+
+def apply_dark_theme(root, style):
+    P = PAL
+    try:
+        style.theme_use("clam")
+    except Exception:
+        pass
+    F = ("Segoe UI", 11, "bold")
+    root.configure(bg=P["bg"])
+    for k, v in {"*Font": F, "*Background": P["bg"], "*Foreground": P["text"],
+                 "*Listbox.background": P["field"], "*Listbox.foreground": P["text"],
+                 "*Listbox.selectBackground": P["accent2"], "*Text.background": P["field"],
+                 "*Text.foreground": P["text"], "*Text.insertBackground": P["text"],
+                 "*Spinbox.background": P["field"], "*Spinbox.foreground": P["text"],
+                 "*Spinbox.buttonBackground": P["panel2"], "*Entry.background": P["field"],
+                 "*Entry.foreground": P["text"], "*TCombobox*Listbox.background": P["field"],
+                 "*TCombobox*Listbox.foreground": P["text"], "*TCombobox*Listbox.font": F,
+                 "*Menu.background": P["panel"], "*Menu.foreground": P["text"],
+                 "*Button.background": P["panel2"], "*Button.foreground": P["text"],
+                 "*Label.background": P["bg"], "*Label.foreground": P["text"],
+                 "*Checkbutton.background": P["bg"], "*Radiobutton.background": P["bg"]}.items():
+        root.option_add(k, v)
+    style.configure(".", background=P["bg"], foreground=P["text"], fieldbackground=P["field"],
+                    bordercolor=P["border"], lightcolor=P["panel"], darkcolor=P["bg"],
+                    troughcolor=P["panel"], focuscolor=P["accent"], font=F,
+                    selectbackground=P["accent2"], selectforeground="#ffffff", insertcolor=P["text"])
+    style.configure("TFrame", background=P["bg"])
+    style.configure("Card.TFrame", background=P["panel"])
+    style.configure("TLabel", background=P["bg"], foreground=P["text"], font=F)
+    style.configure("Muted.TLabel", foreground=P["muted"], font=("Segoe UI", 10, "bold"))
+    style.configure("TLabelframe", background=P["bg"], bordercolor=P["border"], relief="solid", borderwidth=1)
+    style.configure("TLabelframe.Label", background=P["bg"], foreground=P["accent"], font=("Segoe UI", 11, "bold"))
+    style.configure("TButton", background=P["panel2"], foreground=P["text"], bordercolor=P["border"],
+                    padding=(12, 6), font=F, relief="flat")
+    style.map("TButton", background=[("pressed", P["accent2"]), ("active", "#1e2c4a")],
+              foreground=[("disabled", P["muted"])])
+    style.configure("Accent.TButton", background=P["accent2"], foreground="#ffffff")
+    style.map("Accent.TButton", background=[("active", P["accent"])])
+    for w in ("TCheckbutton", "TRadiobutton"):
+        style.configure(w, background=P["bg"], foreground=P["text"], font=F, indicatorcolor=P["field"],
+                        indicatorbackground=P["field"])
+        style.map(w, background=[("active", P["bg"])],
+                  indicatorcolor=[("selected", P["accent2"]), ("pressed", P["accent"])])
+    style.configure("TEntry", fieldbackground=P["field"], foreground=P["text"], bordercolor=P["border"],
+                    insertcolor=P["text"], padding=5)
+    style.configure("TCombobox", fieldbackground=P["field"], background=P["panel2"], foreground=P["text"],
+                    arrowcolor=P["text"], bordercolor=P["border"], padding=4)
+    style.map("TCombobox", fieldbackground=[("readonly", P["field"])], foreground=[("readonly", P["text"])],
+              selectbackground=[("readonly", P["field"])])
+    style.configure("Treeview", background=P["panel"], fieldbackground=P["panel"], foreground=P["text"],
+                    rowheight=32, font=("Segoe UI", 11), bordercolor=P["border"])
+    style.map("Treeview", background=[("selected", "#1b3a5c")], foreground=[("selected", "#ffffff")])
+    style.configure("Treeview.Heading", background=P["panel2"], foreground=P["muted"],
+                    font=("Segoe UI", 10, "bold"), relief="flat", padding=6)
+    style.map("Treeview.Heading", background=[("active", P["panel2"])])
+    style.configure("Vertical.TScrollbar", background=P["panel2"], troughcolor=P["bg"], arrowcolor=P["muted"],
+                    bordercolor=P["bg"])
+    style.configure("TNotebook", background=P["bg"], bordercolor=P["border"])
+    style.configure("TNotebook.Tab", background=P["panel"], foreground=P["muted"], padding=(14, 6))
+    style.map("TNotebook.Tab", background=[("selected", P["panel2"])], foreground=[("selected", P["text"])])
+    style.configure("TSpinbox", fieldbackground=P["field"], foreground=P["text"], arrowcolor=P["text"])
+
+
+NAV = [("WORKSPACE", [("Dashboard", "Dashboard", "▦"), ("Accounts", "Accounts", "👤"),
+                      ("Proxy", "Proxy Management", "⇄")]),
+       ("AUTOMATION", [("Post", "Posting (browser)", "⚡"), ("API", "API Pages", "☁"),
+                       ("Interact", "Active & Groups", "♥"), ("Schedule", "Schedule", "⏱"),
+                       ("LDPlayer", "LDPlayer (mobile)", "📱")]),
+       ("SYSTEM", [("Logs", "Logs", "≡"), ("Settings", "System Settings", "⚙"), ("Guide", "Guide", "?")])]
+
+TITLES = {k: (sec, lab) for sec, items in NAV for k, lab, _ in items}
+
+
+class ProUIMixin:
+    def _build_sidebar(self):
+        P = PAL
+        side = tk.Frame(self, bg=P["side"], width=236)
+        side.pack(side="left", fill="y"); side.pack_propagate(False)
+        brand = tk.Frame(side, bg=P["side"]); brand.pack(fill="x", padx=16, pady=(16, 10))
+        tk.Label(brand, text="F", bg=P["accent2"], fg="white", font=("Segoe UI", 16, "bold"),
+                 width=2).pack(side="left")
+        bt = tk.Frame(brand, bg=P["side"]); bt.pack(side="left", padx=10)
+        tk.Label(bt, text=f"FB Uploader  v{APP_VERSION}", bg=P["side"], fg=P["text"],
+                 font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        tk.Label(bt, text="FACEBOOK SUITE", bg=P["side"], fg=P["accent"],
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        self._nav_items = {}
+        for sec, items in NAV:
+            tk.Label(side, text=sec, bg=P["side"], fg=P["muted"], font=("Segoe UI", 9, "bold")).pack(
+                anchor="w", padx=18, pady=(14, 4))
+            for key, label, icon in items:
+                it = tk.Label(side, text=f"  {icon}   {label}", anchor="w", bg=P["side"], fg="#c9d6ea",
+                              font=("Segoe UI", 11, "bold"), padx=10, pady=7, cursor="hand2")
+                it.pack(fill="x", padx=10, pady=1)
+                it.bind("<Button-1>", lambda e, k=key: self._show(k))
+                it.bind("<Enter>", lambda e, w=it, k=key: w.config(bg="#141f36") if self._cur_page != k else None)
+                it.bind("<Leave>", lambda e, w=it, k=key: w.config(bg=P["side"]) if self._cur_page != k else None)
+                self._nav_items[key] = it
+        foot = tk.Frame(side, bg=P["side"]); foot.pack(side="bottom", fill="x", padx=14, pady=12)
+        self._side_foot = tk.Label(foot, text="", bg=P["side"], fg=P["muted"], font=("Segoe UI", 9, "bold"),
+                                   justify="left", anchor="w")
+        self._side_foot.pack(fill="x")
+        self.right = tk.Frame(self, bg=P["bg"]); self.right.pack(side="left", fill="both", expand=True)
+        hdr = tk.Frame(self.right, bg=P["bg"]); hdr.pack(fill="x", padx=22, pady=(14, 4))
+        self._hdr_crumb = tk.Label(hdr, text="", bg=P["bg"], fg=P["muted"], font=("Segoe UI", 9, "bold"))
+        self._hdr_crumb.pack(anchor="w")
+        self._hdr_title = tk.Label(hdr, text="", bg=P["bg"], fg=P["text"], font=("Segoe UI", 20, "bold"))
+        self._hdr_title.pack(anchor="w")
+        self._cur_page = None
+
+    def _show(self, name):
+        if name not in self.pages:
+            return
+        self.pages[name].tkraise()
+        self._cur_page = name
+        P = PAL
+        for k, w in getattr(self, "_nav_items", {}).items():
+            if k == name:
+                w.config(bg="#12304a", fg="#ffffff")
+            else:
+                w.config(bg=P["side"], fg="#c9d6ea")
+        sec, lab = TITLES.get(name, ("", name))
+        try:
+            self._hdr_crumb.config(text=f"{sec} / {lab.upper()}")
+            self._hdr_title.config(text=lab)
+        except Exception:
+            pass
+        if name == "Dashboard":
+            self._dash_refresh()
+        elif name == "Proxy":
+            self._proxy_refresh()
+        elif name == "Logs":
+            self._logs_refresh()
+
+    def _build_statusbar(self):
+        P = PAL
+        sb = tk.Frame(self.right, bg=P["side"]); sb.pack(side="bottom", fill="x")
+        self._status_lbl = tk.Label(sb, text="", bg=P["side"], fg=P["muted"], font=("Segoe UI", 9, "bold"), anchor="w")
+        self._status_lbl.pack(side="left", padx=12, pady=4)
+        self.after(1500, self._status_tick)
+
+    def _status_tick(self):
+        try:
+            accs = load_accounts()
+            live = sum(1 for a in accs if str(self.api_status_map.get(a["id"], "")).lower().startswith("live"))
+            br = {"fbbrowser": "FB Browser", "ixbrowser": "ixBrowser", "chrome": "Chrome", "custom": "Custom"}.get(
+                load_settings().get("browser", "fbbrowser"), "FB Browser")
+            self._status_lbl.config(text=f"●  Ready   ·   {len(accs)} profiles   ·   {live} live   ·   {br}")
+            self._side_foot.config(text=f"Workspace\n{len(accs)} IDs  ·  {br}")
+        except Exception:
+            pass
+        self.after(5000, self._status_tick)
+
+    # ---------- Dashboard ----------
+    def _card(self, parent, title, icon="", key=None):
+        P = PAL
+        c = tk.Frame(parent, bg=P["panel"], highlightbackground=P["border"], highlightthickness=1)
+        tk.Label(c, text=f"{icon}  {title}", bg=P["panel"], fg=P["muted"], font=("Segoe UI", 10, "bold")).pack(
+            anchor="w", padx=16, pady=(14, 2))
+        v = tk.Label(c, text="0", bg=P["panel"], fg=P["text"], font=("Segoe UI", 26, "bold"))
+        v.pack(anchor="w", padx=16)
+        lk = tk.Label(c, text="Open workspace  ↗", bg=P["panel"], fg=P["accent"], font=("Segoe UI", 9, "bold"),
+                      cursor="hand2")
+        lk.pack(anchor="w", padx=16, pady=(2, 14))
+        if key:
+            lk.bind("<Button-1>", lambda e: self._show(key))
+        return c, v
+
+    def _build_dashboard_page(self):
+        P = PAL
+        f = self.pages["Dashboard"]
+        f.configure(style="TFrame")
+        row = tk.Frame(f, bg=P["bg"]); row.pack(fill="x", padx=14, pady=(6, 10))
+        self._dash_vals = {}
+        for i, (k, t, ic, go) in enumerate([("acc", "Accounts", "👤", "Accounts"), ("live", "Live IDs", "●", "Accounts"),
+                                            ("pages", "Pages (ticked)", "⚑", "Accounts"),
+                                            ("api", "API pages ON", "☁", "API"),
+                                            ("today", "Posted today", "✔", "Logs"),
+                                            ("fail", "Failed today", "✖", "Logs")]):
+            c, v = self._card(row, t, ic, go)
+            c.grid(row=0, column=i, sticky="nsew", padx=6)
+            row.grid_columnconfigure(i, weight=1)
+            self._dash_vals[k] = v
+        low = tk.Frame(f, bg=P["bg"]); low.pack(fill="both", expand=True, padx=20, pady=4)
+        nm = tk.Frame(low, bg=P["panel"], highlightbackground=P["border"], highlightthickness=1)
+        nm.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        tk.Label(nm, text="Your next move", bg=P["panel"], fg=P["text"], font=("Segoe UI", 13, "bold")).pack(
+            anchor="w", padx=16, pady=(14, 2))
+        tk.Label(nm, text="Add IDs, login, pick pages, then let the scheduler post.", bg=P["panel"],
+                 fg=P["muted"], font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=16, pady=(0, 8))
+        for t, sub, k in [("Manage accounts", "Import .txt, login with 2FA, FB Browser profiles", "Accounts"),
+                          ("Schedule page posts (API)", "Official API · no browser · no captcha", "API"),
+                          ("Post with browser", "Reels / video / photo to ticked pages", "Post"),
+                          ("Keep IDs active", "Warm-up, groups, comments", "Interact"),
+                          ("Proxies", "Check speed, assign to IDs", "Proxy")]:
+            b = tk.Frame(nm, bg=P["panel2"], cursor="hand2"); b.pack(fill="x", padx=14, pady=4)
+            l1 = tk.Label(b, text=t, bg=P["panel2"], fg=P["text"], font=("Segoe UI", 11, "bold"), cursor="hand2")
+            l1.pack(anchor="w", padx=12, pady=(8, 0))
+            l2 = tk.Label(b, text=sub, bg=P["panel2"], fg=P["muted"], font=("Segoe UI", 9, "bold"), cursor="hand2")
+            l2.pack(anchor="w", padx=12, pady=(0, 8))
+            for w in (b, l1, l2):
+                w.bind("<Button-1>", lambda e, k=k: self._show(k))
+        ra = tk.Frame(low, bg=P["panel"], highlightbackground=P["border"], highlightthickness=1)
+        ra.pack(side="left", fill="both", expand=True, padx=(8, 0))
+        hr = tk.Frame(ra, bg=P["panel"]); hr.pack(fill="x", padx=16, pady=(14, 6))
+        tk.Label(hr, text="Recent activity", bg=P["panel"], fg=P["text"], font=("Segoe UI", 13, "bold")).pack(side="left")
+        vl = tk.Label(hr, text="View logs ↗", bg=P["panel"], fg=P["accent"], font=("Segoe UI", 9, "bold"), cursor="hand2")
+        vl.pack(side="right"); vl.bind("<Button-1>", lambda e: self._show("Logs"))
+        self._dash_recent = tk.Frame(ra, bg=P["panel"]); self._dash_recent.pack(fill="both", expand=True, padx=12)
+
+    def _all_post_events(self):
+        """API history + browser post history ek list mein: [(time, ok, title, sub)]"""
+        ev = []
+        try:
+            for h in api_load().get("history", []):
+                ev.append((h["time"], h["ok"], f"{h['kind'].title()} {'posted' if h['ok'] else 'failed'}",
+                           f"{h['page']} · API"))
+        except Exception:
+            pass
+        try:
+            for pg, lst in all_page_history().items():
+                for h in lst[-200:]:
+                    ok = h.get("status") == "success"
+                    ev.append((h.get("time", "")[:16], ok, f"Post {'published' if ok else 'failed'}",
+                               f"{pg} · {h.get('video', '')}" + ("" if ok else f" · {h.get('issue', '')}")))
+        except Exception:
+            pass
+        ev.sort(key=lambda x: str(x[0]), reverse=True)
+        return ev
+
+    def _dash_refresh(self):
+        P = PAL
+        try:
+            accs = load_accounts()
+            live = sum(1 for a in accs if str(self.api_status_map.get(a["id"], "")).lower().startswith("live"))
+            pages = sum(1 for a in accs for p in (a.get("pages") or []) if p.get("enabled"))
+            api_on = sum(1 for p in api_load()["pages"].values() if p.get("enabled"))
+            today = time.strftime("%Y-%m-%d")
+            ev = self._all_post_events()
+            ok_t = sum(1 for e in ev if str(e[0]).startswith(today) and e[1])
+            bad_t = sum(1 for e in ev if str(e[0]).startswith(today) and not e[1])
+            for k, v in (("acc", len(accs)), ("live", live), ("pages", pages), ("api", api_on),
+                         ("today", ok_t), ("fail", bad_t)):
+                self._dash_vals[k].config(text=f"{v:02d}")
+            for w in self._dash_recent.winfo_children():
+                w.destroy()
+            if not ev:
+                tk.Label(self._dash_recent, text="No activity yet.", bg=P["panel"], fg=P["muted"]).pack(anchor="w", pady=8)
+            for t, ok, title, sub in ev[:7]:
+                r = tk.Frame(self._dash_recent, bg=P["panel"]); r.pack(fill="x", pady=3)
+                tk.Label(r, text="✔" if ok else "✖", bg=P["panel"], fg=P["ok"] if ok else P["bad"],
+                         font=("Segoe UI", 12, "bold")).pack(side="left", padx=(4, 10))
+                tx = tk.Frame(r, bg=P["panel"]); tx.pack(side="left", fill="x", expand=True)
+                tk.Label(tx, text=title, bg=P["panel"], fg=P["text"], font=("Segoe UI", 10, "bold")).pack(anchor="w")
+                tk.Label(tx, text=sub, bg=P["panel"], fg=P["muted"], font=("Segoe UI", 9, "bold")).pack(anchor="w")
+                tk.Label(r, text=str(t)[-5:], bg=P["panel"], fg=P["muted"], font=("Segoe UI", 9, "bold")).pack(side="right")
+        except Exception as e:
+            self.log_q.put(f"dashboard: {e}")
+
+    # ---------- Proxy Management ----------
+    def _build_proxy_page(self):
+        f = self.pages["Proxy"]
+        top = ttk.Frame(f); top.pack(fill="x", padx=20, pady=6)
+        ttk.Label(top, text=T("Add proxies (one per line: host:port or host:port:user:pass or http://user:pass@host:port)",
+                              "Proxies daalo (har line mein: host:port ya host:port:user:pass)"),
+                  style="Muted.TLabel").pack(anchor="w")
+        self.px_text = tk.Text(top, height=3, font=("Consolas", 11), relief="flat")
+        self.px_text.pack(fill="x", pady=4)
+        bb = ttk.Frame(top); bb.pack(fill="x")
+        ttk.Button(bb, text=T("Add to pool", "Pool mein daalo"), command=self._proxy_add).pack(side="left")
+        ttk.Button(bb, text=T("Check selected", "Selected check"), command=lambda: self._proxy_check(True)).pack(side="left", padx=4)
+        ttk.Button(bb, text=T("Check all", "Sab check"), command=lambda: self._proxy_check(False)).pack(side="left")
+        ttk.Button(bb, text=T("Assign to ticked IDs (1 each)", "Tick IDs ko do (1-1)"), style="Accent.TButton",
+                   command=self._proxy_assign).pack(side="left", padx=4)
+        ttk.Button(bb, text=T("Remove selected", "Selected hatao"), command=self._proxy_remove).pack(side="left")
+        cols = ("proxy", "type", "status", "lat", "ip", "used")
+        self.px_tree = ttk.Treeview(f, columns=cols, show="headings", height=12)
+        for c, t, w in (("proxy", "Proxy", 300), ("type", "Protocol", 90), ("status", "Status", 110),
+                        ("lat", "Latency", 90), ("ip", "IP / Country", 200), ("used", "Used by", 260)):
+            self.px_tree.heading(c, text=t); self.px_tree.column(c, width=w, anchor="w")
+        self.px_tree.pack(fill="both", expand=True, padx=20, pady=8)
+
+    def _proxy_pool(self):
+        s = load_settings()
+        pool = s.get("proxy_pool", [])
+        for a in load_accounts():
+            if a.get("proxy") and a["proxy"] not in [p["proxy"] for p in pool]:
+                pool.append({"proxy": a["proxy"]})
+        return pool
+
+    def _proxy_refresh(self):
+        pool = self._proxy_pool()
+        used = {}
+        for a in load_accounts():
+            if a.get("proxy"):
+                used.setdefault(a["proxy"], []).append(a["name"])
+        self.px_tree.delete(*self.px_tree.get_children())
+        for i, p in enumerate(pool):
+            pr = parse_proxy(p["proxy"]) or {}
+            typ = (pr.get("server", "").split("://")[0] or "?").upper()
+            st = p.get("status", "Unchecked")
+            self.px_tree.insert("", "end", iid=str(i), values=(p["proxy"], typ, st,
+                                f"{p['lat']} ms" if p.get("lat") else "-", p.get("ip", ""),
+                                ", ".join(used.get(p["proxy"], [])) or "-"))
+
+    def _proxy_save_pool(self, pool):
+        save_settings({"proxy_pool": pool})
+
+    def _proxy_add(self):
+        pool = self._proxy_pool()
+        have = {p["proxy"] for p in pool}
+        n = 0
+        for line in self.px_text.get("1.0", "end").splitlines():
+            line = line.strip()
+            if line and line not in have and parse_proxy(line):
+                pool.append({"proxy": line}); have.add(line); n += 1
+        self._proxy_save_pool(pool)
+        self.px_text.delete("1.0", "end")
+        self.log_q.put(T(f"[Proxy] {n} added.", f"[Proxy] {n} add hue."))
+        self._proxy_refresh()
+
+    def _proxy_check(self, only_sel):
+        pool = self._proxy_pool()
+        idx = [int(i) for i in self.px_tree.selection()] if only_sel else list(range(len(pool)))
+
+        def work():
+            for i in idx:
+                ok, lat, info = check_proxy(pool[i]["proxy"])
+                pool[i].update(status="Ready" if ok else ("Unknown" if ok is None else "Dead"),
+                               lat=lat or None, ip=info)
+                self._proxy_save_pool(pool)
+                self.after(0, self._proxy_refresh)
+            self.log_q.put(T("[Proxy] Check finished.", "[Proxy] Check khatam."))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _proxy_assign(self):
+        accs = self.acc_table.checked_accounts()
+        pool = [p for p in self._proxy_pool() if p.get("status") != "Dead"]
+        if not accs or not pool:
+            messagebox.showwarning("Proxy", T("Tick IDs in Accounts and add proxies first.",
+                                              "Pehle Accounts mein IDs tick karein aur proxies daalein."))
+            return
+        used = {a.get("proxy") for a in load_accounts() if a.get("proxy")}
+        free = [p["proxy"] for p in pool if p["proxy"] not in used] or [p["proxy"] for p in pool]
+        for k, a in enumerate(accs):
+            update_account(a["id"], proxy=free[k % len(free)])
+        self.log_q.put(T(f"[Proxy] Assigned to {len(accs)} ID(s).", f"[Proxy] {len(accs)} IDs ko de diye."))
+        self._refresh_all_panels(); self._proxy_refresh()
+
+    def _proxy_remove(self):
+        pool = self._proxy_pool()
+        sel = {int(i) for i in self.px_tree.selection()}
+        self._proxy_save_pool([p for i, p in enumerate(pool) if i not in sel])
+        self._proxy_refresh()
+
+    # ---------- Logs ----------
+    def _build_logs_page(self):
+        f = self.pages["Logs"]
+        nb = ttk.Notebook(f); nb.pack(fill="both", expand=True, padx=20, pady=8)
+        self.lg_posts = ttk.Treeview(nb, columns=("t", "r", "w", "d"), show="headings")
+        for c, t, w in (("t", "Time", 160), ("r", "Result", 90), ("w", "What", 220), ("d", "Where", 500)):
+            self.lg_posts.heading(c, text=t); self.lg_posts.column(c, width=w, anchor="w")
+        nb.add(self.lg_posts, text="  Post Logs  ")
+        self.lg_act = tk.Text(nb, font=("Consolas", 10), relief="flat")
+        nb.add(self.lg_act, text="  Activity Log  ")
+        b = ttk.Frame(f); b.pack(fill="x", padx=20, pady=(0, 6))
+        ttk.Button(b, text=T("Refresh", "Refresh"), command=self._logs_refresh).pack(side="left")
+
+    def _logs_refresh(self):
+        self.lg_posts.delete(*self.lg_posts.get_children())
+        for t, ok, title, sub in self._all_post_events()[:500]:
+            self.lg_posts.insert("", "end", values=(t, "✔ OK" if ok else "✖ Failed", title, sub))
+        self.lg_act.delete("1.0", "end")
+        self.lg_act.insert("end", "\n".join(self.log_buffer[-300:]))
+
+
+class App(ProUIMixin, ApiPagesMixin, tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Facebook Uploader")
@@ -3592,24 +4218,7 @@ class App(ApiPagesMixin, tk.Tk):
         except Exception:
             pass
         style = ttk.Style(self)
-        # Windows ka native theme rakhein (checkbox par asli TICK aata hai, cross nahi)
-        try:
-            if "vista" in style.theme_names():
-                style.theme_use("vista")
-        except Exception:
-            pass
-        BASE = ("Segoe UI", 12, "bold")
-        self.option_add("*Font", BASE)
-        self.option_add("*TCombobox*Listbox.font", BASE)
-        style.configure(".", font=BASE)
-        style.configure("TButton", font=BASE, padding=4)
-        style.configure("TLabel", font=BASE)
-        style.configure("TCheckbutton", font=BASE)
-        style.configure("TRadiobutton", font=BASE)
-        style.configure("TEntry", font=BASE)
-        style.configure("TLabelframe.Label", font=("Segoe UI", 12, "bold"))
-        style.configure("Treeview", rowheight=32, font=("Segoe UI", 12))
-        style.configure("Treeview.Heading", font=("Segoe UI", 12, "bold"))
+        apply_dark_theme(self, style)
 
         self.log_q = queue.Queue()
         self.resume_events = {}
@@ -3622,16 +4231,51 @@ class App(ApiPagesMixin, tk.Tk):
         self.api_status_map = {}    # acc_id -> status text
         globals()["APP_INSTANCE"] = self
         self.img_check, self.img_empty = self._make_check_icons()
+        # Checkbox par asli TICK (cross nahi) — apni image wala indicator
+        try:
+            style.element_create("tick.indicator", "image", self.img_empty, ("selected", self.img_check),
+                                 sticky="w", width=26)
+            style.layout("TCheckbutton", [("Checkbutton.padding", {"sticky": "nswe", "children": [
+                ("tick.indicator", {"side": "left", "sticky": ""}),
+                ("Checkbutton.focus", {"side": "left", "sticky": "w", "children": [
+                    ("Checkbutton.label", {"sticky": "nswe"})]})]})])
+        except Exception:
+            pass
+        try:
+            def _circ(fill, dot):
+                n = 18
+                im = tk.PhotoImage(width=n, height=n)
+                for yy in range(n):
+                    for xx in range(n):
+                        d = ((xx - 8.5) ** 2 + (yy - 8.5) ** 2) ** 0.5
+                        if d <= 8.5:
+                            c = "#4b5d7d" if d > 7.3 else (dot if (dot and d <= 4.2) else fill)
+                            im.put(c, (xx, yy))
+                return im
+            self.img_r0, self.img_r1 = _circ("#0e1626", None), _circ("#0e1626", "#22c3e6")
+            style.element_create("dot.indicator", "image", self.img_r0, ("selected", self.img_r1),
+                                 sticky="w", width=26)
+            style.layout("TRadiobutton", [("Radiobutton.padding", {"sticky": "nswe", "children": [
+                ("dot.indicator", {"side": "left", "sticky": ""}),
+                ("Radiobutton.focus", {"side": "left", "sticky": "w", "children": [
+                    ("Radiobutton.label", {"sticky": "nswe"})]})]})])
+        except Exception:
+            pass
 
-        self._build_topbar()
-        self.container = ttk.Frame(self)
+        self._build_sidebar()
+        self._build_statusbar()
+        self.container = ttk.Frame(self.right)
         self.container.pack(fill="both", expand=True)
         self.pages = {}
-        for name in ("Accounts", "Post", "API", "Interact", "LDPlayer", "Schedule", "Settings", "Guide"):
+        for name in ("Dashboard", "Accounts", "Proxy", "Post", "API", "Interact", "LDPlayer", "Schedule",
+                     "Logs", "Settings", "Guide"):
             fr = ttk.Frame(self.container)
             fr.place(relx=0, rely=0, relwidth=1, relheight=1)
             self.pages[name] = fr
+        self._build_dashboard_page()
         self._build_accounts_page()
+        self._build_proxy_page()
+        self._build_logs_page()
         self._build_post_page()
         self._build_api_page()
         self._build_interact_page()
@@ -3640,7 +4284,7 @@ class App(ApiPagesMixin, tk.Tk):
         self._build_settings_page()
         self._build_guide_page()
         self._build_logbar()
-        self._show("Post")
+        self._show("Dashboard")
         self.bind_all("<Control-z>", lambda e: self._undo_delete())
 
         if not PLAYWRIGHT_OK:
@@ -3701,7 +4345,7 @@ class App(ApiPagesMixin, tk.Tk):
         """Checkbox ke liye asli image (font glyph ka masla khatam)."""
         size = 18
         def blank(border):
-            g = [["#ffffff"] * size for _ in range(size)]
+            g = [["#0e1626"] * size for _ in range(size)]
             for i in range(size):
                 g[0][i] = g[size - 1][i] = border
                 g[i][0] = g[i][size - 1] = border
@@ -3713,9 +4357,9 @@ class App(ApiPagesMixin, tk.Tk):
             except Exception:
                 pass
             return im
-        empty = to_img(blank("#999999"))
-        g = blank("#1a8f1a")
-        green = "#1a8f1a"
+        empty = to_img(blank("#4b5d7d"))
+        g = blank("#22c3e6")
+        green = "#34d399"
         pts = []
         for k in range(4):
             pts += [(4 + k, 8 + k), (4 + k, 9 + k)]
@@ -3743,7 +4387,7 @@ class App(ApiPagesMixin, tk.Tk):
             b.pack(side="left")
             self._tab_btns[key] = b
 
-    def _show(self, name):
+    def _show_old(self, name):
         self.pages[name].tkraise()
         for k, b in self._tab_btns.items():
             if k == name:
@@ -3755,8 +4399,8 @@ class App(ApiPagesMixin, tk.Tk):
     def _build_accounts_page(self):
         f = self.pages["Accounts"]
         left = self._scroll_area(f, width=470)
-        lg = ttk.LabelFrame(left, text=T("LOGIN SELECTED IDs  (auto 2FA + own ixBrowser profile)",
-                                         "LOGIN SELECTED IDs  (auto 2FA + alag ixBrowser profile)"))
+        lg = ttk.LabelFrame(left, text=T("LOGIN SELECTED IDs  (auto 2FA + own FB Browser profile)",
+                                         "LOGIN SELECTED IDs  (auto 2FA + alag FB Browser profile)"))
         lg.pack(fill="x", pady=(0, 6))
         lr = ttk.Frame(lg); lr.pack(fill="x", padx=8, pady=3)
         ttk.Label(lr, text=T("Open at once:", "Aik waqt khulein:")).pack(side="left")
@@ -3824,17 +4468,25 @@ class App(ApiPagesMixin, tk.Tk):
 
         self.acc_table = AccountPanel(f, self, on_start=None, show_delete=True, on_pick=self._load_account_into_form)
 
-    def _scroll_area(self, parent, width=470):
+    def _scroll_area(self, parent, width=470, full=False):
         """Left side ko scroll wala banao (chhoti screen par sab nazar aaye)."""
-        outer = ttk.Frame(parent); outer.pack(side="left", fill="y", padx=8, pady=8)
-        cv = tk.Canvas(outer, width=width, highlightthickness=0, bd=0)
+        outer = ttk.Frame(parent)
+        if full:
+            outer.pack(fill="both", expand=True, padx=8, pady=4)
+        else:
+            outer.pack(side="left", fill="y", padx=8, pady=8)
+        cv = tk.Canvas(outer, width=width, highlightthickness=0, bd=0, bg=PAL["bg"])
         sb = ttk.Scrollbar(outer, orient="vertical", command=cv.yview)
         inner = ttk.Frame(cv)
         inner.bind("<Configure>", lambda e: cv.configure(scrollregion=cv.bbox("all")))
         win = cv.create_window((0, 0), window=inner, anchor="nw")
         cv.bind("<Configure>", lambda e: cv.itemconfigure(win, width=e.width))
         cv.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y"); cv.pack(side="left", fill="y", expand=False)
+        sb.pack(side="right", fill="y")
+        if full:
+            cv.pack(side="left", fill="both", expand=True)
+        else:
+            cv.pack(side="left", fill="y", expand=False)
         def _wheel(e):
             try:
                 cv.yview_scroll(int(-e.delta / 120) or (-1 if e.delta > 0 else 1), "units")
@@ -4127,8 +4779,8 @@ class App(ApiPagesMixin, tk.Tk):
     # ---------- Post page ----------
     def _build_post_page(self):
         f = self.pages["Post"]
-        side = tk.Frame(f, bg="#1f2a44", width=190); side.pack(side="left", fill="y"); side.pack_propagate(False)
-        tk.Label(side, text="POST", bg="#1f2a44", fg="white", font=("Segoe UI", 15, "bold")).pack(anchor="w", padx=14, pady=(14, 10))
+        side = tk.Frame(f, bg=PAL["panel"], width=190); side.pack(side="left", fill="y"); side.pack_propagate(False)
+        tk.Label(side, text="POST", bg=PAL["panel"], fg="white", font=("Segoe UI", 15, "bold")).pack(anchor="w", padx=14, pady=(14, 10))
         self.post_kind = tk.StringVar(value="reel")
         self._side_btns = {}
         for key, label in [("reel", "📹  Post Reels"), ("video", "🎬  Post Video"), ("photo", "🖼  Post Photo")]:
@@ -4172,7 +4824,7 @@ class App(ApiPagesMixin, tk.Tk):
             if key == k:
                 b.config(bg="#2d7de0", fg="white")
             else:
-                b.config(bg="#2a3657", fg="#cfe0ff")
+                b.config(bg=PAL["panel2"], fg="#cfe0ff")
 
     def _start_post_batch(self, accounts):
         kind = self.post_kind.get()
@@ -4209,11 +4861,11 @@ class App(ApiPagesMixin, tk.Tk):
     # ---------- Interact page ----------
     def _build_interact_page(self):
         f = self.pages["Interact"]
-        side = tk.Frame(f, bg="#1f2a44", width=200); side.pack(side="left", fill="y"); side.pack_propagate(False)
-        tk.Label(side, text="INTERACT", bg="#1f2a44", fg="white", font=("Segoe UI", 15, "bold")).pack(anchor="w", padx=14, pady=(14, 8))
+        side = tk.Frame(f, bg=PAL["panel"], width=200); side.pack(side="left", fill="y"); side.pack_propagate(False)
+        tk.Label(side, text="INTERACT", bg=PAL["panel"], fg="white", font=("Segoe UI", 15, "bold")).pack(anchor="w", padx=14, pady=(14, 8))
         tk.Label(side, text=T("Tick the activities on the\nright, then START.\nNO posting on your wall.",
                               "Daayein activities ✔ karein,\nphir START. Wall par\nposting NAHI hogi."),
-                 bg="#1f2a44", fg="#cfe0ff", font=("Segoe UI", 11, "bold"), justify="left").pack(anchor="w", padx=14)
+                 bg=PAL["panel"], fg="#cfe0ff", font=("Segoe UI", 11, "bold"), justify="left").pack(anchor="w", padx=14)
         body = ttk.Frame(f); body.pack(side="left", fill="both", expand=True)
         self._build_active_config(body)
         self.interact_panel = AccountPanel(f, self, on_start=self._start_active_batch,
@@ -4644,6 +5296,23 @@ class App(ApiPagesMixin, tk.Tk):
 
     # ---------- Guide page (in-app help, English) ----------
     GUIDE_TEXT = """
+NEW LOOK: left sidebar → Dashboard (cards + recent activity), Accounts,
+Proxy Management, Posting, API Pages, Active & Groups, Schedule, LDPlayer,
+Logs, System Settings, Guide.
+
+FB BROWSER (built-in, no ixBrowser needed) — System Settings → Browser:
+ - Every ID gets its own profile folder + its own fingerprint (screen size,
+   CPU, RAM, graphics card, canvas/audio noise) that stays the same always.
+ - With a proxy, timezone + language + location follow the proxy's country.
+   WebRTC IP leak is blocked. Engine: chrome (your installed Chrome, most
+   natural) / chromium (built-in, downloads once) / msedge.
+ - Per row + Window W x H: browsers open side by side in a grid. Mute audio.
+
+PROXY MANAGEMENT: paste proxies → Add to pool → Check all (shows Ready/Dead,
+latency, IP + country) → tick IDs in Accounts → "Assign to ticked IDs".
+
+LOGS: Post Logs (every post, browser + API, OK/Failed) and Activity Log.
+
 API PAGES tab (official Facebook API — safest, no browser/captcha/2FA):
  1. "How to get token?" shows the steps: Business Manager → System user →
     assign your Pages → Generate token (pages_show_list, pages_manage_posts,
@@ -4820,7 +5489,7 @@ downloads and replaces itself, then restarts. No manual download needed.
         sb = ttk.Scrollbar(wrap)
         sb.pack(side="right", fill="y")
         txt = tk.Text(wrap, wrap="word", yscrollcommand=sb.set,
-                      font=("Consolas", 11), bg="#ffffff", relief="flat", padx=10, pady=8)
+                      font=("Consolas", 11), bg=PAL["field"], fg=PAL["text"], relief="flat", padx=10, pady=8)
         txt.pack(side="left", fill="both", expand=True)
         sb.config(command=txt.yview)
         txt.insert("1.0", self.GUIDE_TEXT)
@@ -4828,7 +5497,7 @@ downloads and replaces itself, then restarts. No manual download needed.
 
     # ---------- Settings page ----------
     def _build_settings_page(self):
-        f = self.pages["Settings"]
+        f = self._scroll_area(self.pages["Settings"], full=True)
         s = load_settings()
 
         # Update section (sab se upar)
@@ -4855,10 +5524,12 @@ downloads and replaces itself, then restarts. No manual download needed.
         ttk.Label(lr0, text=T("(applies after restart)", "(tabdeeli restart ke baad)"),
                   foreground="#555").pack(side="left")
 
-        box = ttk.LabelFrame(f, text=T("Browser (default: ixBrowser)", "Browser (default: ixBrowser)"))
+        box = ttk.LabelFrame(f, text=T("Browser (default: FB Browser — built-in)", "Browser (default: FB Browser — built-in)"))
         box.pack(fill="x", padx=12, pady=12)
-        self.set_browser = tk.StringVar(value=s.get("browser", "ixbrowser"))
-        for val, text in [("ixbrowser", T("ixBrowser  (each profile its own IP + fingerprint) — recommended", "ixBrowser  (har profile apna IP + fingerprint) — recommended")),
+        self.set_browser = tk.StringVar(value=s.get("browser", "fbbrowser"))
+        for val, text in [("fbbrowser", T("FB Browser (built-in anti-detect: own fingerprint + proxy timezone per ID) — recommended",
+                                          "FB Browser (built-in anti-detect: har ID ka fingerprint + proxy timezone) — recommended")),
+                          ("ixbrowser", T("ixBrowser (needs ixBrowser app)", "ixBrowser (ixBrowser app chahiye)")),
                           ("chrome", T("Google Chrome (installed on PC)", "Google Chrome (PC par installed)")),
                           ("custom", T("Custom browser (path below)", "Custom browser (neeche path)"))]:
             ttk.Radiobutton(box, text=text, value=val, variable=self.set_browser).pack(anchor="w", padx=12, pady=3)
@@ -4867,6 +5538,25 @@ downloads and replaces itself, then restarts. No manual download needed.
         self.set_path = tk.StringVar(value=s.get("browser_path", ""))
         ttk.Entry(pr, textvariable=self.set_path, width=45).pack(side="left", padx=4)
         ttk.Button(pr, text="Browse", command=self._pick_browser_path).pack(side="left")
+
+        fr = ttk.Frame(box); fr.pack(fill="x", padx=12, pady=4)
+        ttk.Label(fr, text=T("FB Browser engine:", "FB Browser engine:")).pack(side="left")
+        self.set_fbb_engine = tk.StringVar(value=s.get("fbb_engine", "chrome"))
+        ttk.Combobox(fr, textvariable=self.set_fbb_engine, values=("chrome", "chromium", "msedge"),
+                     width=9, state="readonly").pack(side="left", padx=4)
+        ttk.Label(fr, text=T("Per row:", "Ek line mein:")).pack(side="left", padx=(10, 0))
+        self.set_fbb_row = tk.StringVar(value=str(s.get("fbb_per_row", 4)))
+        tk.Spinbox(fr, from_=1, to=10, textvariable=self.set_fbb_row, width=4).pack(side="left", padx=3)
+        ttk.Label(fr, text=T("Window W x H:", "Window W x H:")).pack(side="left", padx=(10, 0))
+        self.set_fbb_w = tk.StringVar(value=str(s.get("fbb_w", 900)))
+        self.set_fbb_h = tk.StringVar(value=str(s.get("fbb_h", 800)))
+        ttk.Entry(fr, textvariable=self.set_fbb_w, width=5).pack(side="left", padx=2)
+        ttk.Entry(fr, textvariable=self.set_fbb_h, width=5).pack(side="left", padx=2)
+        self.set_fbb_mute = tk.IntVar(value=1 if s.get("fbb_mute", True) else 0)
+        ttk.Checkbutton(fr, text=T("Mute audio", "Awaz band"), variable=self.set_fbb_mute).pack(side="left", padx=8)
+        ttk.Label(fr, text=T("Language (empty = from proxy):", "Zaban (khali = proxy se):")).pack(side="left", padx=(10, 0))
+        self.set_fbb_lang = tk.StringVar(value=s.get("fbb_lang", ""))
+        ttk.Entry(fr, textvariable=self.set_fbb_lang, width=7).pack(side="left", padx=2)
 
         lr = ttk.Frame(box); lr.pack(fill="x", padx=12, pady=4)
         self.set_ix_limit_on = tk.IntVar(value=1 if s.get("ix_limit_on") else 0)
@@ -5142,6 +5832,14 @@ downloads and replaces itself, then restarts. No manual download needed.
             ix_max = 10
         br = self.set_browser.get()
         autostart = bool(self.set_autostart.get())
+        def _int(v, d):
+            try:
+                return int(str(v).strip())
+            except Exception:
+                return d
+        save_settings({"fbb_engine": self.set_fbb_engine.get(), "fbb_per_row": _int(self.set_fbb_row.get(), 4),
+                       "fbb_w": _int(self.set_fbb_w.get(), 900), "fbb_h": _int(self.set_fbb_h.get(), 800),
+                       "fbb_mute": bool(self.set_fbb_mute.get()), "fbb_lang": self.set_fbb_lang.get().strip()})
         save_settings({"browser": br, "browser_path": self.set_path.get().strip(),
                        "use_ixbrowser": br == "ixbrowser", "ix_max_per_day": ix_max,
                        "ix_limit_on": bool(self.set_ix_limit_on.get()),
@@ -5599,8 +6297,9 @@ downloads and replaces itself, then restarts. No manual download needed.
 
     # ---------- Log ----------
     def _build_logbar(self):
-        lf = ttk.LabelFrame(self, text="Log"); lf.pack(fill="x", padx=6, pady=(0, 6))
-        self.log_text = tk.Text(lf, height=7, state="disabled", bg="#0d0d0d", fg="#17d417", font=("Consolas", 12, "bold"))
+        lf = ttk.LabelFrame(self.right, text="Live log"); lf.pack(fill="x", padx=16, pady=(0, 6))
+        self.log_text = tk.Text(lf, height=6, state="disabled", bg="#060b14", fg="#5eead4", font=("Consolas", 10, "bold"),
+                                relief="flat", highlightthickness=0)
         self.log_text.pack(fill="both", expand=True, padx=4, pady=4)
 
     def _drain_log(self):
