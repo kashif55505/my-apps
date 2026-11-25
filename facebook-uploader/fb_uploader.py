@@ -1097,10 +1097,8 @@ ACCOUNT_FIELDS = [("no", "No", 50), ("profile", "Profile", 80), ("name", "Name",
 
 def account_row(a, i):
     ii = a.get("ip_info") or {}
-    ip = " ".join(x for x in (ii.get("query", ""), ii.get("countryCode", ""), ii.get("city", "")) if x)
-    px = a.get("proxy", "")
-    if px.lower().startswith("wg:"):
-        ip = (f"VPN {px[3:]} · " + ip) if ip else f"VPN {px[3:]}"
+    # IP location: sirf mulk + shehar (e.g. "US New York") — IP number nahi
+    ip = " ".join(x for x in (ii.get("countryCode", ""), ii.get("city", "")) if x)
     pg = a.get("pages") or []
     on = [p["name"] for p in pg if p.get("enabled")]
     pages = f"{len(on)}/{len(pg)}" + (f" ✔ {on[0]}" if on else "") if pg else (a.get("page_name") or "-")
@@ -3791,13 +3789,27 @@ class Automation:
         upd = {}
         try:
             self.page.goto("https://www.facebook.com/me", wait_until="domcontentloaded"); time.sleep(random.uniform(4, 6))
-            try:
-                h1 = self.page.query_selector("[role='main'] h1")
-                nm = (h1.inner_text() if h1 else "").split("\n")[0].strip()
-                if nm and len(nm) < 80:
-                    upd["name"] = nm
-            except Exception:
-                pass
+            nm = ""
+            for sel in ("[role='main'] h1", "h1"):
+                try:
+                    for h1 in self.page.query_selector_all(sel):
+                        t = (h1.inner_text() or "").split("\n")[0].strip()
+                        if t and len(t) < 80 and t.lower() not in ("facebook", "notifications", "chats"):
+                            nm = t; break
+                except Exception:
+                    pass
+                if nm:
+                    break
+            if not nm:
+                try:      # tab title: "Kashif Iqbal | Facebook"
+                    t = (self.page.title() or "").split("|")[0].strip()
+                    t = _re.sub(r"^\(\d+\)\s*", "", t)
+                    if t and t.lower() != "facebook" and "@" not in t:
+                        nm = t
+                except Exception:
+                    pass
+            if nm:
+                upd["name"] = nm
             uid = self._fb_uid()
             if uid:
                 upd["uid"] = uid
