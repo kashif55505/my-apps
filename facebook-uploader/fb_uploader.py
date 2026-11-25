@@ -3080,7 +3080,504 @@ class AccountPanel:
         self.on_start(chosen)
 
 
-class App(tk.Tk):
+# ============================================================
+# API PAGES — official Facebook Graph API se page posting
+# (browser / login / captcha / 2FA ki zaroorat nahi)
+# ============================================================
+API_FILE = os.path.join(DATA_DIR, "api_pages.json")
+GRAPH = "https://graph.facebook.com"
+GRAPH_VIDEO = "https://graph-video.facebook.com"
+DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def api_load():
+    d = _load(API_FILE, {})
+    d.setdefault("tokens", [])
+    d.setdefault("pages", {})
+    d.setdefault("history", [])
+    d.setdefault("graph_version", "v22.0")
+    return d
+
+
+def api_save(d):
+    _save(API_FILE, d)
+
+
+_API_LOCK = threading.Lock()
+
+
+def api_update_page(pid, **fields):
+    with _API_LOCK:
+        d = api_load()
+        d["pages"].setdefault(pid, {}).update(fields)
+        api_save(d)
+
+
+def api_add_history(pid, name, kind, file, ok, info):
+    with _API_LOCK:
+        d = api_load()
+        d["history"].insert(0, {"time": time.strftime("%Y-%m-%d %H:%M"), "page_id": pid, "page": name,
+                                "kind": kind, "file": file, "ok": bool(ok), "info": str(info)[:300]})
+        d["history"] = d["history"][:300]
+        api_save(d)
+
+
+def _gv():
+    return api_load().get("graph_version") or "v22.0"
+
+
+def _http(url, data=None, headers=None, method=None, timeout=600):
+    import urllib.request, urllib.error
+    req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            txt = r.read().decode("utf-8", "ignore")
+    except urllib.error.HTTPError as e:
+        txt = e.read().decode("utf-8", "ignore")
+    try:
+        j = json.loads(txt)
+    except Exception:
+        j = {"raw": txt}
+    if isinstance(j, dict) and j.get("error"):
+        err = j["error"]
+        raise RuntimeError(f"{err.get('message')} (code {err.get('code')})")
+    return j
+
+
+def _form(fields):
+    import urllib.parse
+    return urllib.parse.urlencode(fields).encode()
+
+
+def graph_get(path, token, **params):
+    import urllib.parse
+    params["access_token"] = token
+    return _http(f"{GRAPH}/{_gv()}/{path}?{urllib.parse.urlencode(params)}")
+
+
+def graph_post(path, token, base=None, **fields):
+    fields["access_token"] = token
+    return _http(f"{base or GRAPH}/{_gv()}/{path}", data=_form(fields), method="POST")
+
+
+def _multipart(fields, file_field, file_path):
+    import uuid, mimetypes
+    b = "----fbu" + uuid.uuid4().hex
+    parts = []
+    for k, v in fields.items():
+        parts.append(f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode())
+    mt = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+    fn = os.path.basename(file_path).replace('"', "")
+    parts.append(f'--{b}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{fn}"\r\n'
+                 f'Content-Type: {mt}\r\n\r\n'.encode())
+    with open(file_path, "rb") as f:
+        parts.append(f.read())
+    parts.append(f"\r\n--{b}--\r\n".encode())
+    return b"".join(parts), {"Content-Type": f"multipart/form-data; boundary={b}"}
+
+
+def api_fetch_pages(token):
+    """Token se saare pages + page tokens. Return [{id,name,token}]"""
+    out, url = [], None
+    j = graph_get("me/accounts", token, fields="id,name,access_token", limit=100)
+    while True:
+        for p in j.get("data", []):
+            if p.get("access_token"):
+                out.append({"id": p["id"], "name": p.get("name", p["id"]), "token": p["access_token"]})
+        url = (j.get("paging") or {}).get("next")
+        if not url:
+            break
+        j = _http(url)
+    return out
+
+
+def api_publish(page, file_path, caption, kind):
+    """Ek file page par post. Return post/video id."""
+    pid, tok = page["id"], page["token"]
+    if kind == "text":
+        return graph_post(f"{pid}/feed", tok, message=caption).get("id")
+    if kind == "photo":
+        body, hdr = _multipart({"message": caption, "access_token": tok}, "source", file_path)
+        return _http(f"{GRAPH}/{_gv()}/{pid}/photos", data=body, headers=hdr, method="POST").get("post_id") or "ok"
+    if kind == "video":
+        title = os.path.splitext(os.path.basename(file_path))[0][:250]
+        body, hdr = _multipart({"description": caption, "title": title, "access_token": tok}, "source", file_path)
+        return _http(f"{GRAPH_VIDEO}/{_gv()}/{pid}/videos", data=body, headers=hdr, method="POST").get("id")
+    # reel (3 step)
+    st = graph_post(f"{pid}/video_reels", tok, upload_phase="start")
+    vid = st.get("video_id")
+    up_url = st.get("upload_url") or f"https://rupload.facebook.com/video-upload/{_gv()}/{vid}"
+    size = os.path.getsize(file_path)
+    with open(file_path, "rb") as f:
+        data = f.read()
+    _http(up_url, data=data, method="POST",
+          headers={"Authorization": f"OAuth {tok}", "offset": "0", "file_size": str(size)})
+    graph_post(f"{pid}/video_reels", tok, upload_phase="finish", video_id=vid,
+               video_state="PUBLISHED", description=caption)
+    return vid
+
+
+def api_caption_for(page, file_path):
+    """Caption: same-name .txt  >  captions file (random line)  >  filename  >  fallback. + page hashtags."""
+    import random as _r
+    cap = ""
+    mode = page.get("caption_mode", "auto")
+    side = os.path.splitext(file_path)[0] + ".txt" if file_path else ""
+    if mode in ("auto", "txt") and side and os.path.isfile(side):
+        try:
+            cap = open(side, encoding="utf-8", errors="ignore").read().strip()
+        except Exception:
+            cap = ""
+    if not cap and mode in ("auto", "captions_file") and page.get("captions_file") and \
+            os.path.isfile(page["captions_file"]):
+        try:
+            lines = [l.strip() for l in open(page["captions_file"], encoding="utf-8", errors="ignore") if l.strip()]
+            if lines:
+                cap = _r.choice(lines)
+        except Exception:
+            pass
+    if not cap and mode in ("auto", "filename") and file_path:
+        cap = os.path.splitext(os.path.basename(file_path))[0].replace("_", " ").strip()
+    if not cap:
+        cap = page.get("fallback", "")
+    tags = get_hashtags_for_page(page.get("name", ""))
+    if tags:
+        cap = (cap + "\n\n" + tags).strip()
+    return cap
+
+
+def api_next_file(page):
+    """Rotation ke hisaab se agli file jo is page par pehle post nahi hui."""
+    import random as _r
+    kind = page.get("kind", "reel")
+    files = []
+    for fo in page.get("folders", []):
+        files += list_media_in_folder(fo, "photo" if kind == "photo" else "video")
+    key = "API:" + page["id"]
+    fresh = [f for f in files if not is_uploaded(key, file_hash(f) or f)]
+    if not fresh:
+        return None
+    if page.get("rotation") == "random":
+        return _r.choice(fresh)
+    if page.get("rotation") == "newest":
+        return max(fresh, key=lambda f: os.path.getmtime(f))
+    return fresh[0]
+
+
+def api_run_page(pid, log=print, file_path=None):
+    page = dict(api_load()["pages"].get(pid) or {})
+    if not page:
+        return False
+    page["id"] = pid
+    kind = page.get("kind", "reel")
+    if kind != "text":
+        file_path = file_path or api_next_file(page)
+        if not file_path:
+            log(T(f"[API] {page.get('name')}: no new file in folders.",
+                  f"[API] {page.get('name')}: folders mein koi nayi file nahi."))
+            api_update_page(pid, status="No new file")
+            return False
+    cap = api_caption_for(page, file_path)
+    log(T(f"[API] {page.get('name')}: posting {kind} {os.path.basename(file_path or '')}...",
+          f"[API] {page.get('name')}: {kind} post ho rahi hai {os.path.basename(file_path or '')}..."))
+    api_update_page(pid, status="Posting...")
+    try:
+        rid = api_publish(page, file_path, cap, kind)
+        if file_path:
+            mark_uploaded("API:" + pid, file_hash(file_path) or file_path)
+        api_add_history(pid, page.get("name"), kind, file_path or "", True, rid)
+        api_update_page(pid, status="Posted " + time.strftime("%H:%M"))
+        log(T(f"[API] {page.get('name')}: done ✔ ({rid})", f"[API] {page.get('name')}: ho gaya ✔ ({rid})"))
+        if file_path and page.get("delete_after"):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+        return True
+    except Exception as e:
+        api_add_history(pid, page.get("name"), kind, file_path or "", False, e)
+        api_update_page(pid, status="Error")
+        log(T(f"[API] {page.get('name')}: FAILED — {e}", f"[API] {page.get('name')}: FAIL — {e}"))
+        return False
+
+
+def api_scheduler_loop(log, stop_event):
+    """Har 20 second: jis page ka waqt + din aa gaya, us par post."""
+    busy = set()
+    while not stop_event.is_set():
+        try:
+            now = time.localtime()
+            hm = time.strftime("%H:%M", now)
+            stamp = time.strftime("%Y-%m-%d ", now) + hm
+            d = api_load()
+            for pid, p in d["pages"].items():
+                if not p.get("enabled") or p.get("paused") or pid in busy:
+                    continue
+                days = p.get("days", list(range(7)))
+                if now.tm_wday not in days:
+                    continue
+                times = [t.strip().zfill(5) for t in (p.get("times") or "").replace(";", ",").split(",") if t.strip()]
+                if hm not in times or p.get("last_slot") == stamp:
+                    continue
+                api_update_page(pid, last_slot=stamp)
+                busy.add(pid)
+
+                def work(pid=pid):
+                    try:
+                        api_run_page(pid, log)
+                    finally:
+                        busy.discard(pid)
+                threading.Thread(target=work, daemon=True).start()
+        except Exception as e:
+            log(f"[API] scheduler error: {e}")
+        stop_event.wait(20)
+
+
+API_HELP = """HOW TO CONNECT (one time):
+1. Open business.facebook.com → Settings → Users → System users → Add (Admin).
+2. Click "Assign assets" → choose your Pages → Full control.
+3. Click "Generate token" → pick your App → tick: pages_show_list, pages_manage_posts,
+   pages_read_engagement, publish_video, business_management → Never expire.
+4. Paste the token here and press "Fetch pages". (A normal user token from Graph API
+   Explorer with the same permissions also works, but expires.)"""
+
+
+class ApiPagesMixin:
+    """API PAGES tab (Pages Automation + Tasks + Recovery)."""
+
+    def _build_api_page(self):
+        f = self.pages["API"]
+        top = ttk.LabelFrame(f, text=T("CONNECT (official Facebook API — no browser, no captcha)",
+                                       "CONNECT (official Facebook API — browser/captcha nahi)"))
+        top.pack(fill="x", padx=8, pady=6)
+        r = ttk.Frame(top); r.pack(fill="x", padx=6, pady=4)
+        ttk.Label(r, text="Access token:").pack(side="left")
+        self.api_tok = tk.StringVar()
+        ttk.Entry(r, textvariable=self.api_tok, show="•", width=70).pack(side="left", padx=4, fill="x", expand=True)
+        ttk.Button(r, text=T("Fetch pages", "Pages lao"), command=self._api_fetch).pack(side="left", padx=4)
+        ttk.Label(r, text="Graph:").pack(side="left")
+        self.api_gv = tk.StringVar(value=api_load().get("graph_version", "v22.0"))
+        ttk.Entry(r, textvariable=self.api_gv, width=7).pack(side="left", padx=2)
+        ttk.Button(r, text=T("How to get token?", "Token kaise milega?"),
+                   command=lambda: messagebox.showinfo("API", API_HELP)).pack(side="left", padx=4)
+
+        body = ttk.Frame(f); body.pack(fill="both", expand=True, padx=8)
+        left = ttk.LabelFrame(body, text=T("PAGES AUTOMATION  (✔ = automation ON)", "PAGES AUTOMATION  (✔ = automation ON)"))
+        left.pack(side="left", fill="both", expand=True)
+        cols = ("name", "kind", "times", "files", "status")
+        self.api_tree = ttk.Treeview(left, columns=cols, show="tree headings", height=6, selectmode="browse")
+        self.api_tree.column("#0", width=50, anchor="center", stretch=False); self.api_tree.heading("#0", text="On")
+        for c, t, w in (("name", "Page", 220), ("kind", "Type", 70), ("times", "Times", 140),
+                        ("files", "New files", 80), ("status", "Status", 140)):
+            self.api_tree.heading(c, text=t); self.api_tree.column(c, width=w, anchor="w")
+        self.api_tree.pack(fill="x", padx=4, pady=4)
+        self.api_tree.bind("<Button-1>", self._api_tree_click)
+        bb = ttk.Frame(left); bb.pack(fill="x", padx=4, pady=4)
+        ttk.Button(bb, text=T("POST NOW (selected)", "ABHI POST (selected)"), command=self._api_post_now).pack(side="left")
+        ttk.Button(bb, text=T("Remove page", "Page hatao"), command=self._api_remove).pack(side="left", padx=4)
+        ttk.Button(bb, text=T("Refresh", "Refresh"), command=self._api_refresh).pack(side="left")
+
+        edwrap = self._scroll_area(body, width=520)
+        ed = ttk.LabelFrame(edwrap, text=T("PAGE SETTINGS (click a page)", "PAGE SETTINGS (page par click karein)"))
+        ed.pack(fill="both", expand=True)
+        self.api_cur = None
+        self.api_lbl = ttk.Label(ed, text="-", font=("Segoe UI", 12, "bold")); self.api_lbl.pack(anchor="w", padx=6, pady=4)
+        g = ttk.Frame(ed); g.pack(fill="x", padx=6)
+        self.api_kind = tk.StringVar(value="reel")
+        self.api_times = tk.StringVar(); self.api_rot = tk.StringVar(value="order")
+        self.api_capmode = tk.StringVar(value="auto"); self.api_capfile = tk.StringVar()
+        self.api_fallback = tk.StringVar(); self.api_del = tk.IntVar(); self.api_pause = tk.IntVar()
+        rows = [(T("Post type:", "Post type:"), ttk.Combobox(g, textvariable=self.api_kind, state="readonly", width=18,
+                                                       values=("reel", "video", "photo", "text"))),
+                (T("Times (HH:MM, comma):", "Waqt (HH:MM, comma):"), ttk.Entry(g, textvariable=self.api_times, width=22)),
+                (T("Rotation:", "Rotation:"), ttk.Combobox(g, textvariable=self.api_rot, state="readonly", width=18,
+                                                     values=("order", "random", "newest"))),
+                (T("Caption from:", "Caption kahan se:"), ttk.Combobox(g, textvariable=self.api_capmode, state="readonly", width=18,
+                                                               values=("auto", "txt", "captions_file", "filename", "fallback")))]
+        for i, (lab, w) in enumerate(rows):
+            ttk.Label(g, text=lab).grid(row=i, column=0, sticky="w", pady=2); w.grid(row=i, column=1, sticky="w", pady=2)
+        dfr = ttk.Frame(ed); dfr.pack(fill="x", padx=6, pady=2)
+        ttk.Label(dfr, text=T("Days:", "Din:")).pack(side="left")
+        self.api_days = []
+        for i, dn in enumerate(DAY_NAMES):
+            v = tk.IntVar(value=1); self.api_days.append(v)
+            ttk.Checkbutton(dfr, text=dn, variable=v).pack(side="left")
+        ttk.Label(ed, text=T("Source folders:", "Source folders:")).pack(anchor="w", padx=6)
+        self.api_folders = tk.Listbox(ed, height=3, width=48); self.api_folders.pack(padx=6, fill="x")
+        fb = ttk.Frame(ed); fb.pack(fill="x", padx=6, pady=2)
+        ttk.Button(fb, text=T("Add folder", "Folder add"), command=self._api_add_folder).pack(side="left")
+        ttk.Button(fb, text=T("Remove folder", "Folder hatao"), command=lambda: [self.api_folders.delete(i) for i in self.api_folders.curselection()[::-1]]).pack(side="left", padx=4)
+        cf = ttk.Frame(ed); cf.pack(fill="x", padx=6, pady=2)
+        ttk.Label(cf, text=T("Captions file:", "Captions file:")).pack(side="left")
+        ttk.Entry(cf, textvariable=self.api_capfile, width=28).pack(side="left", padx=3)
+        ttk.Button(cf, text="...", width=3, command=lambda: self.api_capfile.set(
+            filedialog.askopenfilename(filetypes=[("Text", "*.txt")]) or self.api_capfile.get())).pack(side="left")
+        ff = ttk.Frame(ed); ff.pack(fill="x", padx=6, pady=2)
+        ttk.Label(ff, text=T("Fallback caption:", "Fallback caption:")).pack(side="left")
+        ttk.Entry(ff, textvariable=self.api_fallback, width=32).pack(side="left", padx=3)
+        ttk.Checkbutton(ed, text=T("Delete file after successful post", "Post ke baad file delete"), variable=self.api_del).pack(anchor="w", padx=6)
+        ttk.Checkbutton(ed, text=T("Pause this page", "Is page ko pause"), variable=self.api_pause).pack(anchor="w", padx=6)
+        ttk.Button(ed, text=T("SAVE PAGE SETTINGS", "PAGE SETTINGS SAVE"), command=self._api_save_page).pack(anchor="w", padx=6, pady=6)
+
+        hist = ttk.LabelFrame(left, text=T("PUBLISHING TASKS / RECOVERY (last 300)", "PUBLISHING TASKS / RECOVERY (aakhri 300)"))
+        hist.pack(fill="both", expand=True, padx=4, pady=4)
+        self.api_hist = ttk.Treeview(hist, columns=("time", "page", "kind", "file", "res"), show="headings", height=4)
+        for c, t, w in (("time", "Time", 130), ("page", "Page", 150), ("kind", "Type", 50), ("file", "File", 170), ("res", "Result", 300)):
+            self.api_hist.heading(c, text=t); self.api_hist.column(c, width=w, anchor="w")
+        self.api_hist.pack(fill="both", expand=True, padx=4, pady=4)
+        hb = ttk.Frame(hist); hb.pack(fill="x", padx=4, pady=2)
+        ttk.Button(hb, text=T("Retry selected failed", "Fail wali dobara"), command=self._api_retry).pack(side="left")
+        self._api_refresh()
+        self._api_stop = threading.Event()
+        threading.Thread(target=api_scheduler_loop, args=(lambda m: self.log_q.put(m), self._api_stop),
+                         daemon=True).start()
+        self.after(30000, self._api_tick)
+
+    def _api_tick(self):
+        try:
+            self._api_refresh()
+        finally:
+            self.after(30000, self._api_tick)
+
+    def _api_refresh(self):
+        d = api_load()
+        sel = self.api_cur
+        self.api_tree.delete(*self.api_tree.get_children())
+        for pid, p in d["pages"].items():
+            pp = dict(p); pp["id"] = pid
+            n = 0
+            if pp.get("kind") != "text":
+                kind = "photo" if pp.get("kind") == "photo" else "video"
+                key = "API:" + pid
+                for fo in pp.get("folders", []):
+                    n += sum(1 for f in list_media_in_folder(fo, kind) if not is_uploaded(key, file_hash(f) or f))
+            img = self.img_check if p.get("enabled") else self.img_empty
+            self.api_tree.insert("", "end", iid=pid, image=img,
+                                 values=(p.get("name", pid), p.get("kind", "reel"), p.get("times", ""),
+                                         "-" if pp.get("kind") == "text" else n,
+                                         ("PAUSED " if p.get("paused") else "") + p.get("status", "")))
+        if sel and self.api_tree.exists(sel):
+            self.api_tree.selection_set(sel)
+        self.api_hist.delete(*self.api_hist.get_children())
+        for i, h in enumerate(d["history"]):
+            self.api_hist.insert("", "end", iid=str(i), values=(
+                h["time"], h["page"], h["kind"], os.path.basename(h["file"]),
+                ("✔ " if h["ok"] else "✖ ") + h["info"]))
+
+    def _api_fetch(self):
+        tok = self.api_tok.get().strip()
+        if not tok:
+            messagebox.showwarning("API", T("Paste the access token first.", "Pehle access token paste karein."))
+            return
+        d = api_load(); d["graph_version"] = self.api_gv.get().strip() or "v22.0"; api_save(d)
+        self.log_q.put(T("[API] Fetching your pages...", "[API] Aapke pages la rahe hain..."))
+
+        def work():
+            try:
+                pages = api_fetch_pages(tok)
+                with _API_LOCK:
+                    d = api_load()
+                    for p in pages:
+                        cur = d["pages"].setdefault(p["id"], {"enabled": False, "kind": "reel", "times": "",
+                                                              "days": list(range(7)), "folders": [],
+                                                              "rotation": "order", "caption_mode": "auto"})
+                        cur["name"], cur["token"] = p["name"], p["token"]
+                    if tok not in [t.get("token") for t in d["tokens"]]:
+                        d["tokens"].append({"token": tok, "added": time.strftime("%Y-%m-%d")})
+                    api_save(d)
+                self.log_q.put(T(f"[API] {len(pages)} page(s) connected.", f"[API] {len(pages)} page jur gaye."))
+                self.after(0, self._api_refresh)
+                self.after(0, lambda: self.api_tok.set(""))
+            except Exception as e:
+                self.log_q.put(f"[API] Fetch failed: {e}")
+                self.after(0, lambda: messagebox.showerror("API", str(e)))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _api_tree_click(self, e):
+        row = self.api_tree.identify_row(e.y)
+        if not row:
+            return
+        if self.api_tree.identify_column(e.x) == "#0":
+            p = api_load()["pages"].get(row, {})
+            api_update_page(row, enabled=not p.get("enabled"))
+        self.api_cur = row
+        self._api_load_editor(row)
+        self._api_refresh()
+
+    def _api_load_editor(self, pid):
+        p = api_load()["pages"].get(pid, {})
+        self.api_lbl.config(text=p.get("name", pid))
+        self.api_kind.set(p.get("kind", "reel")); self.api_times.set(p.get("times", ""))
+        self.api_rot.set(p.get("rotation", "order")); self.api_capmode.set(p.get("caption_mode", "auto"))
+        self.api_capfile.set(p.get("captions_file", "")); self.api_fallback.set(p.get("fallback", ""))
+        self.api_del.set(1 if p.get("delete_after") else 0); self.api_pause.set(1 if p.get("paused") else 0)
+        days = p.get("days", list(range(7)))
+        for i, v in enumerate(self.api_days):
+            v.set(1 if i in days else 0)
+        self.api_folders.delete(0, "end")
+        for fo in p.get("folders", []):
+            self.api_folders.insert("end", fo)
+
+    def _api_add_folder(self):
+        d = filedialog.askdirectory()
+        if d:
+            self.api_folders.insert("end", d)
+
+    def _api_save_page(self):
+        if not self.api_cur:
+            messagebox.showwarning("API", T("Click a page first.", "Pehle page par click karein."))
+            return
+        import re as _re
+        times = []
+        for t in self.api_times.get().replace(";", ",").split(","):
+            t = t.strip()
+            if _re.match(r"^\d{1,2}:\d{2}$", t):
+                h, m = t.split(":")
+                if int(h) < 24 and int(m) < 60:
+                    times.append(f"{int(h):02d}:{m}")
+        api_update_page(self.api_cur, kind=self.api_kind.get(), times=", ".join(times),
+                        rotation=self.api_rot.get(), caption_mode=self.api_capmode.get(),
+                        captions_file=self.api_capfile.get().strip(), fallback=self.api_fallback.get(),
+                        delete_after=bool(self.api_del.get()), paused=bool(self.api_pause.get()),
+                        days=[i for i, v in enumerate(self.api_days) if v.get()],
+                        folders=list(self.api_folders.get(0, "end")))
+        self.log_q.put(T("[API] Page settings saved.", "[API] Page settings save ho gayi."))
+        self._api_load_editor(self.api_cur)
+        self._api_refresh()
+
+    def _api_post_now(self):
+        pid = self.api_cur
+        if not pid:
+            messagebox.showwarning("API", T("Click a page first.", "Pehle page par click karein."))
+            return
+        threading.Thread(target=lambda: (api_run_page(pid, lambda m: self.log_q.put(m)),
+                                         self.after(0, self._api_refresh)), daemon=True).start()
+
+    def _api_remove(self):
+        pid = self.api_cur
+        if pid and messagebox.askyesno("API", T("Remove this page from API list?", "Ye page API list se hatayein?")):
+            with _API_LOCK:
+                d = api_load(); d["pages"].pop(pid, None); api_save(d)
+            self.api_cur = None
+            self._api_refresh()
+
+    def _api_retry(self):
+        sel = self.api_hist.selection()
+        if not sel:
+            return
+        h = api_load()["history"][int(sel[0])]
+        if h.get("ok"):
+            messagebox.showinfo("API", T("This one already posted.", "Ye pehle hi post ho chuki hai."))
+            return
+        fp = h.get("file") or None
+        if fp and not os.path.isfile(fp):
+            messagebox.showwarning("API", T("File not found anymore.", "File ab mojood nahi."))
+            return
+        threading.Thread(target=lambda: (api_run_page(h["page_id"], lambda m: self.log_q.put(m), fp),
+                                         self.after(0, self._api_refresh)), daemon=True).start()
+
+
+class App(ApiPagesMixin, tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Facebook Uploader")
@@ -3130,12 +3627,13 @@ class App(tk.Tk):
         self.container = ttk.Frame(self)
         self.container.pack(fill="both", expand=True)
         self.pages = {}
-        for name in ("Accounts", "Post", "Interact", "LDPlayer", "Schedule", "Settings", "Guide"):
+        for name in ("Accounts", "Post", "API", "Interact", "LDPlayer", "Schedule", "Settings", "Guide"):
             fr = ttk.Frame(self.container)
             fr.place(relx=0, rely=0, relwidth=1, relheight=1)
             self.pages[name] = fr
         self._build_accounts_page()
         self._build_post_page()
+        self._build_api_page()
         self._build_interact_page()
         self._build_ldwork_page()      # LDPlayer tab (list + working merged)
         self._build_schedule_page()
@@ -3234,6 +3732,7 @@ class App(tk.Tk):
         bar = tk.Frame(self, bg="#16233f"); bar.pack(fill="x")
         self._tab_btns = {}
         tabs = [("Accounts", "ACCOUNT MANAGEMENT"), ("Post", "POST (REELS/VIDEO/PHOTO)"),
+                ("API", "API PAGES"),
                 ("Interact", "INTERACT / GROUPS"),
                 ("LDPlayer", "LDPLAYER"),
                 ("Schedule", "SCHEDULE"), ("Settings", "SETTINGS"), ("Guide", "GUIDE")]
@@ -4144,7 +4643,21 @@ class App(tk.Tk):
             self.log_q.put(T(f"{count} IDs scheduled.", f"{count} IDs schedule ho gayin."))
 
     # ---------- Guide page (in-app help, English) ----------
-    GUIDE_TEXT = """FACEBOOK UPLOADER — FEATURES & HOW TO USE
+    GUIDE_TEXT = """
+API PAGES tab (official Facebook API — safest, no browser/captcha/2FA):
+ 1. "How to get token?" shows the steps: Business Manager → System user →
+    assign your Pages → Generate token (pages_show_list, pages_manage_posts,
+    pages_read_engagement, publish_video, business_management, Never expire).
+ 2. Paste token → Fetch pages. All your pages appear in the list.
+ 3. Click a page → set Post type (reel/video/photo/text), Times (e.g.
+    10:00, 18:30), Days, Rotation (order/random/newest), source folders,
+    caption rule → SAVE PAGE SETTINGS. Tick ✔ in "On" to turn automation on.
+ 4. Caption: same-name .txt next to the video > captions file (random line)
+    > file name > fallback caption. Page hashtags are added at the end.
+ 5. Same file never posts twice on a page. POST NOW posts immediately.
+    Failed ones show ✖ in Tasks — select and "Retry selected failed".
+ (Keep the app open — it checks the times every 20 seconds.)
+FACEBOOK UPLOADER — FEATURES & HOW TO USE
 ==========================================================
 
 This app posts to Facebook from many accounts (Reels / Video / Photo),
