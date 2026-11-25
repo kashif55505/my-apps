@@ -144,7 +144,21 @@ def _download_resume(url, dest, log=print, tries=8):
     raise RuntimeError("download incomplete after retries")
 
 
+_UPDATE_LOCK = threading.Lock()
+
+
 def do_update(log=print):
+    """Ek waqt mein sirf ek update (manual + auto dono ek saath chalen to exe kharab hoti thi)."""
+    if not _UPDATE_LOCK.acquire(blocking=False):
+        log("Update: pehle se update chal raha hai — intezaar karein.")
+        return False
+    try:
+        return _do_update(log)
+    finally:
+        _UPDATE_LOCK.release()
+
+
+def _do_update(log=print):
     """Nayi version download kar ke apply karo.
     - Source (.py) mode: naya fb_uploader.py replace, restart bolo.
     - Frozen (.exe) mode: latest release se .exe download, helper se swap + restart."""
@@ -156,12 +170,13 @@ def do_update(log=print):
             req = urllib.request.Request(listing, headers={"User-Agent": "fbuploader"})
             rels = json.loads(urllib.request.urlopen(req, timeout=20).read().decode())
             url = None
+            want_size = 0
             for rel in rels:   # newest first
                 for a in rel.get("assets", []):
                     nm = a.get("name", "").lower()
                     if nm.endswith(".exe") and "setup" not in nm and \
                        ("facebook" in nm or "fb_uploader" in nm or "fbu" in nm):
-                        url = a["browser_download_url"]; break
+                        url = a["browser_download_url"]; want_size = int(a.get("size") or 0); break
                 if url:
                     break
             if not url:
@@ -170,7 +185,23 @@ def do_update(log=print):
             cur = sys.executable
             new = cur + ".new"
             log("Update: naya version download ho raha hai...")
+            try:
+                if os.path.exists(new):
+                    os.remove(new)          # purani adhuri/doosri version ki file — fresh shuru
+            except Exception:
+                pass
             _download_resume(url, new, log)
+            # poori aur sahi file? (size + exe header) — warna install mat karo
+            got = os.path.getsize(new) if os.path.exists(new) else 0
+            with open(new, "rb") as _f:
+                head = _f.read(2)
+            if head != b"MZ" or (want_size and got != want_size):
+                log(f"Update: download kharab ({got}/{want_size} bytes) — install nahi kiya, baad mein dobara.")
+                try:
+                    os.remove(new)
+                except Exception:
+                    pass
+                return False
             # helper bat: app band hone ka intezaar, swap, relaunch
             bat = os.path.join(os.path.dirname(cur), "_update.bat")
             with open(bat, "w", encoding="utf-8") as f:
