@@ -114,14 +114,15 @@ type Task struct {
 	Update    bool              `json:"update,omitempty"`    // TezDM's own update: run the installer when done
 	LastTry   int64             `json:"last_try,omitempty"`
 
-	mu       sync.Mutex
-	cancel   context.CancelFunc
-	running  bool
-	speed    float64
-	active   int
-	busy     map[*Seg]bool
-	Title    string `json:"title,omitempty"`
-	estimate int64  // video: expected total size
+	mu        sync.Mutex
+	cancel    context.CancelFunc
+	running   bool
+	speed     float64
+	active    int
+	busy      map[*Seg]bool
+	Title     string `json:"title,omitempty"`
+	estimate  int64  // video: expected total size (estimate)
+	exactSize int64  // video: exact total size from the servers
 }
 
 func newID() string { return strconv.FormatInt(time.Now().UnixNano(), 36) }
@@ -207,6 +208,7 @@ type TaskView struct {
 	LastTry  int64   `json:"last_try"`
 	Format   string  `json:"format"`
 	Progress float64 `json:"progress"`
+	Approx   bool    `json:"approx"` // size is an estimate (video still downloading)
 }
 
 type SegView struct {
@@ -261,7 +263,8 @@ func (t *Task) View() TaskView {
 	defer t.mu.Unlock()
 	v := TaskView{ID: t.ID, URL: t.URL, Name: t.Filename, Dir: t.Dir, Kind: t.Kind, Status: t.Status,
 		Error: t.Error, Size: t.Size, Done: t.downloadedLocked(), Speed: t.speed, Conns: t.active,
-		Running: t.running, Added: t.Added, LastTry: t.LastTry, Format: t.Format}
+		Running: t.running, Added: t.Added, LastTry: t.LastTry, Format: t.Format,
+		Approx: t.Kind == "video" && t.Status != "completed" && t.Size > 0 && t.exactSize == 0}
 	if v.Name == "" {
 		v.Name = t.Title
 	}

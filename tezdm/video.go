@@ -425,6 +425,7 @@ func (t *Task) runVideo(ctx context.Context, m *Manager) error {
 		// --print implies --quiet, which hides progress; --progress turns it back on
 		"--progress", "--no-simulate",
 		"--print", "video:TEZINFO|%(title)s|%(filesize,filesize_approx)s",
+		"--print", "video:TEZJSON|%()j", // chosen formats with their links: used to get the exact size
 		"--print", "after_move:TEZFILE|%(filepath)s",
 	}
 	args = append(args, formatArgs(t.Format)...)
@@ -472,7 +473,14 @@ func (t *Task) runVideo(ctx context.Context, m *Manager) error {
 		}
 	}()
 
-	type fileProg struct{ done, total int64 }
+	// Sizes reported while downloading are often estimates that change all the time
+	// (HLS fragments, separate video and audio files). Keep the shown size steady:
+	// exact sizes are used as they are; an estimate only replaces the current
+	// value when it differs by more than 15%.
+	type fileProg struct {
+		done, total int64
+		exact       bool
+	}
 	files := map[string]*fileProg{}
 	var order []string
 	t.mu.Lock()
@@ -480,9 +488,21 @@ func (t *Task) runVideo(ctx context.Context, m *Manager) error {
 	t.mu.Unlock()
 
 	sc := bufio.NewScanner(stdout)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	sc.Buffer(make([]byte, 64*1024), 64*1024*1024)
 	for sc.Scan() {
 		line := sc.Text()
+		if strings.HasPrefix(line, "TEZJSON|") {
+			raw := []byte(strings.TrimPrefix(line, "TEZJSON|"))
+			go func() { // ask the servers for the exact size, like IDM does
+				if n, ok := exactVideoSize(ctx, raw); ok {
+					t.mu.Lock()
+					t.exactSize = n
+					t.Size = n
+					t.mu.Unlock()
+				}
+			}()
+			continue
+		}
 		if strings.HasPrefix(line, "TEZFILE|") {
 			p := strings.TrimPrefix(line, "TEZFILE|")
 			t.mu.Lock()
@@ -498,7 +518,7 @@ func (t *Task) runVideo(ctx context.Context, m *Manager) error {
 					t.Title = f[1]
 				}
 				if est := int64(parseNum(f[2])); est > 0 {
-					t.estimate = est
+					t.estimate = est // whole video (video + audio), from the format list
 					t.Size = est
 				}
 				t.mu.Unlock()
@@ -513,33 +533,54 @@ func (t *Task) runVideo(ctx context.Context, m *Manager) error {
 			continue
 		}
 		done := int64(parseNum(f[1]))
-		total := int64(parseNum(f[2]))
-		if total == 0 {
-			total = int64(parseNum(f[3]))
-		}
+		exactTotal := int64(parseNum(f[2]))
+		estTotal := int64(parseNum(f[3]))
 		fp := files[f[5]]
 		if fp == nil {
 			fp = &fileProg{}
 			files[f[5]] = fp
 			order = append(order, f[5])
 		}
-		fp.done, fp.total = done, total
-		var sd, stt int64
+		fp.done = done
+		switch {
+		case exactTotal > 0:
+			fp.total, fp.exact = exactTotal, true
+		case estTotal > 0 && !fp.exact:
+			if fp.total == 0 || absDiff(estTotal, fp.total)*100 > fp.total*15 {
+				fp.total = estTotal
+			}
+		}
+		if fp.total < fp.done {
+			fp.total = fp.done
+		}
+		var sd, stt, proven int64
 		for _, k := range order {
 			sd += files[k].done
 			stt += files[k].total
+			if files[k].exact {
+				proven += files[k].total // known for sure
+			} else {
+				proven += files[k].done // at least this much
+			}
 		}
 		t.mu.Lock()
 		t.Done = sd
-		if stt < t.estimate {
-			stt = t.estimate // video+audio: total is known before the audio part starts
+		size := t.Size
+		if t.exactSize > 0 {
+			size = t.exactSize // exact, from the servers: never changes
+		} else if t.estimate > 0 {
+			// the whole-video estimate stays, unless facts (not estimates) show it is too small
+			size = t.estimate
+			if proven > size {
+				size = proven
+			}
+		} else if size == 0 || absDiff(stt, size)*100 > size*15 {
+			size = stt
 		}
-		if stt < sd {
-			stt = sd
+		if size < sd {
+			size = sd
 		}
-		if stt > 0 {
-			t.Size = stt
-		}
+		t.Size = size
 		t.speed = parseNum(f[4])
 		if t.Title == "" && f[6] != "NA" {
 			t.Title = f[6]
@@ -850,4 +891,87 @@ func fetchVideoInfo(u string, headers map[string]string) (*VideoInfo, error) {
 		info.Options = append(info.Options, QualityOpt{ID: "audio", Label: "Audio only", Note: note, Size: bestAudio})
 	}
 	return info, nil
+}
+
+func absDiff(a, b int64) int64 {
+	if a > b {
+		return a - b
+	}
+	return b - a
+}
+
+// ---------- exact size of a video before it downloads ----------
+
+type ytPart struct {
+	URL            string            `json:"url"`
+	Protocol       string            `json:"protocol"`
+	Filesize       float64           `json:"filesize"`
+	FilesizeApprox float64           `json:"filesize_approx"`
+	HTTPHeaders    map[string]string `json:"http_headers"`
+}
+
+// exactVideoSize adds up the exact sizes of the parts yt-dlp will download
+// (video and audio). Parts without a known size are asked from their server
+// (Content-Range / Content-Length), the way IDM shows an exact size.
+// Streams made of many small pieces (HLS/DASH segments) have no exact size.
+func exactVideoSize(ctx context.Context, raw []byte) (int64, bool) {
+	var info struct {
+		ytPart
+		RequestedFormats []ytPart `json:"requested_formats"`
+	}
+	if json.Unmarshal(raw, &info) != nil {
+		return 0, false
+	}
+	parts := info.RequestedFormats
+	if len(parts) == 0 {
+		parts = []ytPart{info.ytPart}
+	}
+	var total int64
+	for _, p := range parts {
+		proto := strings.ToLower(p.Protocol)
+		if proto != "" && proto != "https" && proto != "http" {
+			return 0, false // m3u8, dash segments, etc.
+		}
+		if p.Filesize > 0 {
+			total += int64(p.Filesize)
+			continue
+		}
+		n, ok := remoteSize(ctx, p.URL, p.HTTPHeaders)
+		if !ok {
+			return 0, false
+		}
+		total += n
+	}
+	return total, total > 0
+}
+
+func remoteSize(ctx context.Context, u string, headers map[string]string) (int64, bool) {
+	if u == "" {
+		return 0, false
+	}
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(cctx, "GET", u, nil)
+	if err != nil {
+		return 0, false
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("Range", "bytes=0-0")
+	req.Header.Set("Accept-Encoding", "identity")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return 0, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 206 {
+		if _, _, total, ok := parseContentRange(resp.Header.Get("Content-Range")); ok && total > 0 {
+			return total, true
+		}
+	}
+	if resp.StatusCode == 200 && resp.ContentLength > 0 {
+		return resp.ContentLength, true
+	}
+	return 0, false
 }

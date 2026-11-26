@@ -26,6 +26,12 @@ function size(n) {
   return (i ? n.toFixed(2) : n.toFixed(0)) + " " + u[i];
 }
 
+// File size of a download; "~" while it is only an estimate (videos)
+function sizeOf(t) {
+  const v = size(t.size);
+  return v && t.approx ? "~" + v : v;
+}
+
 function timeLeft(t) {
   if (!t.running || !t.speed || !t.size || t.size <= t.done) return "";
   let s = Math.round((t.size - t.done) / t.speed);

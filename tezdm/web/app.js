@@ -53,7 +53,7 @@ function render() {
     tr.title = t.error ? "Error: " + t.error : t.url;
     tr.innerHTML =
       `<td><div class="fn"><span class="ftype">${catOf(t).ic}</span><b>${esc(t.name)}</b></div></td>` +
-      `<td>${size(t.size)}</td>` +
+      `<td>${sizeOf(t)}</td>` +
       `<td><div class="mini"><div class="bar"><i style="width:${pct}%"></i></div><em>${statusText(t)}</em></div></td>` +
       `<td>${timeLeft(t)}</td>` +
       `<td>${t.running && t.speed ? size(t.speed) + "/sec" : ""}</td>` +

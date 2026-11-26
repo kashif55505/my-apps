@@ -93,8 +93,8 @@
     }
     const st = $("#status"); st.textContent = statusLine(t);
     st.className = t.status === "error" ? "bad" : "";
-    $("#fsize").textContent = t.size > 0 ? size(t.size) : (t.kind === "video" ? "Calculating..." : "Unknown");
-    $("#dl").textContent = size(t.done) ? size(t.done) + (t.size > 0 ? ` ( ${pct.toFixed(2)} % )` : "") : "0 B";
+    $("#fsize").textContent = t.size > 0 ? sizeOf(t) + (t.approx ? "  (estimate)" : "") : (t.kind === "video" ? "Calculating..." : "Unknown");
+    $("#dl").textContent = size(t.done) ? size(t.done) + (t.size > 0 ? ` ( ${t.approx ? "~" : ""}${pct.toFixed(2)} % )` : "") : "0 B";
     $("#rate").textContent = t.running && t.speed ? size(t.speed) + "/sec" : "-";
     $("#left").textContent = timeLeft(t) || "-";
     $("#resume").textContent = t.kind === "video" ? "Yes" : (t.resumable ? "Yes" : (t.size === 0 ? "-" : "No"));
