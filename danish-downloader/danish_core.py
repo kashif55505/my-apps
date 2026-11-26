@@ -25,7 +25,7 @@ except Exception:
     FFMPEG_PATH = shutil.which("ffmpeg")
 
 APP_NAME = "Danish Downloader"
-VERSION = "1.11"
+VERSION = "1.12"
 GITHUB_USER = "kashif55505"
 GITHUB_REPO = "my-apps"
 GITHUB_FOLDER = "danish-downloader"
@@ -101,6 +101,10 @@ ID_PATTERNS = [
     r"fb\.watch/([\w-]+)",
     r"snapchat\.com/spotlight/([\w-]+)",
 ]
+
+
+class EmptyList(Exception):
+    pass
 
 
 # ----------------------------------------------------------------- helpers
@@ -595,6 +599,8 @@ class Engine:
         """Iterator kholo aur pehli video tak pahuncho (error yahin pakda jaye)."""
         it = iter(self.iter_entries(url))
         first = next(it, None)
+        if first is None:
+            raise EmptyList("empty list")
 
         def chain():
             if first is not None:
@@ -614,37 +620,107 @@ class Engine:
         sid = info.get("channel_id") or ""
         return sid if sid.startswith("MS4w") else ""
 
-    def _iter_with_fallback(self, src, url):
-        """TikTok kabhi profile page se user ID nahi deta. Tab kisi video se ID nikal kar
-        'tiktokuser:<ID>' se list mangao. ID mil jaye to yaad rakho (agli baar seedha, tez)."""
-        is_tt = "tiktok.com/@" in url.lower()
-        if is_tt and src.get("tiktok_secuid"):
-            try:
-                return self._open("tiktokuser:" + src["tiktok_secuid"])
-            except Exception:
-                pass
-        try:
-            return self._open(url)
-        except Exception as first_err:
-            if not is_tt:
-                raise
-            links = [src.get("sample_link"), src.get("start_link"), src.get("end_link")]
-            links = [l.strip() for l in links if l and "/video/" in l]
-            if not links:
-                raise
-            self.log("   TikTok refused the profile page — trying via a video link...")
-            for l in links:
+    _tikwm_lock = threading.Lock()
+    _tikwm_last = [0.0]
+
+    def _tikwm_entries(self, user):
+        """Backup list (TikWM, bina login). Newest first, 35 per page, 1 request/second."""
+        import urllib.request
+        cursor = 0
+        seen = set()
+        while True:
+            q = f"https://www.tikwm.com/api/user/posts?unique_id=@{user}&count=35&cursor={cursor}"
+            data = None
+            for attempt in range(6):
+                with self._tikwm_lock:
+                    wait = 1.2 - (time.time() - self._tikwm_last[0])
+                    if wait > 0:
+                        time.sleep(wait)
+                    self._tikwm_last[0] = time.time()
+                req = urllib.request.Request(q, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                                         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"})
                 try:
-                    sid = self._secuid_from_video(l)
-                except Exception:
-                    continue
-                if sid:
-                    with self.store.lock:
-                        src["tiktok_secuid"] = sid
+                    data = json.loads(urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "ignore"))
+                except Exception as e:
+                    data = {"code": -1, "msg": str(e)}
+                if data.get("code") == 0:
+                    break
+                time.sleep(1.5 * (attempt + 1))
+            if not data or data.get("code") != 0:
+                raise RuntimeError(f"TikWM: {(data or {}).get('msg', 'no answer')}")
+            d = data.get("data") or {}
+            for v in d.get("videos") or []:
+                vid = str(v.get("video_id") or v.get("aweme_id") or v.get("id") or "")
+                if vid and vid not in seen:
+                    seen.add(vid)
+                    yield {"id": vid, "url": f"https://www.tiktok.com/@{user}/video/{vid}"}
+            if not d.get("hasMore") or not d.get("cursor") or str(d.get("cursor")) == str(cursor):
+                return
+            cursor = d.get("cursor")
+
+    def _iter_with_fallback(self, src, url):
+        """TikTok list ke 3 raste: (1) TikTok profile, (2) TikWM backup (bina login),
+        (3) creator ID se TikTok list. Jo rasta chale, agli baar wahi pehle."""
+        is_tt = "tiktok.com/@" in url.lower()
+        if not is_tt:
+            return self._open(url)
+        user = (re.search(r"tiktok\.com/@([\w.-]+)", url) or [None, ""])[1]
+        tried = []
+
+        def via_profile():
+            return self._open(url)
+
+        def via_tikwm():
+            it = iter(self._tikwm_entries(user))
+            first = next(it, None)
+            if first is None:
+                raise EmptyList("TikWM returned no videos")
+
+            def chain():
+                yield first
+                yield from it
+            return chain()
+
+        def via_secuid():
+            sid = src.get("tiktok_secuid")
+            if not sid:
+                links = [src.get("sample_link"), src.get("start_link"), src.get("end_link")]
+                for l in [l.strip() for l in links if l and "/video/" in l]:
+                    try:
+                        sid = self._secuid_from_video(l)
+                    except Exception:
+                        sid = ""
+                    if sid:
+                        with self.store.lock:
+                            src["tiktok_secuid"] = sid
+                        self.store.save()
+                        break
+            if not sid:
+                raise EmptyList("no creator ID")
+            return self._open("tiktokuser:" + sid)
+
+        ways = {"profile": via_profile, "tikwm": via_tikwm, "secuid": via_secuid}
+        order = ["profile", "tikwm", "secuid"]
+        pref = src.get("list_via")
+        if pref in order:
+            order.remove(pref)
+            order.insert(0, pref)
+        last = None
+        for w in order:
+            try:
+                it = ways[w]()
+                if w != "profile":
+                    self.log(f"   ✓ Got the video list via {'TikWM (backup, no login)' if w == 'tikwm' else 'creator ID'}.")
+                if src.get("list_via") != w:
+                    src["list_via"] = w
                     self.store.save()
-                    self.log("   ✓ Found creator ID from video.")
-                    return self._open("tiktokuser:" + sid)
-            raise first_err
+                return it
+            except Exception as e:
+                last = e
+                tried.append(w)
+                if w == "profile":
+                    self.log("   TikTok refused the profile page — trying backup ways...")
+        raise last
 
     @staticmethod
     def _match(e, link):
