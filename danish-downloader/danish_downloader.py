@@ -17,31 +17,37 @@ import customtkinter as ctk
 
 import danish_core as core
 
-# ---- colors
-BG = "#0F0D1A"
-PANEL = "#1A1726"
-PANEL2 = "#241F35"
-ACCENT = "#8B5CF6"
-ACCENT_H = "#7C3AED"
-PINK = "#EC4899"
-PINK_H = "#DB2777"
+# ---- colors (theme: Light green)
+BG = "#F3FAF6"
+PANEL = "#FFFFFF"
+PANEL2 = "#ECF7F1"        # input fields
+SEC = "#D1F0DF"           # secondary buttons
+SEC_H = "#B7E4CB"
+SEC_TEXT = "#065F46"
+ACCENT = "#047857"
+ACCENT_H = "#065F46"
+PINK = "#0EA5E9"          # highlight action (sky blue)
+PINK_H = "#0284C7"
 GREEN = "#10B981"
 GREEN_H = "#059669"
-RED = "#EF4444"
-RED_H = "#DC2626"
-TEXT = "#EDE9FE"
-MUTED = "#A39DBA"
+RED = "#DC2626"
+RED_H = "#B91C1C"
+TEXT = "#0F1F17"
+MUTED = "#5B7A6A"
+HEAD = "#065F46"
+BORDER = "#D1F0DF"
 FONT = "Segoe UI"
 
 APP_UPDATE_EVERY = 6 * 3600      # check GitHub for a new app version every 6 hours
 YTDLP_UPDATE_EVERY = 24 * 3600   # update yt-dlp once a day
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-ctk.set_appearance_mode("dark")
+ctk.set_appearance_mode("light")
 
 
 def btn(parent, text, cmd, color=ACCENT, hover=ACCENT_H, width=150):
-    return ctk.CTkButton(parent, text=text, command=cmd, fg_color=color, hover_color=hover,
+    tc = SEC_TEXT if color == SEC else "#FFFFFF"
+    return ctk.CTkButton(parent, text=text, command=cmd, fg_color=color, hover_color=hover, text_color=tc,
                          corner_radius=10, height=38, width=width, font=(FONT, 13, "bold"))
 
 
@@ -66,7 +72,7 @@ class SourceDialog(ctk.CTkToplevel):
                              justify="left", wraplength=560).pack(fill="x")
 
         def entry(val=""):
-            e = ctk.CTkEntry(f, height=36, fg_color=PANEL2, border_color=ACCENT, font=(FONT, 12))
+            e = ctk.CTkEntry(f, height=36, fg_color=PANEL2, border_color=BORDER, font=(FONT, 12))
             e.pack(fill="x", pady=(4, 0))
             if val != "":
                 e.insert(0, str(val))
@@ -79,7 +85,7 @@ class SourceDialog(ctk.CTkToplevel):
         label("Save Folder", "The Facebook page folder. Type a new name and it will be created.")
         row = ctk.CTkFrame(f, fg_color="transparent")
         row.pack(fill="x", pady=(4, 0))
-        self.e_folder = ctk.CTkEntry(row, height=36, fg_color=PANEL2, border_color=ACCENT, font=(FONT, 12))
+        self.e_folder = ctk.CTkEntry(row, height=36, fg_color=PANEL2, border_color=BORDER, font=(FONT, 12))
         self.e_folder.pack(side="left", fill="x", expand=True)
         if s.get("folder"):
             self.e_folder.insert(0, s["folder"])
@@ -104,17 +110,17 @@ class SourceDialog(ctk.CTkToplevel):
 
         label("Already Downloaded Links (optional)",
               "Paste old links (e.g. from Link Grabber) — these will never be downloaded again.")
-        self.t_links = ctk.CTkTextbox(f, height=90, fg_color=PANEL2, border_color=ACCENT, border_width=2, font=(FONT, 11))
+        self.t_links = ctk.CTkTextbox(f, height=90, fg_color=PANEL2, border_color=BORDER, border_width=2, font=(FONT, 11))
         self.t_links.pack(fill="x", pady=(4, 0))
 
         self.v_enabled = tk.BooleanVar(value=s.get("enabled", True))
-        ctk.CTkSwitch(f, text="Include in Auto Check", variable=self.v_enabled, progress_color=ACCENT,
+        ctk.CTkSwitch(f, text="Include in Auto Check", variable=self.v_enabled, progress_color=GREEN,
                       font=(FONT, 12)).pack(anchor="w", pady=(12, 0))
 
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.pack(fill="x", padx=18, pady=12)
         btn(bar, "Save", self.save, color=GREEN, hover=GREEN_H, width=110).pack(side="right")
-        btn(bar, "Cancel", self.destroy, color=PANEL2, hover="#332B4A", width=100).pack(side="right", padx=8)
+        btn(bar, "Cancel", self.destroy, color=SEC, hover=SEC_H, width=100).pack(side="right", padx=8)
 
     def browse(self):
         d = filedialog.askdirectory(parent=self, title="Select the Facebook page folder")
@@ -182,11 +188,11 @@ class LinksDialog(ctk.CTkToplevel):
                      text_color=TEXT).pack(anchor="w", padx=18, pady=(18, 0))
         ctk.CTkLabel(self, text="TikTok, YouTube, Instagram reels, Facebook, Snapchat Spotlight — all in best quality.",
                      font=(FONT, 11), text_color=MUTED).pack(anchor="w", padx=18)
-        self.t = ctk.CTkTextbox(self, fg_color=PANEL2, border_color=ACCENT, border_width=2, font=(FONT, 11))
+        self.t = ctk.CTkTextbox(self, fg_color=PANEL2, border_color=BORDER, border_width=2, font=(FONT, 11))
         self.t.pack(fill="both", expand=True, padx=18, pady=8)
         row = ctk.CTkFrame(self, fg_color="transparent")
         row.pack(fill="x", padx=18)
-        self.e_folder = ctk.CTkEntry(row, height=36, fg_color=PANEL2, border_color=ACCENT,
+        self.e_folder = ctk.CTkEntry(row, height=36, fg_color=PANEL2, border_color=BORDER,
                                      placeholder_text="Save to folder (click Browse)")
         self.e_folder.pack(side="left", fill="x", expand=True)
         btn(row, "Browse", self.browse, width=90).pack(side="left", padx=(8, 0))
@@ -242,16 +248,16 @@ class App(ctk.CTk):
 
     # ------------------------------------------------------------ layout
     def _build(self):
-        head = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=0, height=78)
+        head = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=0, height=78, border_width=1, border_color=BORDER)
         head.pack(fill="x")
         head.pack_propagate(False)
-        ctk.CTkLabel(head, text="⬇", font=(FONT, 34, "bold"), text_color=PINK).pack(side="left", padx=(22, 8))
+        ctk.CTkLabel(head, text="⬇", font=(FONT, 34, "bold"), text_color=GREEN).pack(side="left", padx=(22, 8))
         tbox = ctk.CTkFrame(head, fg_color="transparent")
         tbox.pack(side="left")
         ctk.CTkLabel(tbox, text="Danish Downloader", font=(FONT, 24, "bold"), text_color=TEXT).pack(anchor="w")
         ctk.CTkLabel(tbox, text="TikTok • YouTube • Instagram • Facebook • Snapchat — best quality, fully automatic",
                      font=(FONT, 12), text_color=MUTED).pack(anchor="w")
-        btn(head, "⬆  Check for Updates", self.do_update, color=PANEL2, hover="#332B4A", width=170).pack(side="right", padx=(0, 22))
+        btn(head, "⬆  Check for Updates", self.do_update, color=SEC, hover=SEC_H, width=170).pack(side="right", padx=(0, 22))
         self.v_autoupd = tk.BooleanVar(value=self.store.settings.get("auto_update", True))
         ctk.CTkSwitch(head, text="Auto Update", variable=self.v_autoupd, progress_color=GREEN,
                       font=(FONT, 12, "bold"), command=self.save_settings).pack(side="right", padx=12)
@@ -262,9 +268,9 @@ class App(ctk.CTk):
         tools.pack(fill="x", padx=18, pady=(14, 6))
         btn(tools, "+  Add Creator", self.add_src, color=GREEN, hover=GREEN_H, width=140).pack(side="left")
         btn(tools, "✎  Edit", self.edit_src, width=90).pack(side="left", padx=6)
-        btn(tools, "🗑  Delete", self.del_src, color=PANEL2, hover="#332B4A", width=100).pack(side="left")
-        btn(tools, "📂  Open Folder", self.open_folder, color=PANEL2, hover="#332B4A", width=140).pack(side="left", padx=6)
-        btn(tools, "🔗  Download from Links", lambda: LinksDialog(self), color=PANEL2, hover="#332B4A", width=190).pack(side="left")
+        btn(tools, "🗑  Delete", self.del_src, color=SEC, hover=SEC_H, width=100).pack(side="left")
+        btn(tools, "📂  Open Folder", self.open_folder, color=SEC, hover=SEC_H, width=140).pack(side="left", padx=6)
+        btn(tools, "🔗  Download from Links", lambda: LinksDialog(self), color=SEC, hover=SEC_H, width=190).pack(side="left")
         btn(tools, "■  Stop", self.engine.stop, color=RED, hover=RED_H, width=90).pack(side="right")
         btn(tools, "⚡  Fill Selected", self.fill_selected, color=PINK, hover=PINK_H, width=150).pack(side="right", padx=6)
         btn(tools, "⟳  Check All", self.check_all, width=130).pack(side="right")
@@ -276,10 +282,10 @@ class App(ctk.CTk):
         st.theme_use("clam")
         st.configure("D.Treeview", background=PANEL, fieldbackground=PANEL, foreground=TEXT,
                      rowheight=34, borderwidth=0, font=(FONT, 11))
-        st.configure("D.Treeview.Heading", background=PANEL2, foreground="#C4B5FD",
+        st.configure("D.Treeview.Heading", background="#DCFCE7", foreground=HEAD,
                      font=(FONT, 11, "bold"), relief="flat", padding=6)
-        st.map("D.Treeview", background=[("selected", ACCENT)], foreground=[("selected", "white")])
-        st.map("D.Treeview.Heading", background=[("active", "#332B4A")])
+        st.map("D.Treeview", background=[("selected", GREEN)], foreground=[("selected", "white")])
+        st.map("D.Treeview.Heading", background=[("active", SEC_H)])
         cols = ("folder", "platform", "link", "stock", "done", "status", "last")
         self.tree = ttk.Treeview(tf, columns=cols, show="headings", style="D.Treeview", selectmode="extended")
         for c, t, w in (("folder", "Folder / Page", 170), ("platform", "Platform", 90), ("link", "Creator Link", 260),
@@ -287,8 +293,8 @@ class App(ctk.CTk):
                         ("status", "Status", 220), ("last", "Last Check", 150)):
             self.tree.heading(c, text=t)
             self.tree.column(c, width=w, anchor="w" if c in ("folder", "link", "status") else "center")
-        self.tree.tag_configure("low", foreground="#FCA5A5")
-        self.tree.tag_configure("off", foreground="#6B6680")
+        self.tree.tag_configure("low", foreground=RED)
+        self.tree.tag_configure("off", foreground="#9CA3AF")
         sb = ttk.Scrollbar(tf, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=10)
@@ -307,29 +313,29 @@ class App(ctk.CTk):
         ctk.CTkSwitch(sf, text="Auto Check", variable=self.v_auto, progress_color=GREEN, font=(FONT, 12, "bold"),
                       command=self.save_settings).pack(side="left", padx=14)
         lab("Every")
-        self.e_hours = ctk.CTkEntry(sf, width=50, fg_color=PANEL2, border_color=ACCENT)
+        self.e_hours = ctk.CTkEntry(sf, width=50, fg_color=PANEL2, border_color=BORDER)
         self.e_hours.insert(0, str(s.get("check_hours", 3)))
         self.e_hours.pack(side="left")
         lab("hours   |   Parallel Downloads")
         self.o_par = ctk.CTkOptionMenu(sf, values=[str(i) for i in (1, 2, 3, 4, 6, 8, 10, 12)], width=70,
-                                       fg_color=PANEL2, button_color=ACCENT, button_hover_color=ACCENT_H,
+                                       fg_color=SEC, button_color=ACCENT, button_hover_color=ACCENT_H, text_color=SEC_TEXT,
                                        command=lambda v: self.save_settings())
         self.o_par.set(str(s.get("parallel", 4)))
         self.o_par.pack(side="left")
         lab("|   Login Cookies")
         self.o_ck = ctk.CTkOptionMenu(sf, values=["none", "firefox", "edge", "chrome", "brave", "opera"], width=100,
-                                      fg_color=PANEL2, button_color=ACCENT, button_hover_color=ACCENT_H,
+                                      fg_color=SEC, button_color=ACCENT, button_hover_color=ACCENT_H, text_color=SEC_TEXT,
                                       command=lambda v: self.save_settings())
         self.o_ck.set(s.get("cookies_browser", "none"))
         self.o_ck.pack(side="left")
-        btn(sf, "cookies.txt", self.pick_cookies, color=PANEL2, hover="#332B4A", width=100).pack(side="left", padx=8)
+        btn(sf, "cookies.txt", self.pick_cookies, color=SEC, hover=SEC_H, width=100).pack(side="left", padx=8)
         btn(sf, "Save Settings", self.save_settings, width=120).pack(side="right", padx=14)
 
         # log
         lf = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=14)
         lf.pack(fill="both", padx=18, pady=(6, 16))
-        ctk.CTkLabel(lf, text="Activity Log", font=(FONT, 12, "bold"), text_color="#C4B5FD").pack(anchor="w", padx=14, pady=(8, 0))
-        self.t_log = ctk.CTkTextbox(lf, height=170, fg_color="#0B0A12", text_color="#D1FAE5",
+        ctk.CTkLabel(lf, text="Activity Log", font=(FONT, 12, "bold"), text_color=HEAD).pack(anchor="w", padx=14, pady=(8, 0))
+        self.t_log = ctk.CTkTextbox(lf, height=170, fg_color="#F7FCF9", text_color=ACCENT_H, border_width=1, border_color=BORDER,
                                     font=("Consolas", 11), corner_radius=10)
         self.t_log.pack(fill="both", expand=True, padx=10, pady=(4, 10))
         self.t_log.configure(state="disabled")
