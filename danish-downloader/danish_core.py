@@ -25,7 +25,7 @@ except Exception:
     FFMPEG_PATH = shutil.which("ffmpeg")
 
 APP_NAME = "Danish Downloader"
-VERSION = "1.6.1"
+VERSION = "1.7"
 GITHUB_USER = "kashif55505"
 GITHUB_REPO = "my-apps"
 GITHUB_FOLDER = "danish-downloader"
@@ -553,6 +553,9 @@ class Engine:
                 final = unique_path(folder, name, ext)
                 shutil.move(path, final)
                 self._recent.setdefault(folder, []).append(os.path.splitext(os.path.basename(final))[0])
+            if title and src.get("id") != "_links_":
+                with self.store.lock:
+                    src.setdefault("ai_renamed", []).append(os.path.basename(final))
             self.store.mark_done(src, vid, entry["id"], id_from_url(entry["url"]))
             cid = str(info.get("channel_id") or "")
             if src.get("id") != "_links_" and cid.startswith("MS4w") and not src.get("tiktok_secuid"):
@@ -738,8 +741,50 @@ class Engine:
         self.log(f"■ Links: {ok}/{len(entries)} videos downloaded.")
         return ok
 
+    # ---- pehle se padi videos ke naam AI se badalna
+    def rename_folder(self, src):
+        folder = src["folder"]
+        name = os.path.basename(os.path.normpath(folder))
+        st = self.store.settings
+        files = sorted(f for f in os.listdir(folder)
+                       if os.path.splitext(f)[1].lower() in VIDEO_EXTS and os.path.isfile(os.path.join(folder, f)))
+        done_set = set(src.get("ai_renamed", []))
+        todo = [f for f in files if f not in done_set]
+        self.log(f"▶ {name}: renaming {len(todo)} videos with AI ({len(files) - len(todo)} already AI-named)...")
+        ok = 0
+        for i, fn in enumerate(todo, 1):
+            if self.stop_event.is_set():
+                break
+            path = os.path.join(folder, fn)
+            stem, ext = os.path.splitext(fn)
+            self.set_status(src, f"✨ Renaming {i}/{len(todo)}")
+            frame = danish_ai.grab_frame(path, FFMPEG_PATH)
+            title = danish_ai.make_title(st, stem, frame, self._recent_names(folder), log=self.log)
+            if not title:
+                continue
+            with self.name_lock:
+                new = clean_caption(title, max_tags=0)
+                if not new or new == stem:
+                    continue
+                final = unique_path(folder, new, ext)
+                try:
+                    os.rename(path, final)
+                except OSError as e:
+                    self.log(f"   ✗ {fn}: {e} (file open in another program?)")
+                    continue
+                self._recent.setdefault(folder, []).append(os.path.splitext(os.path.basename(final))[0])
+            with self.store.lock:
+                src.setdefault("ai_renamed", []).append(os.path.basename(final))
+            self.store.save()
+            ok += 1
+            self.log(f"   ✓ {fn}  →  {os.path.basename(final)}   ({i}/{len(todo)})")
+        src["last_result"] = f"✨ {ok} videos renamed"
+        self.set_status(src, src["last_result"])
+        self.store.save()
+        self.log(f"■ {name}: {ok} videos renamed.")
+
     # ---- run all / some
-    def run(self, ids=None, force=False, links=None, links_folder=None):
+    def run(self, ids=None, force=False, links=None, links_folder=None, rename=False):
         if not self.run_lock.acquire(blocking=False):
             self.log("⏳ A job is already running, please wait.")
             return
@@ -749,6 +794,12 @@ class Engine:
         try:
             if links:
                 self.download_links(links, links_folder)
+                return
+            if rename:
+                for sid in ids or []:
+                    s = self.store.get(sid)
+                    if s and not self.stop_event.is_set():
+                        self.rename_folder(s)
                 return
             srcs = [s for s in self.store.sources if (ids is None and s.get("enabled", True)) or (ids and s["id"] in ids)]
             if not srcs:

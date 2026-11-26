@@ -363,6 +363,7 @@ class App(ctk.CTk):
         btn(tools, "🗑  Delete", self.del_src, color=SEC, hover=SEC_H, width=100).pack(side="left")
         btn(tools, "📂  Open Folder", self.open_folder, color=SEC, hover=SEC_H, width=140).pack(side="left", padx=6)
         btn(tools, "🔗  Download from Links", lambda: LinksDialog(self), color=SEC, hover=SEC_H, width=190).pack(side="left")
+        btn(tools, "✨  Rename with AI", self.rename_ai, color=PINK, hover=PINK_H, width=160).pack(side="left", padx=6)
         btn(tools, "■  Stop", self.engine.stop, color=RED, hover=RED_H, width=90).pack(side="right")
         btn(tools, "⚡  Fill Selected", self.fill_selected, color=PINK, hover=PINK_H, width=150).pack(side="right", padx=6)
         btn(tools, "⟳  Check All", self.check_all, width=130).pack(side="right")
@@ -540,6 +541,20 @@ class App(ctk.CTk):
         if not s:
             return messagebox.showinfo(core.APP_NAME, "Select creators first (hold Ctrl to select multiple).")
         self.engine.run_async(ids=[x["id"] for x in s], force=True)
+
+    def rename_ai(self):
+        st = self.store.settings
+        if not (st.get("ai_names") or st.get("ai_key")) or not st.get("ai_key"):
+            messagebox.showinfo(core.APP_NAME, "First set up AI Names (paste your free Gemini key).")
+            return AIDialog(self)
+        s = self.selected()
+        if not s:
+            return messagebox.showinfo(core.APP_NAME, "Select creators first (hold Ctrl to select multiple).")
+        n = sum(core.count_videos(x["folder"]) for x in s)
+        names = ", ".join(os.path.basename(x["folder"]) for x in s)
+        if messagebox.askyesno(core.APP_NAME, f"Give new AI names to the videos already in:\n{names}\n\n"
+                               f"({n} videos. Videos already named by AI are skipped.)"):
+            self.engine.run_async(ids=[x["id"] for x in s], rename=True)
 
     # ------------------------------------------------------------ updates
     def do_update(self):

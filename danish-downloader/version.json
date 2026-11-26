@@ -1,5 +1,5 @@
 {
-  "version": "1.6.1",
+  "version": "1.7",
   "files": ["danish_ai.py", "danish_core.py", "danish_downloader.py"],
-  "notes": "AI Names with Gemini (no hashtags, unique names)."
+  "notes": "AI Names (Gemini) + Rename with AI for videos already in folders."
 }
