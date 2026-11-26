@@ -5459,9 +5459,9 @@ class AccountPanel:
             heads = {c: h for c, h, _ in ACCOUNT_FIELDS}
         else:
             cols = ("no", "name", "email", "page", "mode", "status")
-            widths = {"no": 50, "name": 140, "email": 200, "page": 160, "mode": 170, "status": 100}
+            widths = {"no": 50, "name": 130, "email": 210, "page": 380, "mode": 130, "status": 90}
             heads = {"no": "No", "name": "Account", "email": "Email",
-                     "page": "Pages (ticked)", "mode": "IP / Proxy", "status": "Status"}
+                     "page": "Pages (ticked)", "mode": "IP city", "status": "Status"}
         self._pw = ttk.PanedWindow(wrap, orient="vertical")
         self._pw.pack(fill="both", expand=True, padx=6, pady=4)
         tf = ttk.Frame(self._pw)
@@ -5473,7 +5473,7 @@ class AccountPanel:
         for c in cols:
             self.tree.heading(c, text=heads[c], anchor="w")   # heading usi column ke upar seedha
             self.tree.column(c, width=int(widths[c] * k), minwidth=int(40 * k), anchor="w",
-                             stretch=(not detail and c in ("name", "email")))
+                             stretch=(not detail and c == "page"))
         xs = ttk.Scrollbar(tf, orient="horizontal", command=self.tree.xview)
         ys = ttk.Scrollbar(tf, orient="vertical", command=self.tree.yview)
         self.tree.configure(xscrollcommand=xs.set, yscrollcommand=ys.set)
@@ -5579,10 +5579,8 @@ class AccountPanel:
             return
         for i, a in enumerate(load_accounts(), 1):
             _ii = a.get("ip_info") or {}
-            _loc = f"{_ii.get('query', '')} {_ii.get('countryCode', '')} {_ii.get('city', '')}".strip()
-            _px = a.get("proxy", "")
-            _ptag = ("VPN " + _px[3:]) if _px.lower().startswith("wg:") else ("proxy" if _px else "")
-            mode = " · ".join(x for x in (_ptag, _loc) if x) or a.get("ix_profile") or (a.get("ix_key") and "ix (free)") or "-"
+            mode = _ii.get("city") or ("VPN " + a.get("proxy", "")[3:] if a.get("proxy", "").lower().startswith("wg:")
+                                       else ("proxy" if a.get("proxy") else "-"))   # sirf shehar (jaise New York)
             img = self.app.img_check if a["id"] in self.checked else self.app.img_empty
             self.tree.insert("", "end", iid=a["id"], image=img,
                              values=(i, a["name"], a["email"], self._pages_summary(a),
@@ -5597,8 +5595,7 @@ class AccountPanel:
         pg = a.get("pages") or []
         if pg:
             on = [p["name"] for p in pg if p.get("enabled")]
-            first = (": " + on[0]) if on else ""
-            return f"{len(on)}/{len(pg)} ✔{first}"
+            return f"{len(on)}/{len(pg)} ✔" + ((": " + ", ".join(on)) if on else "")
         return a.get("page_name", "") or T("(auto)", "(auto)")
 
     def _render_pages(self):
@@ -5959,10 +5956,51 @@ def api_run_page(pid, log=print, file_path=None):
         return False
 
 
+def api_token_watch(log):
+    """Din mein ek dafa: jis token ki muddat 7 din se kam reh gayi, us ID ko khud dobara CONNECT."""
+    d = api_load()
+    if not d.get("app_id") or not d.get("app_secret"):
+        return
+    due = []
+    for t_ in d.get("tokens", []):
+        exp = t_.get("expires")
+        if not exp:
+            try:     # Facebook se poochho kab khatam hoga
+                j = _http(f"{GRAPH}/{_gv()}/debug_token?input_token={t_['token']}&access_token={d['app_id']}|{d['app_secret']}")
+                exp = (j.get("data") or {}).get("data_access_expires_at") or (j.get("data") or {}).get("expires_at") or 0
+                if exp:
+                    t_["expires"] = exp
+            except Exception:
+                continue
+        if exp and exp - time.time() < 7 * 86400:
+            if t_.get("owner"):
+                due.append(t_["owner"])
+            else:
+                log(T("[API] A token expires in < 7 days and has no linked ID — make a new token (Graph API Explorer).",
+                      "[API] Ek token 7 din mein khatam — is ki ID maloom nahi, naya token banayein (Graph API Explorer)."))
+    with _API_LOCK:
+        cur = api_load(); cur["tokens"] = d.get("tokens", []); api_save(cur)
+    if due:
+        accs = [a for a in load_accounts() if a["id"] in due]
+        log(T(f"[API] Renewing tokens for {len(accs)} ID(s) (expire in < 7 days)...",
+              f"[API] {len(accs)} ID ke token naye kar rahe hain (7 din se kam baqi)..."))
+        try:
+            APP_INSTANCE.after(0, lambda: APP_INSTANCE._api_connect_ids(accs, silent=True))
+        except Exception:
+            pass
+
+
 def api_scheduler_loop(log, stop_event):
-    """Har 20 second: jis page ka waqt + din aa gaya, us par post."""
+    """Har 20 second: jis page ka waqt + din aa gaya, us par post. Din mein ek dafa token check."""
     busy = set()
+    last_watch = 0
     while not stop_event.is_set():
+        if time.time() - last_watch > 24 * 3600:
+            last_watch = time.time()
+            try:
+                api_token_watch(log)
+            except Exception:
+                pass
         try:
             now = time.localtime()
             hm = time.strftime("%H:%M", now)
@@ -6033,6 +6071,8 @@ class ApiPagesMixin:
         ttk.Entry(cr, textvariable=self.api_secret, show="•", width=34).pack(side="left", padx=4)
         ttk.Button(cr, text=T("CONNECT ticked IDs", "Ticked IDs JODO"), style="Accent.TButton",
                    command=self._api_connect_ids).pack(side="left", padx=6)
+        ttk.Button(cr, text="Export", command=self._api_export_app).pack(side="left", padx=2)
+        ttk.Button(cr, text="Import", command=self._api_import_app).pack(side="left", padx=2)
         ttk.Label(con, text=T("Tick IDs in Accounts (✔), then press CONNECT. For each ID the bot: adds it as Tester in your app → "
                               "accepts the invite → presses Continue/Allow → saves a 60-day token → brings its pages here.\n"
                               "App ID + App Secret: developers.facebook.com → My Apps → DK Uploader → App settings → Basic.",
@@ -6267,14 +6307,48 @@ class ApiPagesMixin:
             log(T("[API] POST NOW finished.", "[API] ABHI POST mukammal."))
         threading.Thread(target=run_all, daemon=True).start()
 
-    def _api_connect_ids(self):
+    def _api_export_app(self):
+        """Sirf App ID + App Secret ek file mein (doosre PC ke liye). Token / pages NAHI."""
         app_id = self.api_appid.get().strip(); secret = self.api_secret.get().strip()
         if not app_id or not secret:
             messagebox.showwarning("API", T("Enter App ID and App Secret first.", "Pehle App ID aur App Secret daalein."))
             return
-        accs = self.acc_table.checked_accounts() if hasattr(self, "acc_table") else []
+        p = filedialog.asksaveasfilename(defaultextension=".dkapp", initialfile="DK_app_settings.dkapp",
+                                         filetypes=[("DK app settings", "*.dkapp")])
+        if not p:
+            return
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump({"dk_app": 1, "app_id": app_id, "app_secret": secret}, f)
+        messagebox.showinfo("API", T("Saved. Only App ID + Secret are in this file (no token, no pages).\n"
+                                     "Keep it private — it is like a password.",
+                                     "Save ho gaya. Is file mein sirf App ID + Secret hain (token / pages nahi).\n"
+                                     "Ise sambhal kar rakhein — ye password jaisi hai."))
+
+    def _api_import_app(self):
+        p = filedialog.askopenfilename(filetypes=[("DK app settings", "*.dkapp"), ("All", "*.*")])
+        if not p:
+            return
+        try:
+            j = json.load(open(p, encoding="utf-8"))
+            self.api_appid.set(j.get("app_id", "")); self.api_secret.set(j.get("app_secret", ""))
+            with _API_LOCK:
+                d = api_load(); d["app_id"], d["app_secret"] = j.get("app_id", ""), j.get("app_secret", ""); api_save(d)
+            messagebox.showinfo("API", T("App ID + Secret loaded. Now tick IDs in Accounts and press CONNECT.",
+                                         "App ID + Secret lag gaye. Ab Accounts mein IDs tick kar ke CONNECT dabayein."))
+        except Exception as e:
+            messagebox.showerror("API", str(e))
+
+    def _api_connect_ids(self, accs=None, silent=False):
+        app_id = self.api_appid.get().strip(); secret = self.api_secret.get().strip()
+        if not app_id or not secret:
+            if not silent:
+                messagebox.showwarning("API", T("Enter App ID and App Secret first.", "Pehle App ID aur App Secret daalein."))
+            return
+        if accs is None:
+            accs = self.acc_table.checked_accounts() if hasattr(self, "acc_table") else []
         if not accs:
-            messagebox.showwarning("API", T("Tick IDs (✔) in Accounts first.", "Pehle Accounts mein IDs ✔ karein."))
+            if not silent:
+                messagebox.showwarning("API", T("Tick IDs (✔) in Accounts first.", "Pehle Accounts mein IDs ✔ karein."))
             return
         with _API_LOCK:
             d = api_load(); d["app_id"], d["app_secret"] = app_id, secret; api_save(d)
@@ -6302,6 +6376,14 @@ class ApiPagesMixin:
                 tok = api_long_token(app_id, secret, short)
                 pages = api_fetch_pages(tok)
                 api_merge_pages(pages, acc["id"], tok)
+                with _API_LOCK:
+                    d2 = api_load()
+                    for t_ in d2["tokens"]:
+                        if t_.get("token") == tok:
+                            t_["expires"] = time.time() + 59 * 86400
+                    # isi ID ke purane tokens hata do
+                    d2["tokens"] = [t_ for t_ in d2["tokens"] if t_.get("owner") != acc["id"] or t_.get("token") == tok]
+                    api_save(d2)
                 update_account(acc["id"], api_connected=time.strftime("%Y-%m-%d"))
                 log(T(f"[API] {acc['name']}: connected ✔ — {len(pages)} page(s).",
                       f"[API] {acc['name']}: jur gayi ✔ — {len(pages)} page."))
@@ -6444,8 +6526,8 @@ def apply_dark_theme(root, style):
 NAV = [("WORKSPACE", [("Dashboard", "Dashboard", "▦"), ("Accounts", "Accounts", "👤"),
                       ("Proxy", "Proxy Management", "⇄")]),
        ("AUTOMATION", [("Sources", "Content Sources", "⬇"), ("Post", "Posting (browser)", "⚡"), ("API", "API Pages", "☁"),
-                       ("Interact", "Active & Groups", "♥"), ("Schedule", "Schedule", "⏱"),
-                       ("LDPlayer", "LDPlayer (mobile)", "📱")]),
+                       ("Interact", "Active & Groups", "♥"), ("Schedule", "Schedule", "⏱")]),
+       # LDPlayer (mobile) abhi chhupa hai — code mojood, zaroorat par wapas: ("LDPlayer", "LDPlayer (mobile)", "📱")
        ("SYSTEM", [("Logs", "Logs", "≡"), ("Settings", "System Settings", "⚙"), ("Guide", "Guide", "?")])]
 
 WG_HELP = """SURFSHARK — different IP for every browser (one time setup):
@@ -7227,7 +7309,7 @@ class SourcesMixin:
         ttk.Button(r, text="...", width=3, command=self._src_pick_root).pack(side="left")
         ttk.Button(r, text=T("Match folders to pages", "Folders pages se milao"), style="Accent.TButton",
                    command=self._src_match).pack(side="left", padx=4)
-        self.src_map = ttk.Treeview(top, columns=("page", "folder", "files"), show="headings", height=5)
+        self.src_map = ttk.Treeview(top, columns=("page", "folder", "files"), show="headings", height=4)
         for c, t_, w in (("page", "Page", 260), ("folder", "Folder (auto)", 520), ("files", "Videos", 90)):
             self.src_map.heading(c, text=t_, anchor="w"); self.src_map.column(c, width=w, anchor="w")
         self.src_map.pack(fill="x", padx=6, pady=4)
@@ -7264,7 +7346,7 @@ class SourcesMixin:
                               "Agar ye creator pehle manually lagate the to aakhri lagi hui video ka link do — "
                               "woh aur us se upar wali 'done' maan li jayengi."),
                   style="Muted.TLabel", wraplength=1100, justify="left").pack(anchor="w", padx=8)
-        self.src_tree = ttk.Treeview(tk_, columns=("page", "url", "max", "done", "last", "new"), show="headings", height=5)
+        self.src_tree = ttk.Treeview(tk_, columns=("page", "url", "max", "done", "last", "new"), show="headings", height=3)
         for c, t_, w in (("page", "Page", 220), ("url", "TikTok link", 380), ("max", "Max", 60),
                          ("done", "Done", 70), ("last", "Last fetch", 150), ("new", "New", 60)):
             self.src_tree.heading(c, text=t_, anchor="w"); self.src_tree.column(c, width=w, anchor="w")
@@ -7292,13 +7374,23 @@ class SourcesMixin:
 
     def _all_page_names(self):
         names = []
+        try:
+            ticked = set(self.acc_table.checked) if hasattr(self, "acc_table") else set()
+        except Exception:
+            ticked = set()
         for a in load_accounts():
+            if ticked and a["id"] not in ticked:
+                continue
             for p in a.get("pages") or []:
                 if p.get("name") and p["name"] not in names:
                     names.append(p["name"])
             if a.get("page_name") and a["page_name"] not in names:
                 names.append(a["page_name"])
         for p in api_load().get("pages", {}).values():
+            if ticked and p.get("owner") and p["owner"] not in ticked:
+                continue
+            if ticked and not p.get("owner"):
+                continue
             if p.get("name") and p["name"] not in names:
                 names.append(p["name"])
         return names
@@ -7600,7 +7692,6 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         tabs = [("Accounts", "ACCOUNT MANAGEMENT"), ("Post", "POST (REELS/VIDEO/PHOTO)"),
                 ("API", "API PAGES"),
                 ("Interact", "INTERACT / GROUPS"),
-                ("LDPlayer", "LDPLAYER"),
                 ("Schedule", "SCHEDULE"), ("Settings", "SETTINGS"), ("Guide", "GUIDE")]
         for key, label in tabs:
             b = tk.Button(bar, text=label, relief="flat", padx=18, pady=12, bd=0,
