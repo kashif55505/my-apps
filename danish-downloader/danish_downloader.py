@@ -263,10 +263,10 @@ class AIDialog(ctk.CTkToplevel):
         ctk.CTkSwitch(f, text="Paid key (fast — no waiting, many names at once)", variable=self.v_paid,
                       progress_color=GREEN, font=(FONT, 12)).pack(anchor="w", pady=(8, 0))
         label("Name Language")
-        self.o_lang = ctk.CTkOptionMenu(f, values=["English", "Roman Urdu", "Urdu", "Hindi", "Spanish", "Portuguese",
+        self.o_lang = ctk.CTkOptionMenu(f, values=[core.danish_ai.AUTO_LANG, "English", "Roman Urdu", "Urdu", "Hindi", "Spanish", "Portuguese",
                                                    "Arabic", "Same as original caption"],
                                         fg_color=SEC, button_color=ACCENT, button_hover_color=ACCENT_H, text_color=SEC_TEXT)
-        self.o_lang.set(s.get("ai_language", "English"))
+        self.o_lang.set(s.get("ai_language") or core.danish_ai.AUTO_LANG)
         self.o_lang.pack(anchor="w", pady=(4, 0))
         label("Extra instruction (optional)", "Leave empty — Gemini decides the style from the creator.")
         self.e_style = ctk.CTkEntry(f, height=36, fg_color=PANEL2, border_color=BORDER)

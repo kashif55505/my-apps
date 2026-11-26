@@ -12,6 +12,7 @@ import urllib.request
 import urllib.error
 
 DEFAULT_MODELS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"]
+AUTO_LANG = "Auto (Spanish creator → Spanish, others → English)"
 MODEL_CHOICES = ["Auto (Flash)", "gemini-pro-latest", "gemini-2.5-pro", "gemini-flash-latest", "gemini-2.5-flash"]
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -108,7 +109,9 @@ def build_profile(settings, handle, bio, captions, frames, log=print):
         f"Some of their video captions:\n{caps}\n"
         f"{len(frames)} frames from their videos are attached.\n"
         "In 4-6 short lines describe: what kind of content this is (niche), what typically happens in the videos, "
-        "the tone, the audience, and what makes a good title for THIS creator. Be specific. No hashtags."
+        "the tone, the audience, and what makes a good title for THIS creator. Be specific. No hashtags.\n"
+        "Then add a LAST line exactly like 'LANGUAGE: Spanish' or 'LANGUAGE: English' etc. — the main language "
+        "the creator speaks/writes in (judge from bio and captions)."
     )
     parts = [{"text": prompt}] + [{"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(f).decode()}}
                                   for f in frames if f]
@@ -120,7 +123,7 @@ def make_title(settings, caption, frame_jpg, avoid, log=print, profile=""):
     """Gemini se ek naya, alag naam. Na mile to None."""
     if not (settings.get("ai_key") or "").strip():
         return None
-    lang = settings.get("ai_language") or "English"
+    lang = pick_language(settings, profile)
     style = (settings.get("ai_style") or "").strip()
     avoid_txt = "\n".join(f"- {a}" for a in avoid[-40:]) or "(none)"
     prompt = (
@@ -129,7 +132,8 @@ def make_title(settings, caption, frame_jpg, avoid, log=print, profile=""):
         + f"Original caption (may be only hashtags): {caption or '(none)'}\n"
         "Look at the video frame and write ONE new, natural title that describes what happens in THIS video, "
         "in the style that fits this creator.\n"
-        f"Rules: {lang} language. 4 to 10 words. NO hashtags. No quotes. No emojis. "
+        f"Rules: {lang} language. SHORT: 3 to 8 words, one line, under 60 characters. "
+        "NO hashtags. No @mentions. No quotes. No emojis. "
         "Do not copy the original caption. Must be clearly different from every title in this list:\n"
         f"{avoid_txt}\n"
         + (f"Extra style instruction: {style}\n" if style else "")
@@ -145,12 +149,33 @@ def make_title(settings, caption, frame_jpg, avoid, log=print, profile=""):
     return t or None
 
 
+def profile_language(profile):
+    m = re.search(r"LANGUAGE\s*:\s*([A-Za-z ]+)", profile or "", re.I)
+    return m.group(1).strip().title() if m else ""
+
+
+def pick_language(settings, profile):
+    lang = settings.get("ai_language") or AUTO_LANG
+    if lang.startswith("Auto"):
+        return "Spanish" if profile_language(profile).startswith("Spanish") else "English"
+    return lang
+
+
+def short(t, max_len=60):
+    if len(t) <= max_len:
+        return t
+    cut = t[:max_len]
+    sp = cut.rfind(" ")
+    return (cut[:sp] if sp > 25 else cut).rstrip(" ,.-–:;")
+
+
 def clean_title(t):
     t = (t or "").strip().splitlines()[0] if t and t.strip() else ""
     t = re.sub(r"#\S+", "", t)
     t = re.sub(r"^\s*\**\s*(title|name)\s*:\s*", "", t, flags=re.I)
     t = t.strip().strip('"\'“”‘’*` ').strip()
-    return re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r"@\S+", "", t)
+    return short(re.sub(r"\s+", " ", t).strip())
 
 
 def test_key(settings):

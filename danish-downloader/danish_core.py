@@ -25,7 +25,7 @@ except Exception:
     FFMPEG_PATH = shutil.which("ffmpeg")
 
 APP_NAME = "Danish Downloader"
-VERSION = "1.8"
+VERSION = "1.9"
 GITHUB_USER = "kashif55505"
 GITHUB_REPO = "my-apps"
 GITHUB_FOLDER = "danish-downloader"
@@ -54,7 +54,7 @@ DEFAULT_SETTINGS = {
     "quality": "1080p",
     "ai_names": False,
     "ai_key": "",
-    "ai_language": "English",
+    "ai_language": "Auto (Spanish creator → Spanish, others → English)",
     "ai_style": "",
     "ai_model": "",
     "ai_paid": False,
@@ -242,6 +242,10 @@ class Store:
             self.data["sources"] = d.get("sources", [])
         except Exception:
             shutil.copy(self.path, self.path + ".kharab_backup")
+        st = self.data["settings"]
+        if not st.get("_lang_auto_v19"):
+            st["ai_language"] = DEFAULT_SETTINGS["ai_language"]
+            st["_lang_auto_v19"] = True
         for s in self.data["sources"]:
             for k, v in DEFAULT_SOURCE.items():
                 s.setdefault(k, v if not isinstance(v, (list, dict)) else type(v)())
@@ -390,7 +394,9 @@ class Engine:
         lock = self._plocks.setdefault(src["id"], threading.Lock())
         with lock:
             have = count_videos(folder)
-            if src.get("ai_profile") and (src.get("ai_profile_n", 0) >= 3 or have < 3):
+            auto = (st.get("ai_language") or "Auto").startswith("Auto")
+            has_lang = bool(danish_ai.profile_language(src.get("ai_profile", "")))
+            if src.get("ai_profile") and (src.get("ai_profile_n", 0) >= 3 or have < 3) and (has_lang or not auto):
                 return src["ai_profile"]
             files = sorted((f for f in os.listdir(folder) if os.path.splitext(f)[1].lower() in VIDEO_EXTS),
                            key=lambda f: os.path.getmtime(os.path.join(folder, f)), reverse=True)
@@ -411,7 +417,8 @@ class Engine:
                 src["ai_profile"] = prof
                 src["ai_profile_n"] = len(frames)
                 self.store.save()
-                self.log("   ✨ Creator understood: " + prof.replace("\n", " ")[:160] + "...")
+                lang = danish_ai.pick_language(st, prof)
+                self.log("   ✨ Creator understood: " + prof.replace("\n", " ")[:140] + f"...  → names in {lang}")
             return prof
 
     @staticmethod
