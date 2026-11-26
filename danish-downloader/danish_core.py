@@ -24,7 +24,7 @@ except Exception:
     FFMPEG_PATH = shutil.which("ffmpeg")
 
 APP_NAME = "Danish Downloader"
-VERSION = "1.3"
+VERSION = "1.4"
 GITHUB_USER = "kashif55505"
 GITHUB_REPO = "my-apps"
 GITHUB_FOLDER = "danish-downloader"
@@ -61,6 +61,8 @@ DEFAULT_SOURCE = {
     "skip_top": 0,
     "start_link": "",
     "end_link": "",
+    "sample_link": "",
+    "tiktok_secuid": "",
     "initialized": False,
     "enabled": True,
     "done_ids": [],
@@ -305,7 +307,7 @@ class Engine:
             "noprogress": True,
             "retries": 10,
             "fragment_retries": 10,
-            "extractor_retries": 3,
+            "extractor_retries": 5,
             "socket_timeout": 30,
             "noplaylist": True,
         }
@@ -374,6 +376,45 @@ class Engine:
         return (entry["id"] and entry["id"] in done) or entry["url"] in done or \
                (id_from_url(entry["url"]) in done if id_from_url(entry["url"]) else False)
 
+    def _secuid_from_video(self, link):
+        o = self.base_opts()
+        with yt_dlp.YoutubeDL(o) as ydl:
+            info = ydl.extract_info(link, download=False)
+        sid = info.get("channel_id") or ""
+        return sid if sid.startswith("MS4w") else ""
+
+    def _list_with_fallback(self, src, url, limit):
+        """TikTok kabhi profile page se user ID nahi deta. Tab kisi video se ID nikal kar
+        'tiktokuser:<ID>' se list mangao."""
+        is_tt = "tiktok.com/@" in url.lower()
+        if is_tt and src.get("tiktok_secuid"):
+            try:
+                return self.list_entries("tiktokuser:" + src["tiktok_secuid"], limit)
+            except Exception:
+                pass
+        try:
+            return self.list_entries(url, limit)
+        except Exception as first_err:
+            if not is_tt:
+                raise
+            links = [src.get("sample_link"), src.get("start_link"), src.get("end_link")]
+            links = [l.strip() for l in links if l and "/video/" in l]
+            if not links:
+                raise
+            self.log("   TikTok refused the profile page — trying via a video link...")
+            for l in links:
+                try:
+                    sid = self._secuid_from_video(l)
+                except Exception:
+                    continue
+                if sid:
+                    with self.store.lock:
+                        src["tiktok_secuid"] = sid
+                    self.store.save()
+                    self.log("   ✓ Found creator ID from video, getting list...")
+                    return self.list_entries("tiktokuser:" + sid, limit)
+            raise first_err
+
     @staticmethod
     def _find(entries, link):
         lid = id_from_url(link) or ""
@@ -433,6 +474,10 @@ class Engine:
                 final = unique_path(folder, name, ext)
                 shutil.move(path, final)
             self.store.mark_done(src, vid, entry["id"], id_from_url(entry["url"]))
+            cid = str(info.get("channel_id") or "")
+            if src.get("id") != "_links_" and cid.startswith("MS4w") and not src.get("tiktok_secuid"):
+                src["tiktok_secuid"] = cid
+                self.store.save()
             h = info.get("height")
             self.log(f"   ✓ {os.path.basename(final)}" + (f"  [{h}p]" if h else ""))
             return True
@@ -491,13 +536,13 @@ class Engine:
         # do link diye hon to poori list chahiye (taake wo links list mein mil jayein)
         limit = None if has_links else len(done) + skip_top + need + 80
         try:
-            entries = self.list_entries(url, limit)
+            entries = self._list_with_fallback(src, url, limit)
         except Exception as e:
             msg = str(e).replace("ERROR: ", "").strip().splitlines()[0][:200]
             self.log(f"   ✗ Could not get creator's video list: {msg}")
-            if "secondary user id" in msg.lower() or "tiktok" in url.lower():
-                self.log("   ℹ TikTok refused the list. Click Update, retry later, "
-                         "or set Cookies to 'firefox' (stay logged in to TikTok in Firefox).")
+            if "tiktok" in url.lower():
+                self.log("   ℹ Fix: Edit this creator and paste ANY one video link of this creator in "
+                         "'Any Video Link' — the app will use it to find the profile.")
             if "instagram" in url.lower():
                 self.log("   ℹ yt-dlp currently cannot list full Instagram profiles. "
                          "Use 'Download from Links' for Instagram reels.")

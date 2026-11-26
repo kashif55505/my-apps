@@ -1,5 +1,5 @@
 {
-  "version": "1.3",
+  "version": "1.4",
   "files": ["danish_core.py", "danish_downloader.py"],
-  "notes": "New Light green theme."
+  "notes": "TikTok fix: 'Any Video Link' field when TikTok refuses the profile list."
 }

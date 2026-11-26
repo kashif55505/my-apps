@@ -56,7 +56,7 @@ class SourceDialog(ctk.CTkToplevel):
         super().__init__(app)
         self.app, self.src = app, src
         self.title("Edit Creator" if src else "Add Creator")
-        self.geometry("640x760")
+        self.geometry("640x800")
         self.configure(fg_color=PANEL)
         self.resizable(False, True)
         self.transient(app)
@@ -104,6 +104,9 @@ class SourceDialog(ctk.CTkToplevel):
               "The video you downloaded UP TO. Everything between the two links is skipped; "
               "older videos below it come next. Leave both empty for a new creator.")
         self.e_end = entry(s.get("end_link", ""))
+        label("Any Video Link (TikTok fix, optional)",
+              "Any one video of this creator. Used only if TikTok refuses the profile list.")
+        self.e_sample = entry(s.get("sample_link", ""))
         if src:
             ctk.CTkLabel(f, text=f"Downloaded so far: {len(s.get('done_ids', []))} videos",
                          font=(FONT, 12), text_color=GREEN, anchor="w").pack(fill="x", pady=(10, 0))
@@ -151,22 +154,27 @@ class SourceDialog(ctk.CTkToplevel):
             return messagebox.showerror(core.APP_NAME, f"Could not create folder:\n{e}", parent=self)
         start = self.e_start.get().strip()
         end = self.e_end.get().strip()
-        for l in (start, end):
+        sample = self.e_sample.get().strip()
+        for l in (start, end, sample):
             if l and not l.startswith("http"):
                 return messagebox.showerror(core.APP_NAME, "Start/Last link must start with http.", parent=self)
 
         st = self.app.store
         if self.src:
             with st.lock:
+                if url != self.src.get("url"):
+                    self.src["tiktok_secuid"] = ""
                 if (start, end) != (self.src.get("start_link", ""), self.src.get("end_link", "")) and (start or end):
                     self.src["initialized"] = False   # new links: recalculate on next check
                 self.src.update(url=url, folder=folder, per_day=per_day, stock_days=days, refill_days=refill,
-                                start_link=start, end_link=end, enabled=self.v_enabled.get())
+                                start_link=start, end_link=end, sample_link=sample,
+                                enabled=self.v_enabled.get())
             st.save()
             src = self.src
         else:
             src = st.add_source(url=url, folder=folder, per_day=per_day, stock_days=days, refill_days=refill,
-                                start_link=start, end_link=end, enabled=self.v_enabled.get())
+                                start_link=start, end_link=end, sample_link=sample,
+                                enabled=self.v_enabled.get())
         n = st.add_old_links(src, self.t_links.get("1.0", "end"))
         if n:
             self.app.log(f"{os.path.basename(folder)}: {n} old links marked as downloaded.")
