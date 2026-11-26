@@ -1562,6 +1562,327 @@ def _now_str():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+# ============================================================
+# LICENSE (malik = Danish). Key har PC ki Machine ID se bandhi, RSA se signed — sirf malik bana sakta hai.
+# Cancel (revoke) list GitHub par: koi key cancel ho to us PC par app band.
+# ============================================================
+LIC_N = int("23865847406916263419611540106437989866924156495821584680249183874285501448269043955563420687110555944714907474639275490018179532216331020459998737893362850467263349748894376167727566575465505139937693164376448891836031126700850106402320369894294254743875140102179023762571758946399923157544232251435063575188716620452289053160152925418619627195280136537747202619582541205148866147974037044104671227314820883778912596218830637055091416954478342377550898632660484191460876810133026582382692986622842677916970364468474883891069781537105864157956727632285337385114605455818382743466460444022248926201114937855738122253861")
+LIC_E = 65537
+LIC_REVOKE_URL = "https://raw.githubusercontent.com/kashif55505/my-apps/main/facebook-uploader/licenses_revoked.json"
+LIC_REVOKE_API = "repos/kashif55505/my-apps/contents/facebook-uploader/licenses_revoked.json"
+_LIC = {"ok": None, "owner": False, "info": {}, "why": ""}
+
+
+def machine_id():
+    import hashlib
+    raw = ""
+    try:
+        import winreg
+        k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography", 0,
+                           winreg.KEY_READ | getattr(winreg, "KEY_WOW64_64KEY", 0))
+        raw = winreg.QueryValueEx(k, "MachineGuid")[0]
+    except Exception:
+        import uuid
+        raw = str(uuid.getnode())
+    h = hashlib.sha256(("DK|" + raw + "|" + os.environ.get("COMPUTERNAME", "")).encode()).hexdigest().upper()[:16]
+    return "-".join(h[i:i + 4] for i in range(0, 16, 4))
+
+
+def _b64u(b):
+    import base64
+    return base64.urlsafe_b64encode(b).decode().rstrip("=")
+
+
+def _b64u_dec(s_):
+    import base64
+    return base64.urlsafe_b64decode(s_ + "=" * (-len(s_) % 4))
+
+
+def _lic_hash(payload_b):
+    import hashlib
+    return int.from_bytes(hashlib.sha256(payload_b).digest(), "big")
+
+
+def owner_key_path():
+    return os.path.join(DATA_DIR, "owner.key")
+
+
+def owner_key():
+    try:
+        k = json.load(open(owner_key_path(), encoding="utf-8"))
+        if int(k["n"]) == LIC_N:
+            return k
+    except Exception:
+        pass
+    return None
+
+
+def owner_key_import(path):
+    k = json.load(open(path, encoding="utf-8"))
+    if int(k["n"]) != LIC_N:
+        raise ValueError("This is not the owner key of this app.")
+    os.makedirs(DATA_DIR, exist_ok=True)
+    shutil.copy2(path, owner_key_path())
+    return True
+
+
+def make_license(name, mid, days=0):
+    """Sirf malik: student ke naam + Machine ID se key."""
+    import secrets
+    k = owner_key()
+    if not k:
+        raise RuntimeError("Owner key missing")
+    exp = time.strftime("%Y-%m-%d", time.localtime(time.time() + days * 86400)) if days else ""
+    pl = {"m": mid.strip().upper(), "n": name.strip(), "e": exp, "k": secrets.token_hex(4)}
+    pb = json.dumps(pl, separators=(",", ":")).encode()
+    sig = pow(_lic_hash(pb), int(k["d"]), LIC_N)
+    key = "DK1." + _b64u(pb) + "." + _b64u(sig.to_bytes((LIC_N.bit_length() + 7) // 8, "big"))
+    return key, pl
+
+
+def parse_license(key):
+    """Key sahi hai? -> payload dict, warna None."""
+    try:
+        key = "".join((key or "").split())
+        tag, p, sg = key.split(".")
+        if tag != "DK1":
+            return None
+        pb = _b64u_dec(p)
+        sig = int.from_bytes(_b64u_dec(sg), "big")
+        if pow(sig, LIC_E, LIC_N) != _lic_hash(pb) % LIC_N:
+            return None
+        return json.loads(pb.decode())
+    except Exception:
+        return None
+
+
+def lic_revoked_list(force=False):
+    cache = os.path.join(DATA_DIR, "lic_revoked_cache.json")
+    try:
+        c = json.load(open(cache, encoding="utf-8"))
+    except Exception:
+        c = {"t": 0, "ids": []}
+    if force or time.time() - c.get("t", 0) > 3 * 3600:
+        try:
+            import urllib.request
+            r = urllib.request.urlopen(LIC_REVOKE_URL + f"?t={int(time.time())}", timeout=15)
+            j = json.loads(r.read().decode())
+            c = {"t": time.time(), "ids": list(j.get("revoked", []))}
+            json.dump(c, open(cache, "w", encoding="utf-8"))
+        except Exception:
+            pass
+    return set(c.get("ids", []))
+
+
+def license_check(force=False):
+    """_LIC bharo: owner? license sahi? (machine, expiry, cancel)."""
+    if not owner_key():
+        for cand in (os.path.join(os.path.expanduser("~"), "Downloads", "DK_owner.key"),
+                     os.path.join(os.path.expanduser("~"), "Desktop", "DK_owner.key")):
+            try:
+                if os.path.isfile(cand):
+                    owner_key_import(cand)
+                    break
+            except Exception:
+                pass
+    if owner_key():
+        _LIC.update(ok=True, owner=True, info={"n": "Owner"}, why="")
+        return _LIC
+    key = load_settings().get("license_key", "")
+    pl = parse_license(key)
+    why = ""
+    if not key:
+        why = T("No license key.", "License key nahi hai.")
+    elif not pl:
+        why = T("License key is not valid.", "License key ghalat hai.")
+    elif pl.get("m") != machine_id():
+        why = T("This key belongs to another computer.", "Ye key kisi aur computer ki hai.")
+    elif pl.get("e") and time.strftime("%Y-%m-%d") > pl["e"]:
+        why = T(f"License expired on {pl['e']}.", f"License {pl['e']} ko khatam ho gaya.")
+    elif pl.get("k") in lic_revoked_list(force):
+        why = T("This license was cancelled by the owner.", "Ye license malik ne cancel kar diya hai.")
+    _LIC.update(ok=not why, owner=False, info=pl or {}, why=why)
+    return _LIC
+
+
+def license_ok():
+    if _LIC["ok"] is None:
+        license_check()
+    return bool(_LIC["ok"])
+
+
+def lic_issued_path():
+    return os.path.join(DATA_DIR, "licenses_issued.json")
+
+
+def lic_issued_load():
+    try:
+        return json.load(open(lic_issued_path(), encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def lic_issued_save(lst):
+    json.dump(lst, open(lic_issued_path(), "w", encoding="utf-8"), indent=1)
+
+
+def lic_push_revoked(ids, gh_token):
+    """Cancel list GitHub par likho (malik ka GitHub token)."""
+    import urllib.request, base64
+    hdr = {"Authorization": f"Bearer {gh_token}", "Accept": "application/vnd.github+json",
+           "User-Agent": "DK-Uploader"}
+    url = "https://api.github.com/" + LIC_REVOKE_API
+    sha = None
+    try:
+        r = urllib.request.urlopen(urllib.request.Request(url, headers=hdr), timeout=20)
+        sha = json.loads(r.read().decode()).get("sha")
+    except Exception:
+        pass
+    body = {"message": "Update revoked licenses",
+            "content": base64.b64encode(json.dumps({"revoked": sorted(set(ids))}, indent=1).encode()).decode()}
+    if sha:
+        body["sha"] = sha
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=dict(hdr, **{"Content-Type": "application/json"}),
+                                 method="PUT")
+    urllib.request.urlopen(req, timeout=30).read()
+    return True
+
+
+# ---------- POST LOG (Logs Viewer) + PAGE STATS (Page Manager) ----------
+_PLOG_LOCK = threading.Lock()
+
+
+def _plog_path():
+    return os.path.join(DATA_DIR, "post_log.json")
+
+
+def post_log_load():
+    try:
+        return json.load(open(_plog_path(), encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def acc_number(acc_id):
+    for i, a in enumerate(load_accounts(), 1):
+        if a.get("id") == acc_id:
+            return i
+    return ""
+
+
+def acc_city(acc_id):
+    a = get_account(acc_id) or {}
+    ii = a.get("ip_info") or {}
+    return ii.get("city") or ii.get("countryCode") or ""
+
+
+def post_log_add(page, ok, posted="", files="", err="", acc_id="", via="", city=""):
+    """Har post ki ek line (browser + API)."""
+    try:
+        e = {"t": time.strftime("%Y-%m-%d %H:%M:%S"), "acc": acc_number(acc_id) if acc_id else "",
+             "page": page, "ip": city or (acc_city(acc_id) if acc_id else ""), "ok": bool(ok),
+             "posted": posted, "files": files, "err": str(err or "")[:200], "via": via}
+        with _PLOG_LOCK:
+            lst = post_log_load()
+            lst.insert(0, e)
+            json.dump(lst[:3000], open(_plog_path(), "w", encoding="utf-8"))
+    except Exception:
+        pass
+
+
+_PSTAT_LOCK = threading.Lock()
+
+
+def _pstat_path():
+    return os.path.join(DATA_DIR, "page_stats.json")
+
+
+def page_stats_load():
+    try:
+        return json.load(open(_pstat_path(), encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def page_stats_set(name, **kw):
+    """Page ka data (followers / reach / posts / monetization / status). Key = page ka naam."""
+    if not name:
+        return
+    with _PSTAT_LOCK:
+        d = page_stats_load()
+        cur = d.setdefault(name, {})
+        cur.update({k: v for k, v in kw.items() if v not in (None, "")})
+        cur["updated"] = time.strftime("%Y-%m-%d")
+        json.dump(d, open(_pstat_path(), "w", encoding="utf-8"))
+
+
+def short_num(n):
+    try:
+        n = float(n)
+    except Exception:
+        return str(n or "")
+    for div, suf in ((1e6, "M"), (1e3, "K")):
+        if n >= div:
+            v = n / div
+            return (f"{v:.1f}".rstrip("0").rstrip(".")) + suf
+    return str(int(n))
+
+
+def short_status(flags_text):
+    """Lamba status -> chhota: 'Good' ya asal masla (jaise 'Recommendation suspended')."""
+    t = (flags_text or "").lower()
+    if not t or t.startswith("ok") or "good" in t:
+        return "Good"
+    if "not recommended" in t or "recommend" in t:
+        return "Recommendation suspended"
+    for k, lab in (("verify", "Verify required"), ("restricted", "Restricted"), ("copyright", "Copyright issue"),
+                   ("violat", "Violation"), ("flagged", "Flagged"), ("unpublished", "Unpublished"),
+                   ("at risk", "At risk"), ("not eligible", "Not eligible")):
+        if k in t:
+            return lab
+    return "Unknown" if "unknown" in t else flags_text[:40]
+
+
+def short_monet(money_text):
+    """Sirf 'Stars setup' / 'CM setup' / 'Unlock CM' (jo mile)."""
+    t = (money_text or "").lower()
+    out = []
+    if "star" in t:
+        out.append("Stars setup")
+    if "content monetization" in t or "in-stream" in t or "reels ads" in t or " cm " in f" {t} ":
+        out.append("Unlock CM" if ("unlock" in t or "not yet" in t or "requirement" in t) else "CM setup")
+    return ", ".join(out)
+
+
+def api_page_stats(pid, page):
+    """API se followers / reach (28 din) / posts — Page Manager ke liye."""
+    tok = page.get("token")
+    if not tok:
+        return {}
+    out = {}
+    try:
+        j = graph_get(pid, tok, fields="followers_count,fan_count")
+        out["followers"] = j.get("followers_count") or j.get("fan_count") or 0
+    except Exception:
+        pass
+    try:
+        j = graph_get(f"{pid}/insights", tok, metric="page_impressions_unique", period="days_28")
+        vals = ((j.get("data") or [{}])[0].get("values") or [])
+        if vals:
+            out["reach"] = vals[-1].get("value", 0)
+    except Exception:
+        pass
+    try:
+        j = graph_get(f"{pid}/published_posts", tok, summary="total_count", limit=1)
+        out["posts"] = (j.get("summary") or {}).get("total_count")
+    except Exception:
+        pass
+    if out:
+        page_stats_set(page.get("name", pid), page_id=pid, owner=page.get("owner", ""),
+                       **{k: v for k, v in out.items() if v is not None})
+    return out
+
+
 def add_page_history(page_name, video, status, issue=""):
     d = _load(PAGE_HISTORY_FILE, {})
     d.setdefault(page_name.strip(), []).append(
@@ -4314,6 +4635,9 @@ class Automation:
                 status = f"{status} | {mon}"
                 report[name] = {"time": time.strftime("%Y-%m-%d %H:%M"), "status": status,
                                 "monetization": money, "copyright_removed": removed}
+                if not tgt.get("_profile"):
+                    page_stats_set(name, status=short_status(", ".join(flags) if flags else ("OK" if ok_words else "Unknown")),
+                                   monetization=short_monet(money), acc_id=acc["id"])
                 self.log(T(f"    → {name}: {status}" + (f" | removed {removed} copyright item(s)" if removed else ""),
                            f"    → {name}: {status}" + (f" | {removed} copyright item delete" if removed else "")))
                 if money:
@@ -5733,11 +6057,11 @@ def api_update_page(pid, **fields):
         api_save(d)
 
 
-def api_add_history(pid, name, kind, file, ok, info):
+def api_add_history(pid, name, kind, file, ok, info, prog=""):
     with _API_LOCK:
         d = api_load()
         d["history"].insert(0, {"time": time.strftime("%Y-%m-%d %H:%M"), "page_id": pid, "page": name,
-                                "kind": kind, "file": file, "ok": bool(ok), "info": str(info)[:300]})
+                                "kind": kind, "file": file, "ok": bool(ok), "info": str(info)[:300], "prog": prog})
         d["history"] = d["history"][:300]
         api_save(d)
 
@@ -5896,9 +6220,8 @@ def api_caption_for(page, file_path):
     return cap
 
 
-def api_next_file(page):
-    """Rotation ke hisaab se agli file jo is page par pehle post nahi hui."""
-    import random as _r
+def api_fresh_files(page):
+    """Is page ke folders ki wo files jo abhi post nahi huin (captions.txt ki tarteeb = nayi pehle)."""
     kind = page.get("kind", "reel")
     files = []
     fos = list(page.get("folders", []))
@@ -5906,9 +6229,20 @@ def api_next_file(page):
     if pfo and pfo not in fos:
         fos.append(pfo)
     for fo in fos:
-        files += list_media_in_folder(fo, "photo" if kind == "photo" else "video")
+        fl = list_media_in_folder(fo, "photo" if kind == "photo" else "video")
+        order = list(captions_load(fo).keys())
+        if order:
+            pos = {n: i for i, n in enumerate(order)}
+            fl.sort(key=lambda p: (pos.get(os.path.basename(p), 10 ** 6), os.path.basename(p)))
+        files += fl
     key = "API:" + page["id"]
-    fresh = [f for f in files if not is_uploaded(key, file_hash(f) or f)]
+    return [f for f in files if not is_uploaded(key, file_hash(f) or f)]
+
+
+def api_next_file(page):
+    """Rotation ke hisaab se agli file jo is page par pehle post nahi hui."""
+    import random as _r
+    fresh = api_fresh_files(page)
     if not fresh:
         return None
     if page.get("rotation") == "random":
@@ -5918,7 +6252,7 @@ def api_next_file(page):
     return fresh[0]
 
 
-def api_run_page(pid, log=print, file_path=None):
+def api_run_page(pid, log=print, file_path=None, prog=""):
     page = dict(api_load()["pages"].get(pid) or {})
     if not page:
         return False
@@ -5930,8 +6264,15 @@ def api_run_page(pid, log=print, file_path=None):
             log(T(f"[API] {page.get('name')}: no new file in folders.",
                   f"[API] {page.get('name')}: folders mein koi nayi file nahi."))
             api_update_page(pid, status="No new file")
+            post_log_add(page.get("name"), False, prog, 0, T("No video left in folder", "Folder mein video nahi bachi"),
+                         page.get("owner", ""), "API")
             return False
     cap = api_caption_for(page, file_path)
+    prog_ok = prog
+    try:      # prog = "pehle se ho chuki|kul" -> kamyabi par +1
+        a_, b_ = prog.split("|"); prog_ok = f"{int(a_) + 1}|{b_}"
+    except Exception:
+        pass
     log(T(f"[API] {page.get('name')}: posting {kind} {os.path.basename(file_path or '')}...",
           f"[API] {page.get('name')}: {kind} post ho rahi hai {os.path.basename(file_path or '')}..."))
     api_update_page(pid, status="Posting...")
@@ -5939,8 +6280,13 @@ def api_run_page(pid, log=print, file_path=None):
         rid = api_publish(page, file_path, cap, kind)
         if file_path:
             mark_uploaded("API:" + pid, file_hash(file_path) or file_path)
-        api_add_history(pid, page.get("name"), kind, file_path or "", True, rid)
+        api_add_history(pid, page.get("name"), kind, file_path or "", True, rid, prog_ok)
         api_update_page(pid, status="Posted " + time.strftime("%H:%M"))
+        try:
+            _left = len(api_fresh_files(page))
+        except Exception:
+            _left = ""
+        post_log_add(page.get("name"), True, prog_ok, _left, "", page.get("owner", ""), "API")
         log(T(f"[API] {page.get('name')}: done ✔ ({rid})", f"[API] {page.get('name')}: ho gaya ✔ ({rid})"))
         if file_path and page.get("delete_after"):
             try:
@@ -5950,8 +6296,9 @@ def api_run_page(pid, log=print, file_path=None):
                 pass
         return True
     except Exception as e:
-        api_add_history(pid, page.get("name"), kind, file_path or "", False, e)
+        api_add_history(pid, page.get("name"), kind, file_path or "", False, e, prog)
         api_update_page(pid, status="Error")
+        post_log_add(page.get("name"), False, prog, "", e, page.get("owner", ""), "API")
         log(T(f"[API] {page.get('name')}: FAILED — {e}", f"[API] {page.get('name')}: FAIL — {e}"))
         return False
 
@@ -5995,6 +6342,8 @@ def api_scheduler_loop(log, stop_event):
     busy = set()
     last_watch = 0
     while not stop_event.is_set():
+        if not license_ok():
+            time.sleep(30); continue
         if time.time() - last_watch > 24 * 3600:
             last_watch = time.time()
             try:
@@ -6072,6 +6421,7 @@ class ApiPagesMixin:
         ttk.Button(cr, text=T("CONNECT ticked IDs", "Ticked IDs JODO"), style="Accent.TButton",
                    command=self._api_connect_ids).pack(side="left", padx=6)
         ttk.Button(cr, text="Export", command=self._api_export_app).pack(side="left", padx=2)
+        ttk.Button(cr, text="Pages", style="Green.TButton", command=self._page_manager).pack(side="right", padx=6)
         ttk.Button(cr, text="Import", command=self._api_import_app).pack(side="left", padx=2)
         ttk.Label(con, text=T("Tick IDs in Accounts (✔), then press CONNECT. For each ID the bot: adds it as Tester in your app → "
                               "accepts the invite → presses Continue/Allow → saves a 60-day token → brings its pages here.\n"
@@ -6147,8 +6497,9 @@ class ApiPagesMixin:
 
         hist = ttk.LabelFrame(left, text=T("PUBLISHING TASKS / RECOVERY (last 300)", "PUBLISHING TASKS / RECOVERY (aakhri 300)"))
         hist.pack(fill="both", expand=True, padx=4, pady=4)
-        self.api_hist = ttk.Treeview(hist, columns=("time", "page", "kind", "file", "res"), show="headings", height=4)
-        for c, t, w in (("time", "Time", 130), ("page", "Page", 150), ("kind", "Type", 50), ("file", "File", 170), ("res", "Result", 300)):
+        self.api_hist = ttk.Treeview(hist, columns=("time", "page", "kind", "posted", "file", "res"), show="headings", height=4)
+        for c, t, w in (("time", "Time", 130), ("page", "Page", 150), ("kind", "Type", 50), ("posted", "Posted", 70),
+                        ("file", "File", 170), ("res", "Result", 300)):
             self.api_hist.heading(c, text=t); self.api_hist.column(c, width=w, anchor="w")
         self.api_hist.pack(fill="both", expand=True, padx=4, pady=4)
         hb = ttk.Frame(hist); hb.pack(fill="x", padx=4, pady=2)
@@ -6187,7 +6538,7 @@ class ApiPagesMixin:
         self.api_hist.delete(*self.api_hist.get_children())
         for i, h in enumerate(d["history"]):
             self.api_hist.insert("", "end", iid=str(i), values=(
-                h["time"], h["page"], h["kind"], os.path.basename(h["file"]),
+                h["time"], h["page"], h["kind"], h.get("prog", ""), os.path.basename(h["file"]),
                 ("✔ " if h["ok"] else "✖ ") + h["info"]))
 
     def _api_fetch(self):
@@ -6287,8 +6638,10 @@ class ApiPagesMixin:
               f"[API] ABHI POST: {len(pids)} page × {n} video, gap {gap}s."))
 
         def one_page(pid):
+            done = 0
             for k in range(n):
-                ok = api_run_page(pid, log)
+                ok = api_run_page(pid, log, prog=f"{done}|{n}")
+                done += 1 if ok else 0
                 self.after(0, self._api_refresh)
                 if not ok and api_load()["pages"].get(pid, {}).get("status") == "No new file":
                     break
@@ -6498,6 +6851,8 @@ def apply_dark_theme(root, style):
               foreground=[("disabled", P["muted"])])
     style.configure("Accent.TButton", background=P["accent2"], foreground="#ffffff")
     style.map("Accent.TButton", background=[("active", P["accent"])])
+    style.configure("Green.TButton", background="#16803c", foreground="#ffffff")
+    style.map("Green.TButton", background=[("active", "#1fa34f")])
     for w in ("TCheckbutton", "TRadiobutton"):
         style.configure(w, background=P["bg"], foreground=P["text"], font=F, indicatorcolor=P["field"],
                         indicatorbackground=P["field"])
@@ -6528,7 +6883,8 @@ NAV = [("WORKSPACE", [("Dashboard", "Dashboard", "▦"), ("Accounts", "Accounts"
        ("AUTOMATION", [("Sources", "Content Sources", "⬇"), ("Post", "Posting (browser)", "⚡"), ("API", "API Pages", "☁"),
                        ("Interact", "Active & Groups", "♥"), ("Schedule", "Schedule", "⏱")]),
        # LDPlayer (mobile) abhi chhupa hai — code mojood, zaroorat par wapas: ("LDPlayer", "LDPlayer (mobile)", "📱")
-       ("SYSTEM", [("Logs", "Logs", "≡"), ("Settings", "System Settings", "⚙"), ("Guide", "Guide", "?")])]
+       ("SYSTEM", [("Logs", "Logs", "≡"), ("Settings", "System Settings", "⚙"), ("License", "License", "🔑"),
+                   ("Guide", "Guide", "?")])]
 
 WG_HELP = """SURFSHARK — different IP for every browser (one time setup):
 1. Log in at my.surfshark.com → VPN → Manual setup → Desktop or mobile → WireGuard.
@@ -6907,22 +7263,241 @@ class ProUIMixin:
     # ---------- Logs ----------
     def _build_logs_page(self):
         f = self.pages["Logs"]
-        nb = ttk.Notebook(f); nb.pack(fill="both", expand=True, padx=20, pady=8)
-        self.lg_posts = ttk.Treeview(nb, columns=("t", "r", "w", "d"), show="headings")
-        for c, t, w in (("t", "Time", 160), ("r", "Result", 90), ("w", "What", 220), ("d", "Where", 500)):
-            self.lg_posts.heading(c, text=t); self.lg_posts.column(c, width=w, anchor="w")
-        nb.add(self.lg_posts, text="  Post Logs  ")
+        nb = ttk.Notebook(f); nb.pack(fill="both", expand=True, padx=12, pady=6)
+        lv = ttk.Frame(nb)
+        nb.add(lv, text="  Logs Viewer  ")
+        tb = ttk.Frame(lv); tb.pack(fill="x", padx=4, pady=4)
+        self.lg_q = tk.StringVar()
+        ttk.Entry(tb, textvariable=self.lg_q, width=28).pack(side="left")
+        ttk.Label(tb, text=T(" ← search", " ← search")).pack(side="left")
+        self.lg_q.trace_add("write", lambda *_: self._logs_refresh())
+        self.lg_day = tk.StringVar(value="All days")
+        self.lg_day_cb = ttk.Combobox(tb, textvariable=self.lg_day, width=14, state="readonly")
+        self.lg_day_cb.pack(side="left", padx=6)
+        self.lg_day_cb.bind("<<ComboboxSelected>>", lambda e: self._logs_refresh())
+        self._lg_err_top = False
+        ttk.Button(tb, text=T("Errors ↑↓", "Errors ↑↓"), command=self._logs_toggle_err).pack(side="left", padx=4)
+        ttk.Button(tb, text=T("Refresh", "Refresh"), command=self._logs_refresh).pack(side="left", padx=4)
+        ttk.Button(tb, text=T("Clear log", "Log saaf"), command=self._logs_clear).pack(side="left", padx=4)
+        ttk.Button(tb, text="Pages", style="Green.TButton", command=self._page_manager).pack(side="right")
+        cols = (("no", "No.", 50), ("t", "Time", 150), ("acc", "ID", 50), ("page", "Page", 200), ("ip", "IP", 110),
+                ("st", "✔/✘", 50), ("posted", "Posted", 70), ("files", "Files", 60), ("mon", "Monetization", 140),
+                ("reach", "Reach", 90), ("fol", "Followers", 90), ("pst", "Page status", 190), ("err", "Error", 260))
+        tf = ttk.Frame(lv); tf.pack(fill="both", expand=True, padx=4)
+        self.lg_posts = ttk.Treeview(tf, columns=[c for c, _, _ in cols], show="headings")
+        for c, t, w in cols:
+            self.lg_posts.heading(c, text=t)
+            self.lg_posts.column(c, width=w, minwidth=40, anchor=("center" if c in ("no", "acc", "st", "posted", "files") else "w"),
+                                 stretch=c in ("page", "err"))
+        ys = ttk.Scrollbar(tf, orient="vertical", command=self.lg_posts.yview)
+        xs = ttk.Scrollbar(tf, orient="horizontal", command=self.lg_posts.xview)
+        self.lg_posts.configure(yscrollcommand=ys.set, xscrollcommand=xs.set)
+        self.lg_posts.grid(row=0, column=0, sticky="nsew"); ys.grid(row=0, column=1, sticky="ns"); xs.grid(row=1, column=0, sticky="ew")
+        tf.grid_rowconfigure(0, weight=1); tf.grid_columnconfigure(0, weight=1)
+        self.lg_posts.tag_configure("mon", background="#0f7a3a", foreground="white")
+        self.lg_posts.tag_configure("issue", background="#7a6a00", foreground="white")
+        self.lg_posts.tag_configure("fail", foreground="#ff8080")
+        self.lg_posts.bind("<Double-1>", lambda e: self._page_detail(self.lg_posts.set(self.lg_posts.identify_row(e.y), "page"))
+                           if self.lg_posts.identify_row(e.y) else None)
         self.lg_act = tk.Text(nb, font=("Consolas", 10), relief="flat")
         nb.add(self.lg_act, text="  Activity Log  ")
-        b = ttk.Frame(f); b.pack(fill="x", padx=20, pady=(0, 6))
-        ttk.Button(b, text=T("Refresh", "Refresh"), command=self._logs_refresh).pack(side="left")
+
+    def _logs_toggle_err(self):
+        self._lg_err_top = not self._lg_err_top
+        self._logs_refresh()
+
+    def _logs_clear(self):
+        if messagebox.askyesno("Logs", T("Clear the Logs Viewer list?", "Logs Viewer ki list saaf karein?")):
+            with _PLOG_LOCK:
+                json.dump([], open(_plog_path(), "w", encoding="utf-8"))
+            self._logs_refresh()
 
     def _logs_refresh(self):
+        lst = post_log_load()
+        days = sorted({e["t"][:10] for e in lst}, reverse=True)
+        try:
+            self.lg_day_cb.config(values=["All days"] + days)
+        except Exception:
+            pass
+        day = self.lg_day.get() if hasattr(self, "lg_day") else "All days"
+        q = (self.lg_q.get() if hasattr(self, "lg_q") else "").strip().lower()
+        stats = page_stats_load()
+        rows = []
+        for e in lst:
+            if day not in ("", "All days") and not e["t"].startswith(day):
+                continue
+            ps = stats.get(e.get("page", ""), {})
+            vals = [e["t"], e.get("acc", ""), e.get("page", ""), e.get("ip", ""), "✔" if e.get("ok") else "✘",
+                    e.get("posted", ""), e.get("files", ""), ps.get("monetization", ""),
+                    short_num(ps["reach"]) if ps.get("reach") not in (None, "") else "",
+                    short_num(ps["followers"]) if ps.get("followers") not in (None, "") else "",
+                    ps.get("status", ""), e.get("err", "")]
+            if q and q not in " ".join(str(v) for v in vals).lower():
+                continue
+            rows.append((e, ps, vals))
+        if self._lg_err_top:
+            rows.sort(key=lambda r: 0 if (not r[0].get("ok") or (r[1].get("status") not in (None, "", "Good"))) else 1)
+        else:
+            rows.sort(key=lambda r: 1 if (not r[0].get("ok") or (r[1].get("status") not in (None, "", "Good"))) else 0)
         self.lg_posts.delete(*self.lg_posts.get_children())
-        for t, ok, title, sub in self._all_post_events()[:500]:
-            self.lg_posts.insert("", "end", values=(t, "✔ OK" if ok else "✖ Failed", title, sub))
+        for i, (e, ps, vals) in enumerate(rows[:1500], 1):
+            tag = ()
+            if not e.get("ok"):
+                tag = ("fail",)
+            elif ps.get("status") and ps.get("status") not in ("Good", "Unknown"):
+                tag = ("issue",)
+            elif ps.get("monetization"):
+                tag = ("mon",)
+            self.lg_posts.insert("", "end", values=[i] + vals, tags=tag)
         self.lg_act.delete("1.0", "end")
         self.lg_act.insert("end", "\n".join(self.log_buffer[-300:]))
+
+    # ---------- PAGE MANAGER (Bob Prime jaisa) ----------
+    def _pm_rows(self):
+        import re as _re
+        stats = page_stats_load()
+        rows, seen = [], set()
+        accs = load_accounts()
+        api_pages = api_load().get("pages", {})
+        owner_of = {}
+        for pid, p in api_pages.items():
+            owner_of[p.get("name", "")] = (pid, p.get("owner", ""))
+        for i, a in enumerate(accs, 1):
+            for p in a.get("pages") or []:
+                nm = p.get("name", "")
+                if not nm or nm in seen:
+                    continue
+                seen.add(nm)
+                m = _re.search(r"id=(\d+)", p.get("url", ""))
+                pid = (stats.get(nm, {}).get("page_id") or (m.group(1) if m else "") or owner_of.get(nm, ("", ""))[0])
+                rows.append({"no": i, "acc_id": a["id"], "name": nm, "pid": pid, "group": a.get("group", ""),
+                             "st": stats.get(nm, {})})
+        for pid, p in api_pages.items():
+            nm = p.get("name", "")
+            if not nm or nm in seen:
+                continue
+            seen.add(nm)
+            ow = p.get("owner", "")
+            no = next((i for i, a in enumerate(accs, 1) if a["id"] == ow), "")
+            grp = next((a.get("group", "") for a in accs if a["id"] == ow), "")
+            rows.append({"no": no, "acc_id": ow, "name": nm, "pid": pid, "group": grp, "st": stats.get(nm, {})})
+        return rows
+
+    def _page_manager(self):
+        w = tk.Toplevel(self); w.title("Page Manager"); w.configure(bg=PAL["bg"]); w.transient(self)
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        ww, wh = min(1500, int(sw * 0.85)), min(800, int(sh * 0.85))
+        w.geometry(f"{ww}x{wh}+{max(0, (sw - ww) // 2)}+{max(0, (sh - wh) // 4)}")
+        hdr = tk.Frame(w, bg="#0d2a4f"); hdr.pack(fill="x")
+        tk.Label(hdr, text="  Page Manager", bg="#0d2a4f", fg="#ffd34d", font=("Segoe UI", 16, "bold")).pack(side="left", pady=8)
+        tb = ttk.Frame(w); tb.pack(fill="x", padx=8, pady=6)
+        sort_v = tk.StringVar(value="Sort by ID"); grp_v = tk.StringVar(value="All Groups"); q_v = tk.StringVar()
+        ttk.Combobox(tb, textvariable=sort_v, state="readonly", width=16,
+                     values=["Sort by ID", "Sort by Name", "Sort by Followers", "Sort by Reach", "Sort by Posts"]).pack(side="left")
+        groups = sorted({a.get("group", "") for a in load_accounts() if a.get("group")})
+        ttk.Combobox(tb, textvariable=grp_v, state="readonly", width=16, values=["All Groups"] + groups).pack(side="left", padx=6)
+        ttk.Entry(tb, textvariable=q_v, width=24).pack(side="left", padx=6)
+        ttk.Label(tb, text="← search").pack(side="left")
+        cols = (("no", "ID", 50), ("name", "Page Name", 230), ("pid", "Page ID", 160), ("fol", "Followers", 90),
+                ("mon", "Monetization", 150), ("reach", "Reach", 100), ("st", "Status", 200), ("upd", "Last Update", 110),
+                ("grp", "Group", 110), ("posts", "Posts", 70))
+        tf = ttk.Frame(w); tf.pack(fill="both", expand=True, padx=8, pady=4)
+        tv = ttk.Treeview(tf, columns=[c for c, _, _ in cols], show="headings", selectmode="extended")
+        for c, t, wd in cols:
+            tv.heading(c, text=t)
+            tv.column(c, width=wd, minwidth=40, anchor=("center" if c in ("no", "fol", "reach", "posts", "upd") else "w"),
+                      stretch=c in ("name", "st"))
+        ys = ttk.Scrollbar(tf, orient="vertical", command=tv.yview); tv.configure(yscrollcommand=ys.set)
+        tv.pack(side="left", fill="both", expand=True); ys.pack(side="right", fill="y")
+        tv.tag_configure("mon", background="#0f7a3a", foreground="white")
+        tv.tag_configure("issue", background="#7a6a00", foreground="white")
+        info = ttk.Label(w, text="", style="Muted.TLabel"); info.pack(anchor="w", padx=10)
+
+        def num(v):
+            try:
+                return float(v)
+            except Exception:
+                return -1
+
+        def draw(*_):
+            rows = self._pm_rows()
+            if grp_v.get() not in ("", "All Groups"):
+                rows = [r for r in rows if r["group"] == grp_v.get()]
+            q = q_v.get().strip().lower()
+            if q:
+                rows = [r for r in rows if q in (r["name"] + " " + str(r["pid"])).lower()]
+            sk = sort_v.get()
+            if sk == "Sort by Name":
+                rows.sort(key=lambda r: r["name"].lower())
+            elif sk == "Sort by Followers":
+                rows.sort(key=lambda r: -num(r["st"].get("followers")))
+            elif sk == "Sort by Reach":
+                rows.sort(key=lambda r: -num(r["st"].get("reach")))
+            elif sk == "Sort by Posts":
+                rows.sort(key=lambda r: -num(r["st"].get("posts")))
+            else:
+                rows.sort(key=lambda r: (r["no"] if isinstance(r["no"], int) else 10 ** 6, r["name"].lower()))
+            tv.delete(*tv.get_children())
+            for k, r in enumerate(rows):
+                st = r["st"]
+                tag = ("issue",) if st.get("status") not in (None, "", "Good", "Unknown") else (("mon",) if st.get("monetization") else ())
+                tv.insert("", "end", iid=f"r{k}", tags=tag, values=(
+                    r["no"], r["name"], r["pid"],
+                    short_num(st["followers"]) if st.get("followers") not in (None, "") else "",
+                    st.get("monetization", ""),
+                    f"{int(st['reach']):,}" if str(st.get("reach", "")).isdigit() else st.get("reach", ""),
+                    st.get("status", ""), st.get("updated", ""), r["group"],
+                    st.get("posts", "") if st.get("posts") is not None else ""))
+            tv._rows = rows
+            info.config(text=T(f"{len(rows)} page(s).  Followers / Reach / Posts come from the API.  "
+                               f"Monetization + Status: tick IDs and press 'Check status (browser)'.",
+                               f"{len(rows)} page.  Followers / Reach / Posts API se.  "
+                               f"Monetization + Status: 'Check status (browser)' dabayein."))
+        for v in (sort_v, grp_v, q_v):
+            v.trace_add("write", draw)
+
+        def refresh_api():
+            pages = api_load().get("pages", {})
+            if not pages:
+                messagebox.showinfo("Pages", T("No API pages yet (API Pages → Fetch / CONNECT).",
+                                               "Abhi koi API page nahi (API Pages → Fetch / CONNECT)."), parent=w)
+                return
+            self.log_q.put(T(f"[Pages] Updating {len(pages)} page(s) from API...", f"[Pages] {len(pages)} page API se update..."))
+
+            def work():
+                for pid, p in pages.items():
+                    p = dict(p); p["id"] = pid
+                    api_page_stats(pid, p)
+                self.log_q.put(T("[Pages] Updated.", "[Pages] Update ho gaye."))
+                try:
+                    w.after(0, draw)
+                except Exception:
+                    pass
+            threading.Thread(target=work, daemon=True).start()
+
+        def check_browser():
+            sel = [tv._rows[int(i[1:])] for i in tv.selection()] if getattr(tv, "_rows", None) else []
+            ids = list(dict.fromkeys(r["acc_id"] for r in sel if r.get("acc_id")))
+            if not ids:
+                messagebox.showinfo("Pages", T("Select page rows (Ctrl+click), then press this button.",
+                                               "Page rows chunein (Ctrl+click), phir ye button dabayein."), parent=w)
+                return
+            accs = [a for a in load_accounts() if a["id"] in ids]
+            self._status_selected(False, accs)
+        ttk.Button(tb, text=T("⟳ Refresh (API)", "⟳ Refresh (API)"), command=refresh_api).pack(side="right", padx=4)
+        ttk.Button(tb, text=T("Check status (browser)", "Status check (browser)"), command=check_browser).pack(side="right", padx=4)
+        tv.bind("<Double-1>", lambda e: (lambda r: r and self._page_detail(tv.set(r, "name")))(tv.identify_row(e.y)))
+        draw()
+
+    def _page_detail(self, name):
+        if not name:
+            return
+        st = page_stats_load().get(name, {})
+        lines = [f"{k}: {v}" for k, v in st.items()]
+        hist = [e for e in post_log_load() if e.get("page") == name][:15]
+        lines += ["", T("Last posts:", "Aakhri posts:")] + [
+            f"{e['t']}  {'✔' if e.get('ok') else '✘'}  {e.get('posted', '')}  {e.get('err', '')}" for e in hist]
+        messagebox.showinfo(name, "\n".join(lines) or name)
 
 
 # ============================================================
@@ -7576,7 +8151,7 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         self.container.pack(fill="both", expand=True)
         self.pages = {}
         for name in ("Dashboard", "Accounts", "Proxy", "Sources", "Post", "API", "Interact", "LDPlayer", "Schedule",
-                     "Logs", "Settings", "Guide"):
+                     "Logs", "Settings", "License", "Guide"):
             fr = ttk.Frame(self.container)
             fr.place(relx=0, rely=0, relwidth=1, relheight=1)
             self.pages[name] = fr
@@ -7592,8 +8167,10 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         self._build_schedule_page()
         self._build_settings_page()
         self._build_guide_page()
+        self._build_license_page()
         self._build_logbar()
         self._show("Dashboard")
+        self.after(400, self._license_gate)
         self.after(60 * 1000, self._auto_update_tick)      # khud update (default ON)
         self.after(300, lambda: self.state("zoomed") if os.name == "nt" else None)   # hamesha poori screen
         self.bind_all("<Control-z>", lambda e: self._undo_delete())
@@ -7727,6 +8304,7 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         ttk.Button(lb, text=T("LOGIN selected IDs", "LOGIN selected IDs"), command=self._login_selected).pack(side="left")
         ttk.Button(lb, text="STOP", command=self._stop_all).pack(side="left", padx=4)
         self._build_ipf_controls(lb)
+        ttk.Button(lb, text="Pages", style="Green.TButton", command=self._page_manager).pack(side="left", padx=(8, 0))
         lm = ttk.Frame(lg); lm.pack(fill="x", padx=8, pady=3)
         ttk.Button(lm, text=T("Check status + monetization", "Status + monetization check"),
                    command=lambda: self._status_selected(False)).pack(side="left")
@@ -7744,11 +8322,10 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         self.a_name = self._row(form, T("Name:", "Name:"))
         self.a_email = self._row(form, T("Email / Phone:", "Email / Phone:"))
         self.a_pass = self._row(form, T("Password:", "Password:"), show=None)
-        self.a_page = self._row(form, T("Page name (optional):", "Page ka naam (optional):"))
-        self.a_ix = self._row(form, T("ixBrowser Profile (name/ID):", "ixBrowser Profile (naam/ID):"))
+        # Page name / ixBrowser / LDPlayer khaane hata diye (purana data mehfooz — sirf nazar nahi aate)
+        self.a_page = tk.StringVar(); self.a_ix = tk.StringVar(); self.a_ld = tk.StringVar()
         self.a_proxy = self._row(form, T("Proxy (optional):", "Proxy (optional):"))
         self.a_twofa = self._row(form, T("2FA secret key (optional):", "2FA secret key (optional):"))
-        self.a_ld = self._row(form, T("LDPlayer index (emulator, optional):", "LDPlayer index (emulator, optional):"))
         ttk.Label(form, text=T("— filled automatically by the bot on login / Active —",
                                "— ye bot login / Active par khud bharta hai —"), style="Muted.TLabel").pack(anchor="w", padx=8, pady=(6, 0))
         self.a_uid = self._auto_row(form, "UID:")
@@ -7769,24 +8346,16 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         ttk.Entry(gr_, textvariable=self.a_gender, width=26, state="readonly").pack(side="left", fill="x", expand=True)
         ttk.Label(gr_, text=" auto", style="Muted.TLabel").pack(side="left")
 
-        fr = ttk.Frame(form); fr.pack(fill="x", padx=8, pady=3)
-        ttk.Label(fr, text=T("Videos folder:", "Videos folder:"), width=18).pack(side="left")
+        # Videos folder / Hashtags hata diye: videos page ke folder (Content Sources) se, caption + hashtags video ke saath
         self.a_folder = tk.StringVar()
-        ttk.Entry(fr, textvariable=self.a_folder, width=20).pack(side="left", fill="x", expand=True)
-        ttk.Button(fr, text="...", width=3, command=self._pick_account_folder).pack(side="left")
-
-        ttk.Label(form, text=T("Videos in folder:", "Folder ki videos:")).pack(anchor="w", padx=8)
-        self.a_video_list = tk.Listbox(form, height=6, width=42)
-        self.a_video_list.pack(fill="x", padx=8, pady=2)
+        self.a_video_list = tk.Listbox(form, height=1, width=1)        # chhupa (pack nahi)
 
         dr = ttk.Frame(form); dr.pack(fill="x", padx=8, pady=3)
         ttk.Label(dr, text=T("DAILY max videos for this page (0=unlimited):", "Is page par DAILY max videos (0=unlimited):")).pack(side="left")
         self.a_daily = tk.StringVar(value="0")
         tk.Spinbox(dr, from_=0, to=1000, textvariable=self.a_daily, width=6).pack(side="left", padx=4)
 
-        ttk.Label(form, text=T("Hashtags for this page:", "Is page ke hashtags:")).pack(anchor="w", padx=8)
-        self.a_hash = tk.Text(form, height=4, width=42)
-        self.a_hash.pack(fill="x", padx=8, pady=2)
+        self.a_hash = tk.Text(form, height=1, width=1)                 # chhupa (pack nahi)
 
         btns = ttk.Frame(form); btns.pack(fill="x", padx=8, pady=6)
         self.a_save_btn = ttk.Button(btns, text=T("Save ID", "Save ID"), style="Accent.TButton", command=self._save_account)
@@ -7796,8 +8365,8 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         # ---- ADD ACCOUNTS (Bob Prime jaisa: format khud chuno) ----
         imf = ttk.LabelFrame(left, text=T("ADD ACCOUNTS (.txt import — choose the column order)",
                                           "ADD ACCOUNTS (.txt import — columns ki tarteeb chuno)"))
-        imf.pack(fill="x", pady=6)
-        fr1 = ttk.Frame(imf); fr1.pack(fill="x", padx=6, pady=3)
+        imf.pack(fill="x", pady=8, before=form)
+        fr1 = ttk.Frame(imf); fr1.pack(fill="x", padx=8, pady=6)
         ttk.Label(fr1, text=T("Format:", "Format:")).pack(side="left")
         saved_fmt = load_settings().get("import_fmt", ["Email", "Pass", "2FA", "Skip", "Skip"])
         self.imp_fmt = []
@@ -7805,19 +8374,19 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
             v_ = tk.StringVar(value=saved_fmt[k_] if k_ < len(saved_fmt) else "Skip")
             ttk.Combobox(fr1, textvariable=v_, values=IMPORT_SLOTS, width=6, state="readonly").pack(side="left", padx=1)
             self.imp_fmt.append(v_)
-        fr2 = ttk.Frame(imf); fr2.pack(fill="x", padx=6, pady=3)
+        fr2 = ttk.Frame(imf); fr2.pack(fill="x", padx=8, pady=6)
         self.imp_auto = tk.IntVar(value=1 if load_settings().get("import_auto", True) else 0)
         ttk.Checkbutton(fr2, text=T("Auto-detect format", "Format khud pehchano"), variable=self.imp_auto).pack(side="left")
         self.imp_profiles = tk.IntVar(value=1)
         ttk.Checkbutton(fr2, text=T("Put each ID in its own browser profile", "Har ID apne browser profile mein"),
                         variable=self.imp_profiles).pack(side="left", padx=6)
-        fr3 = ttk.Frame(imf); fr3.pack(fill="x", padx=6, pady=3)
+        fr3 = ttk.Frame(imf); fr3.pack(fill="x", padx=8, pady=6)
         ttk.Label(fr3, text=T("Group:", "Group:")).pack(side="left")
         self.imp_group = tk.StringVar()
         ttk.Entry(fr3, textvariable=self.imp_group, width=12).pack(side="left", padx=3)
         ttk.Button(fr3, text=T("Choose .txt & ADD NOW", ".txt chuno aur ADD NOW"), style="Accent.TButton",
                    command=self._import_accounts_file).pack(side="left", padx=4)
-        fr4 = ttk.Frame(imf); fr4.pack(fill="x", padx=6, pady=3)
+        fr4 = ttk.Frame(imf); fr4.pack(fill="x", padx=8, pady=6)
         ttk.Label(fr4, text=T("Browser profiles:", "Browser profiles:")).pack(side="left")
         self.prof_n = tk.StringVar(value="10")
         tk.Spinbox(fr4, from_=1, to=500, textvariable=self.prof_n, width=5).pack(side="left", padx=3)
@@ -7936,8 +8505,8 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
             self.log_q.put(T(f"{n} ixBrowser profile(s) linked.", f"{n} ixBrowser profile jur gaye."))
         ttk.Button(win, text=T("Save", "Save"), command=save).pack(pady=10)
 
-    def _status_selected(self, pro):
-        accs = self.acc_table.checked_accounts()
+    def _status_selected(self, pro, accs=None):
+        accs = accs if accs is not None else self.acc_table.checked_accounts()
         if not accs:
             messagebox.showwarning(T("Wait", "Ruko"), T("Select IDs with ✔ in the table.", "Table mein ✔ se IDs chunein."))
             return
@@ -8258,6 +8827,184 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
             finally:
                 bot.stop()
         threading.Thread(target=work, daemon=True).start()
+
+    # ---------- LICENSE ----------
+    def _license_gate(self):
+        st = license_check()
+        if st["ok"]:
+            try:
+                self._lic_refresh()
+            except Exception:
+                pass
+            self.after(3 * 3600 * 1000, self._license_recheck)
+            return
+        self.withdraw()
+        w = tk.Toplevel(self); w.title("DK Facebook Uploader — License"); w.configure(bg=PAL["bg"])
+        w.geometry("720x460"); w.protocol("WM_DELETE_WINDOW", lambda: (w.destroy(), self._quit_app()))
+        tk.Label(w, text="  🔑  License", bg="#0d2a4f", fg="#ffd34d", font=("Segoe UI", 16, "bold"),
+                 anchor="w").pack(fill="x", ipady=8)
+        ttk.Label(w, text=st["why"] or "", foreground="#ff8080").pack(anchor="w", padx=12, pady=(10, 2))
+        ttk.Label(w, text=T("1) Send this Machine ID to the owner (Danish):", "1) Ye Machine ID malik (Danish) ko bhejein:")
+                  ).pack(anchor="w", padx=12, pady=(8, 2))
+        mr = ttk.Frame(w); mr.pack(fill="x", padx=12)
+        mid = machine_id()
+        mv = tk.StringVar(value=mid)
+        ttk.Entry(mr, textvariable=mv, width=30, state="readonly", font=("Consolas", 13)).pack(side="left")
+        ttk.Button(mr, text=T("Copy", "Copy"), command=lambda: (self.clipboard_clear(), self.clipboard_append(mid))
+                   ).pack(side="left", padx=6)
+        ttk.Label(w, text=T("2) Paste the license key you receive:", "2) Jo license key mile woh yahan paste karein:")
+                  ).pack(anchor="w", padx=12, pady=(14, 2))
+        kt = tk.Text(w, height=5, font=("Consolas", 10)); kt.pack(fill="x", padx=12)
+
+        def activate():
+            key = "".join(kt.get("1.0", "end").split())
+            save_settings({"license_key": key})
+            r = license_check(force=True)
+            if r["ok"]:
+                messagebox.showinfo("License", T(f"Activated ✔ — licensed to {r['info'].get('n', '')}",
+                                                 f"Activate ho gaya ✔ — {r['info'].get('n', '')} ke naam"), parent=w)
+                w.destroy(); self.deiconify(); self._lic_refresh()
+                self.after(3 * 3600 * 1000, self._license_recheck)
+            else:
+                messagebox.showerror("License", r["why"], parent=w)
+
+        def owner_file():
+            p = filedialog.askopenfilename(parent=w, filetypes=[("Owner key", "*.key"), ("All", "*.*")])
+            if not p:
+                return
+            try:
+                owner_key_import(p); license_check(force=True)
+                w.destroy(); self.deiconify(); self._lic_refresh()
+            except Exception as e:
+                messagebox.showerror("License", str(e), parent=w)
+        br = ttk.Frame(w); br.pack(fill="x", padx=12, pady=12)
+        ttk.Button(br, text=T("ACTIVATE", "ACTIVATE"), style="Accent.TButton", command=activate).pack(side="left")
+        ttk.Button(br, text=T("I am the owner — load key file", "Main malik hoon — key file"), command=owner_file).pack(side="left", padx=8)
+        ttk.Button(br, text=T("Exit", "Band"), command=lambda: (w.destroy(), self._quit_app())).pack(side="right")
+
+    def _quit_app(self):
+        try:
+            self.stop_flag.set()
+        except Exception:
+            pass
+        try:
+            self.destroy()
+        except Exception:
+            pass
+        os._exit(0)
+
+    def _license_recheck(self):
+        r = license_check(force=True)
+        if not r["ok"]:
+            try:
+                self.stop_flag.set()
+            except Exception:
+                pass
+            messagebox.showerror("License", r["why"])
+            self._license_gate()
+            return
+        self.after(3 * 3600 * 1000, self._license_recheck)
+
+    def _build_license_page(self):
+        f = self.pages["License"]
+        self._lic_box = ttk.Frame(f); self._lic_box.pack(fill="both", expand=True, padx=16, pady=10)
+        self._lic_refresh()
+
+    def _lic_refresh(self):
+        box = getattr(self, "_lic_box", None)
+        if box is None:
+            return
+        for c in box.winfo_children():
+            c.destroy()
+        st = _LIC if _LIC["ok"] is not None else license_check()
+        if not st.get("owner"):
+            info = st.get("info") or {}
+            ttk.Label(box, text=T("This copy is licensed ✔", "Ye copy licensed hai ✔") if st.get("ok") else st.get("why", ""),
+                      font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=4)
+            ttk.Label(box, text=f"Name: {info.get('n', '')}    Expiry: {info.get('e') or 'lifetime'}    "
+                                f"Machine ID: {machine_id()}").pack(anchor="w")
+            return
+        # ---- MALIK (owner) ----
+        ttk.Label(box, text=T("OWNER — make and cancel licenses for your students",
+                              "MALIK — students ke liye license banao / cancel karo"),
+                  font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=(0, 6))
+        g = ttk.LabelFrame(box, text=T("New license", "Naya license")); g.pack(fill="x", pady=4)
+        r1 = ttk.Frame(g); r1.pack(fill="x", padx=8, pady=5)
+        ttk.Label(r1, text=T("Student name:", "Student ka naam:"), width=16).pack(side="left")
+        nm = tk.StringVar(); ttk.Entry(r1, textvariable=nm, width=24).pack(side="left")
+        ttk.Label(r1, text="  Machine ID:").pack(side="left")
+        mi = tk.StringVar(); ttk.Entry(r1, textvariable=mi, width=24, font=("Consolas", 11)).pack(side="left")
+        ttk.Label(r1, text=T("  Days (0 = lifetime):", "  Din (0 = hamesha):")).pack(side="left")
+        dv = tk.StringVar(value="0"); tk.Spinbox(r1, from_=0, to=3650, textvariable=dv, width=6).pack(side="left")
+        out = tk.Text(g, height=4, font=("Consolas", 10)); out.pack(fill="x", padx=8, pady=4)
+
+        def gen():
+            if not nm.get().strip() or len(mi.get().strip()) < 10:
+                messagebox.showwarning("License", T("Enter name and the student's Machine ID.",
+                                                    "Naam aur student ki Machine ID daalein."))
+                return
+            try:
+                days = int(dv.get() or 0)
+            except ValueError:
+                days = 0
+            key, pl = make_license(nm.get(), mi.get(), days)
+            lst = lic_issued_load()
+            lst.insert(0, {"id": pl["k"], "name": pl["n"], "machine": pl["m"], "exp": pl["e"] or "lifetime",
+                           "made": time.strftime("%Y-%m-%d"), "status": "active", "key": key})
+            lic_issued_save(lst)
+            out.delete("1.0", "end"); out.insert("1.0", key)
+            self.clipboard_clear(); self.clipboard_append(key)
+            self.log_q.put(T(f"[License] Made for {pl['n']} (copied — send it to the student).",
+                             f"[License] {pl['n']} ke liye bana (copy ho gaya — student ko bhej dein)."))
+            draw()
+        ttk.Button(g, text=T("MAKE LICENSE KEY (copies it)", "LICENSE KEY BANAO (copy ho jayegi)"), style="Accent.TButton",
+                   command=gen).pack(anchor="w", padx=8, pady=(0, 6))
+        lf = ttk.LabelFrame(box, text=T("Issued licenses", "Diye gaye licenses")); lf.pack(fill="both", expand=True, pady=6)
+        tv = ttk.Treeview(lf, columns=("id", "name", "machine", "exp", "made", "status"), show="headings", height=8)
+        for c, t, w_ in (("id", "Key ID", 90), ("name", "Student", 180), ("machine", "Machine ID", 200),
+                         ("exp", "Expiry", 100), ("made", "Made", 100), ("status", "Status", 100)):
+            tv.heading(c, text=t); tv.column(c, width=w_, anchor="w")
+        tv.pack(fill="both", expand=True, padx=6, pady=4)
+        tv.tag_configure("rev", foreground="#ff8080")
+
+        def draw():
+            tv.delete(*tv.get_children())
+            for x in lic_issued_load():
+                tv.insert("", "end", iid=x["id"], values=(x["id"], x["name"], x["machine"], x["exp"], x["made"], x["status"]),
+                          tags=(("rev",) if x["status"] != "active" else ()))
+        tr = ttk.Frame(box); tr.pack(fill="x")
+        ttk.Label(tr, text=T("GitHub token (to publish cancels):", "GitHub token (cancel bhejne ke liye):")).pack(side="left")
+        gt = tk.StringVar(value=load_settings().get("lic_gh_token", ""))
+        ttk.Entry(tr, textvariable=gt, show="•", width=34).pack(side="left", padx=4)
+
+        def set_status(new):
+            sel = list(tv.selection())
+            if not sel:
+                messagebox.showinfo("License", T("Select a license row.", "License ki row chunein."))
+                return
+            lst = lic_issued_load()
+            for x in lst:
+                if x["id"] in sel:
+                    x["status"] = new
+            lic_issued_save(lst); draw()
+            ids = [x["id"] for x in lst if x["status"] != "active"]
+            tok = gt.get().strip()
+            save_settings({"lic_gh_token": tok})
+            if not tok:
+                messagebox.showinfo("License", T("Saved here. To make it take effect on the student's PC, a GitHub token is "
+                                                 "needed (or tell Claude: 'cancel license " + ", ".join(sel) + "').",
+                                                 "Yahan save ho gaya. Student ke PC par asar ke liye GitHub token chahiye "
+                                                 "(ya Claude ko kahein: 'license cancel " + ", ".join(sel) + "')."))
+                return
+            try:
+                lic_push_revoked(ids, tok)
+                messagebox.showinfo("License", T("Done ✔ — the student's app stops within 3 hours (or on next start).",
+                                                 "Ho gaya ✔ — student ki app 3 ghante mein (ya agli dafa khulne par) band."))
+            except Exception as e:
+                messagebox.showerror("License", f"GitHub: {e}")
+        ttk.Button(tr, text=T("CANCEL selected", "Selected CANCEL"), command=lambda: set_status("cancelled")).pack(side="left", padx=6)
+        ttk.Button(tr, text=T("Re-activate selected", "Selected dobara chalu"), command=lambda: set_status("active")).pack(side="left")
+        draw()
 
     # ---------- BLOCK IP (Bob Prime jaisa) ----------
     def _build_ipf_controls(self, parent):
@@ -10086,6 +10833,7 @@ downloads and replaces itself, then restarts. No manual download needed.
                 for lp in range(1, rotation + 1):
                     if self.stop_flag.is_set():
                         break
+                    n_ok_pg = 0
                     for i, (path, h) in enumerate(todo, 1):
                         if self.stop_flag.is_set():
                             break
@@ -10107,6 +10855,8 @@ downloads and replaces itself, then restarts. No manual download needed.
                                 mark_uploaded(page, h)
                             inc_page_posted(page)
                             add_page_history(page, path, "success", "")
+                            n_ok_pg += 1
+                            post_log_add(page, True, f"{n_ok_pg}|{len(todo)}", max(0, len(todo) - i), "", account["id"], "Browser")
                             if cfg.get("delete_after") and tgt is targets[-1]:
                                 try:
                                     os.remove(path); log(T(f"[{account['name']}] deleted from device: {os.path.basename(path)}", f"[{account['name']}] device se delete: {os.path.basename(path)}"))
@@ -10118,6 +10868,8 @@ downloads and replaces itself, then restarts. No manual download needed.
                                     log(T(f"delete failed: {e}", f"delete fail: {e}"))
                         else:
                             add_page_history(page, path, "fail", bot.last_error or T("post did not happen", "post nahi hui"))
+                            post_log_add(page, False, f"{n_ok_pg}|{len(todo)}",
+                                         max(0, len(todo) - i), bot.last_error or "", account["id"], "Browser")
                             # fail / confirm nahi -> delete NAHI, page folder ke andar 'Failed' folder mein
                             if tgt is targets[-1] and os.path.exists(path):
                                 try:
