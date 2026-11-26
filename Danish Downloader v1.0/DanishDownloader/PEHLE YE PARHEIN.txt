@@ -1,0 +1,59 @@
+DANISH DOWNLOADER v1.0  —  Windows 10 / 11
+==========================================
+
+INSTALL (sirf ek baar)
+----------------------
+1. Python install karein: https://www.python.org/downloads/
+   Install karte waqt neeche "Add python.exe to PATH" par TICK zaroor lagayein.
+2. Is folder mein "1_Install (sirf pehli baar).bat" par double-click karein.
+   (yt-dlp, FFmpeg aur screen wali library khud download ho jayegi.)
+3. Software kholne ke liye: "2_Danish Downloader chalayein.bat"
+   Chahein to "4_EXE banayein" chala kar ek .exe bana lein (dist folder mein aayegi).
+
+CREATOR KAISE ADD KAREIN
+------------------------
+"+ Creator add" dabayein aur bharein:
+  • Creator ka link     – jaise https://www.tiktok.com/@danish
+  • Folder              – Facebook page wala folder (Browse). Folder ka naam koi bhi ho sakta hai,
+                          jaise Danish ki videos "Kashif" folder mein.
+  • Ek din mein videos  – jaise 3
+  • Kitne din ka stock  – jaise 15  (3 x 15 = folder mein 45 videos rahengi)
+  • Kab dobara bharein  – jaise 3   (jab 9 videos reh jayein to phir 45 tak bhar do)
+  • Pehle se kitni download ho chuki – jaise 60 (upar ki 60 chhor kar aage se)
+  • Purane links (zaroori nahi) – Link Grabber wale links paste kar dein, wo dobara nahi aayengi.
+
+YE KHUD KYA KARTA HAI
+---------------------
+  • Har kuch ghante baad (setting) har folder ginta hai. Videos kam hon to khud bhar deta hai.
+  • Sab se pehle creator ki NAYI videos, phir wahin se aage jahan pichhli baar ruka tha.
+  • Jo video ek baar download ho gayi, dobara kabhi nahi aayegi (chahe aap folder se hata dein).
+  • Quality: hamesha sab se best jo upload hui (4K ho to 4K, 1080p ho to 1080p). Low kabhi nahi.
+  • Naam: video ka asli caption, zyada se zyada 4 hashtags. Shuru mein 001 waghaira nahi.
+    Caption na ho to: "1 Kashif", "2 Kashif" (folder ke naam se).
+    Do ka naam bilkul ek jaisa ho to doosri ke aakhir mein (2).
+  • Speed: "Ek saath downloads" 4-8 rakhein; har video bhi tukron mein ek saath aati hai.
+
+BUTTONS
+-------
+  ⟳ Sab check karein       – sirf wo folder bharega jin mein videos kam hain
+  ⚡ Selected abhi bharein  – chune hue folder ko abhi target tak bhar dega (kam na hon tab bhi)
+  🔗 Links se download      – 4K Downloader ki tarah, links paste karo, sab download
+  ■ Rokein                 – sab kuch rok do
+  Software band karne par automatic check band ho jata hai. Chalta rehne dein (minimize kar dein).
+
+ZAROORI BAATEIN
+---------------
+  • Instagram: ek ek reel ka link kaam karta hai ("Links se download"). Poori profile se
+    khud list nikalna abhi yt-dlp mein Instagram ne band kar rakha hai. Login chahiye ho to
+    Cookies mein "firefox" chunein (Firefox mein Instagram login rakhein).
+    Chrome ki cookies naye Chrome mein aksar nahi chaltin — Firefox ya cookies.txt behtar hai.
+  • Facebook / Snapchat: ek ek video/spotlight link sab se behtar chalta hai.
+  • TikTok ya YouTube achanak kaam karna band kar de to "3_Update" chala dein.
+  • Quality ko upload se behtar banana (upscaling) is software mein nahi hai — wo AI tool
+    (Topaz / Real-ESRGAN) se hota hai aur acha graphics card chahiye.
+  • Sirf wahi videos lagayein jin ki ijazat ho.
+
+FILES
+-----
+  danish_data.json – aapke creators aur "kahan tak download hua" (isay delete na karein)
+  danish_log.txt   – sab kaam ka record
