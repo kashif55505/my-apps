@@ -245,6 +245,17 @@ def _run(cmd, **kw):
     return subprocess.check_call(cmd, **kw)
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+# Har table ki heading usi column ki cheez ke bilkul upar (baayen se) — sab tables mein
+_orig_tv_heading = ttk.Treeview.heading
+
+
+def _tv_heading(self, column, option=None, **kw):
+    if option is None and "text" in kw and "anchor" not in kw and column != "#0":
+        kw["anchor"] = "w"
+    return _orig_tv_heading(self, column, option, **kw)
+
+
+ttk.Treeview.heading = _tv_heading
 
 # --- .exe ke andar bundled Chromium ka raasta set karein (playwright import se PEHLE) ---
 # PyInstaller --onefile chalne par files sys._MEIPASS mein khulti hain.
@@ -1066,9 +1077,9 @@ def profiles_create(n):
     k = len(lst)
     for _ in range(max(0, int(n))):
         k += 1
-        name = f"P{k:03d}"
+        name = f"P{k:02d}"
         while name in lst:
-            k += 1; name = f"P{k:03d}"
+            k += 1; name = f"P{k:02d}"
         lst.append(name)
     save_settings({"profiles": lst})
     return lst
@@ -1615,6 +1626,22 @@ def profile_of(acc_id):
 def session_dir_for(acc_id):
     _ensure_dirs()
     prof = profile_of(acc_id)
+    if not prof:
+        # profile nahi -> khud do (table mein nazar aaye). Purana session folder sath le jao (login na tootay)
+        try:
+            profiles_auto_assign([acc_id])
+            prof = profile_of(acc_id)
+            if prof:
+                old = os.path.join(SESSIONS_DIR, "".join(c if c.isalnum() else "_" for c in acc_id))
+                new = os.path.join(SESSIONS_DIR, "".join(c if c.isalnum() else "_" for c in "profile_" + prof))
+                if os.path.isdir(old) and not os.path.exists(new):
+                    os.rename(old, new)
+                try:
+                    APP_INSTANCE.after(0, APP_INSTANCE._refresh_all_panels)
+                except Exception:
+                    pass
+        except Exception:
+            pass
     key = ("profile_" + prof) if prof else acc_id     # browser profile (Bob Prime ke LD jaisa)
     safe = "".join(c if c.isalnum() else "_" for c in key)
     path = os.path.join(SESSIONS_DIR, safe)
@@ -2314,6 +2341,12 @@ def spin(text):
     return text
 
 
+_NOT_NAMES = {"facebook", "notifications", "chats", "home", "manage profile", "edit profile", "your profile", "profile",
+              "friends", "menu", "watch", "video", "reels", "marketplace", "groups", "gaming", "see all", "create",
+              "messenger", "feeds", "pages", "news feed", "log in", "log into facebook", "welcome", "settings",
+              "settings & privacy", "account", "accounts center", "professional dashboard", "meta"}
+
+
 class Automation:
     def __init__(self, log=print, headless=False, browser_cfg=None):
         self.log = log
@@ -2912,7 +2945,7 @@ class Automation:
 
             # 4b) Captcha ke baad FB aksar wapas login form dikhata hai ("login information incorrect")
             #     -> email/password dobara bharo (2 dafa tak)
-            if relogins < 2 and time.time() - last_fill > 10 and not any(
+            if relogins < 3 and time.time() - last_fill > 10 and not any(
                     k in url for k in ("two_step", "two_factor", "checkpoint")):
                 try:
                     e_in, p_in = self._find_login_inputs()
@@ -2920,8 +2953,10 @@ class Automation:
                     if p_in and p_in.is_visible() and not self._has_captcha():
                         relogins += 1
                         last_fill = time.time()
-                        self.log(T(f"[{acc['name']}] Login form shown again — clearing browser cache/cookies and retrying fresh ({relogins}/2)...",
-                                   f"[{acc['name']}] Login form dobara aaya — browser cache/cookies saaf kar ke fresh dobara ({relogins}/2)..."))
+                        self.log(T(f"[{acc['name']}] Login form shown again — clearing browser cache/cookies and retrying fresh ({relogins}/3)...",
+                                   f"[{acc['name']}] Login form dobara aaya — browser cache/cookies saaf kar ke fresh dobara ({relogins}/3)..."))
+                        if relogins > 1:
+                            time.sleep(random.uniform(15, 30))      # thora ruk kar (Facebook ka shak kam)
                         self._clear_browser_data()
                         try:
                             self.page.goto(FB_HOME, wait_until="domcontentloaded")
@@ -3427,8 +3462,9 @@ class Automation:
                         return True
                 except Exception as e:
                     self.log(f"captcha click-solve error: {e}")
-                self.log(T("Browser captcha solve failed — trying token method...",
-                           "Browser mein captcha hal nahi hua — token tareeqa aazma rahe hain..."))
+                self.log(T("Captcha not solved this round — trying again...",
+                           "Captcha is round mein hal nahi hua — dobara koshish..."))
+                return False        # token tareeqa Facebook reject karta hai — browser mein hi dobara
         return self._solve_captcha_token()
 
     def _solve_captcha_token(self):
@@ -4210,12 +4246,18 @@ class Automation:
         upd = {}
         try:
             self._nav("me"); time.sleep(random.uniform(4, 6))
+            u0 = self._fb_uid()
+            cur = (self.page.url or "").lower()
+            if u0 and not ("/me" in cur or u0 in cur or "profile.php" in cur or
+                           self.page.query_selector("a[href*='/friends'][href*='sk=friends'], [aria-label='Edit profile']")):
+                self.page.goto(f"https://www.facebook.com/profile.php?id={u0}", wait_until="domcontentloaded")
+                time.sleep(random.uniform(4, 6))
             nm = ""
             for sel in ("[role='main'] h1", "h1"):
                 try:
                     for h1 in self.page.query_selector_all(sel):
                         t = (h1.inner_text() or "").split("\n")[0].strip()
-                        if t and len(t) < 80 and t.lower() not in ("facebook", "notifications", "chats"):
+                        if t and len(t) < 80 and t.lower() not in _NOT_NAMES:
                             nm = t; break
                 except Exception:
                     pass
@@ -4225,7 +4267,7 @@ class Automation:
                 try:      # tab title: "Kashif Iqbal | Facebook"
                     t = (self.page.title() or "").split("|")[0].strip()
                     t = _re.sub(r"^\(\d+\)\s*", "", t)
-                    if t and t.lower() != "facebook" and "@" not in t:
+                    if t and t.lower() not in _NOT_NAMES and "@" not in t:
                         nm = t
                 except Exception:
                     pass
@@ -4256,7 +4298,10 @@ class Automation:
                 upd["uid"] = uid
             for slug in ("about_contact_and_basic_info", "about_places", "about_overview"):
                 try:
-                    self.page.goto(f"https://www.facebook.com/me/{slug}", wait_until="domcontentloaded")
+                    if uid:
+                        self.page.goto(f"https://www.facebook.com/profile.php?id={uid}&sk={slug}", wait_until="domcontentloaded")
+                    else:
+                        self.page.goto(f"https://www.facebook.com/me/{slug}", wait_until="domcontentloaded")
                     time.sleep(random.uniform(3, 5))
                     lines = [l.strip() for l in self._page_text().splitlines() if l.strip()]
                 except Exception:
@@ -4265,8 +4310,10 @@ class Automation:
                     low = l.lower()
                     nxt = lines[i + 1] if i + 1 < len(lines) else ""
                     prv = lines[i - 1] if i > 0 else ""
-                    if low in ("birth date", "birthday") and prv and "dob" not in upd:
-                        upd["dob"] = prv
+                    if low in ("birth date", "birthday", "date of birth") and "dob" not in upd:
+                        v = prv if prv and not prv.lower().startswith(("basic info", "contact")) else nxt
+                        if v and _re.search(r"\d", v):
+                            upd["dob"] = v
                     elif low == "birth year" and prv:
                         upd["dob"] = (upd.get("dob", "") + " " + prv).strip()
                     elif low == "gender" and prv in ("Male", "Female", "Non-binary", "Custom"):
@@ -4285,6 +4332,16 @@ class Automation:
                 parts = [x.strip() for x in upd["city"].split(",")]
                 if len(parts) >= 2:
                     upd["country"] = parts[-1]
+            # IP location (isi browser ke IP/VPN se)
+            try:
+                if not (get_account(acc["id"]) or {}).get("ip_info"):
+                    r = self.page.request.get("http://ip-api.com/json/?fields=status,country,countryCode,regionName,city,query",
+                                              timeout=15000)
+                    jj = r.json()
+                    if jj.get("status") == "success":
+                        update_account(acc["id"], ip_info=jj)
+            except Exception:
+                pass
             if not upd.get("country"):
                 ii = (get_account(acc["id"]) or {}).get("ip_info") or {}
                 if ii.get("country"):
@@ -5678,11 +5735,9 @@ def api_caption_for(page, file_path):
     cap = ""
     mode = page.get("caption_mode", "auto")
     side = os.path.splitext(file_path)[0] + ".txt" if file_path else ""
-    if mode in ("auto", "txt") and side and os.path.isfile(side):
-        try:
-            cap = open(side, encoding="utf-8", errors="ignore").read().strip()
-        except Exception:
-            cap = ""
+    if mode in ("auto", "txt") and file_path:
+        sc = sidecar_caption(file_path)       # apni .txt ya folder ki captions.txt
+        cap = sc or ""
     if not cap and mode in ("auto", "captions_file") and page.get("captions_file") and \
             os.path.isfile(page["captions_file"]):
         try:
@@ -6561,20 +6616,72 @@ def page_media_folder(page_name):
     return ""
 
 
+CAPTIONS_FILE = "captions.txt"      # ek hi file: har line = video file naam <TAB> caption (tarteeb = post ki tarteeb)
+
+
+def captions_load(folder):
+    out = {}
+    try:
+        fp = os.path.join(folder, CAPTIONS_FILE)
+        if os.path.isfile(fp):
+            for ln in open(fp, encoding="utf-8", errors="ignore"):
+                ln = ln.rstrip("\n")
+                if "\t" in ln:
+                    f_, c_ = ln.split("\t", 1)
+                    out[f_] = c_.replace("\\n", "\n")
+    except Exception:
+        pass
+    return out
+
+
+def captions_save(folder, mp):
+    try:
+        with open(os.path.join(folder, CAPTIONS_FILE), "w", encoding="utf-8") as f:
+            for k, v in mp.items():
+                f.write(k + "\t" + (v or "").replace("\r", "").replace("\n", "\\n") + "\n")
+    except Exception:
+        pass
+
+
+def captions_add(folder, fname, cap, front=False):
+    mp = captions_load(folder)
+    mp.pop(fname, None)
+    if front:
+        mp = dict([(fname, cap)] + list(mp.items()))
+    else:
+        mp[fname] = cap
+    captions_save(folder, mp)
+
+
+def captions_remove(folder, fname):
+    mp = captions_load(folder)
+    if fname in mp:
+        cap = mp.pop(fname); captions_save(folder, mp); return cap
+    return None
+
+
 def page_files(page_name, kind):
     fo = page_media_folder(page_name)
-    return list_media_in_folder(fo, "photo" if kind == "photo" else "video") if fo else []
+    files = list_media_in_folder(fo, "photo" if kind == "photo" else "video") if fo else []
+    order = list(captions_load(fo).keys()) if fo else []
+    if order:
+        pos = {n: i for i, n in enumerate(order)}
+        files.sort(key=lambda p: (pos.get(os.path.basename(p), 10 ** 6), os.path.basename(p)))
+    return files
 
 
 def sidecar_caption(path):
-    """Video ke sath same naam ki .txt ho to wahi caption."""
+    """Caption: video ki apni .txt (purana tareeqa) ya folder ki captions.txt. None = koi record nahi."""
     try:
         side = os.path.splitext(path)[0] + ".txt"
         if os.path.isfile(side):
             return open(side, encoding="utf-8", errors="ignore").read().strip()
+        mp = captions_load(os.path.dirname(path))
+        if os.path.basename(path) in mp:
+            return mp[os.path.basename(path)]
     except Exception:
         pass
-    return ""
+    return None
 
 
 def clean_caption(text, max_tags=4):
@@ -6599,6 +6706,35 @@ def clean_page_label(name):
     if t.lower() in ("promote", "create ad", "boost", "boost post", "ad center", "see all", "posts", "create new page"):
         return ""
     return t
+
+
+def migrate_profile_names():
+    """P001 -> P01 (naam aur session folder dono)."""
+    import re as _re
+    try:
+        profs = profiles_list()
+        mp = {}
+        for p in profs:
+            m = _re.fullmatch(r"P0*(\d+)", p)
+            if m and p != f"P{int(m.group(1)):02d}":
+                mp[p] = f"P{int(m.group(1)):02d}"
+        if not mp:
+            return
+        save_settings({"profiles": [mp.get(p, p) for p in profs]})
+        accs = load_accounts()
+        for a in accs:
+            if a.get("profile") in mp:
+                a["profile"] = mp[a["profile"]]
+        save_accounts(accs)
+        for o, n in mp.items():
+            od = os.path.join(SESSIONS_DIR, "profile_" + o); nd = os.path.join(SESSIONS_DIR, "profile_" + n)
+            if os.path.isdir(od) and not os.path.exists(nd):
+                try:
+                    os.rename(od, nd)
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 
 def migrate_page_names():
@@ -6743,6 +6879,12 @@ def fetch_tiktok(src, log=print, stop=None):
             log(T(f"[Source] {page}: 'last uploaded' video not found in the list — starting from newest.",
                   f"[Source] {page}: 'last uploaded' video list mein nahi mili — sab se nayi se shuru."))
     todo = [(i, u) for i, u in ids if i not in done_set][:max_n]
+    # creator ne naye daale (pichhli sab se upar wali se upar) -> post mein sab se aage
+    prev_top = src.get("top_id", "")
+    lst_all = [i for i, _ in ids]
+    top_new = set(lst_all[:lst_all.index(prev_top)]) if prev_top in lst_all else set()
+    if lst_all:
+        src["top_id"] = lst_all[0]
     log(T(f"[Source] {page}: list ready ({len(ids)} videos, {int(time.time() - t0)}s). Downloading {len(todo)} new...",
           f"[Source] {page}: list tayyar ({len(ids)} videos, {int(time.time() - t0)}s). {len(todo)} nayi download..."))
     seq = int(src.get("seq", 0) or 0)
@@ -6763,14 +6905,20 @@ def fetch_tiktok(src, log=print, stop=None):
                 fn = cand[0] if cand else ""
             if not fn:
                 raise RuntimeError("file not saved")
-            cap = clean_caption(info.get("description") or info.get("title") or "", max_tags)
-            base = f"{seq:04d} {_safe_fname(cap)}"
-            final = os.path.join(folder, base + os.path.splitext(fn)[1])
-            if os.path.exists(final):
-                final = os.path.join(folder, f"{base} {vid}{os.path.splitext(fn)[1]}")
+            raw = info.get("description") or ""
+            if raw.strip().lower() in ("", (info.get("title") or "").strip().lower()) and not raw.strip():
+                raw = ""
+            cap = clean_caption(raw, max_tags)          # hashtags na hon to koi nahi lagenge
+            body = _safe_fname(cap) if _safe_fname(cap) != "video" else ""
+            if not body:                                  # naam hi nahi -> page ka naam
+                cap = cap or page
+                body = _safe_fname(page, 60) or "video"
+            ext = os.path.splitext(fn)[1]
+            final = os.path.join(folder, body + ext); k2 = 2
+            while os.path.exists(final):
+                final = os.path.join(folder, f"{body} ({k2}){ext}"); k2 += 1
             os.replace(fn, final)
-            with open(os.path.splitext(final)[0] + ".txt", "w", encoding="utf-8") as f:
-                f.write(cap)
+            captions_add(folder, os.path.basename(final), cap, front=vid in top_new)
             done.append(vid); done_set.add(vid); n_new += 1
             src["seq"] = seq
             log(T(f"[Source] {page}: {k}/{len(todo)} downloaded — {os.path.basename(final)}",
@@ -7024,6 +7172,7 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
 
         self.log_q = queue.Queue()
         migrate_page_names()
+        migrate_profile_names()
         self.resume_events = {}
         self.workers = []
         self.stop_flag = threading.Event()
@@ -9485,7 +9634,8 @@ downloads and replaces itself, then restarts. No manual download needed.
                         log(T(f"[{account['name']}] {i}/{len(todo)}: {os.path.basename(path)}", f"[{account['name']}] {i}/{len(todo)}: {os.path.basename(path)}"))
                         try:
                             sc = sidecar_caption(path)
-                            cap = clean_caption(sc if sc else tags, 4)      # hashtags zyada se zyada 4
+                            # video ka apna caption (TikTok) — jaisa hai waisa (hashtags na hon to nahi); warna page hashtags
+                            cap = clean_caption(sc if sc is not None else tags, 4)
                             if kind == "reel":
                                 ok = bot.upload_reel(path, cap)
                             elif kind == "photo":
@@ -9505,6 +9655,7 @@ downloads and replaces itself, then restarts. No manual download needed.
                                     side = os.path.splitext(path)[0] + ".txt"
                                     if os.path.exists(side):
                                         os.remove(side)
+                                    captions_remove(os.path.dirname(path), os.path.basename(path))
                                 except Exception as e:
                                     log(T(f"delete failed: {e}", f"delete fail: {e}"))
                         else:
@@ -9518,6 +9669,9 @@ downloads and replaces itself, then restarts. No manual download needed.
                                     side = os.path.splitext(path)[0] + ".txt"
                                     if os.path.exists(side):
                                         shutil.move(side, os.path.join(fdir, os.path.basename(side)))
+                                    c_ = captions_remove(os.path.dirname(path), os.path.basename(path))
+                                    if c_ is not None:
+                                        captions_add(fdir, os.path.basename(path), c_)
                                     log(T(f"[{account['name']}] moved to 'Failed' folder (kept, not deleted): {os.path.basename(path)}",
                                           f"[{account['name']}] 'Failed' folder mein rakh di (delete nahi): {os.path.basename(path)}"))
                                 except Exception as e:
