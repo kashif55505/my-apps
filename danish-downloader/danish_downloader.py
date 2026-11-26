@@ -294,11 +294,11 @@ class App(ctk.CTk):
                      font=(FONT, 11, "bold"), relief="flat", padding=6)
         st.map("D.Treeview", background=[("selected", GREEN)], foreground=[("selected", "white")])
         st.map("D.Treeview.Heading", background=[("active", SEC_H)])
-        cols = ("folder", "platform", "link", "stock", "done", "status", "last")
+        cols = ("folder", "platform", "stock", "status", "done", "last", "link")
         self.tree = ttk.Treeview(tf, columns=cols, show="headings", style="D.Treeview", selectmode="extended")
-        for c, t, w in (("folder", "Folder / Page", 170), ("platform", "Platform", 90), ("link", "Creator Link", 260),
-                        ("stock", "In Folder / Target", 150), ("done", "Downloaded", 110),
-                        ("status", "Status", 220), ("last", "Last Check", 150)):
+        for c, t, w in (("folder", "Folder / Page", 160), ("platform", "Platform", 80),
+                        ("stock", "In Folder / Target", 150), ("status", "Status", 300),
+                        ("done", "Total Done", 90), ("last", "Last Check", 150), ("link", "Creator Link", 260)):
             self.tree.heading(c, text=t)
             self.tree.column(c, width=w, anchor="w" if c in ("folder", "link", "status") else "center")
         self.tree.tag_configure("low", foreground=RED)
@@ -324,13 +324,19 @@ class App(ctk.CTk):
         self.e_hours = ctk.CTkEntry(sf, width=50, fg_color=PANEL2, border_color=BORDER)
         self.e_hours.insert(0, str(s.get("check_hours", 3)))
         self.e_hours.pack(side="left")
-        lab("hours   |   Parallel Downloads")
+        lab("hours   |   Parallel")
         self.o_par = ctk.CTkOptionMenu(sf, values=[str(i) for i in (1, 2, 3, 4, 6, 8, 10, 12)], width=70,
                                        fg_color=SEC, button_color=ACCENT, button_hover_color=ACCENT_H, text_color=SEC_TEXT,
                                        command=lambda v: self.save_settings())
         self.o_par.set(str(s.get("parallel", 4)))
         self.o_par.pack(side="left")
-        lab("|   Login Cookies")
+        lab("|   Quality")
+        self.o_q = ctk.CTkOptionMenu(sf, values=["1080p", "720p", "Best"], width=90,
+                                     fg_color=SEC, button_color=ACCENT, button_hover_color=ACCENT_H, text_color=SEC_TEXT,
+                                     command=lambda v: self.save_settings())
+        self.o_q.set(s.get("quality", "1080p"))
+        self.o_q.pack(side="left")
+        lab("|   Cookies")
         self.o_ck = ctk.CTkOptionMenu(sf, values=["none", "firefox", "edge", "chrome", "brave", "opera"], width=100,
                                       fg_color=SEC, button_color=ACCENT, button_hover_color=ACCENT_H, text_color=SEC_TEXT,
                                       command=lambda v: self.save_settings())
@@ -396,17 +402,18 @@ class App(ctk.CTk):
             tags = ("off",) if not s.get("enabled", True) else (("low",) if low else ())
             status = self.engine.status.get(s["id"]) or s.get("last_result") or "—"
             days_left = have / max(int(s["per_day"]), 1)
-            vals = (os.path.basename(os.path.normpath(s["folder"])), core.platform_of(s["url"]), s["url"],
-                    f"{have} / {target}  ({days_left:.0f} days)", len(s.get("done_ids", [])), status,
-                    s.get("last_check") or "—")
+            vals = (os.path.basename(os.path.normpath(s["folder"])), core.platform_of(s["url"]),
+                    f"{have} / {target}  ({days_left:.0f} days)", status, len(s.get("done_ids", [])),
+                    s.get("last_check") or "—", s["url"])
             if self.tree.exists(s["id"]):
                 self.tree.item(s["id"], values=vals, tags=tags)
             else:
                 self.tree.insert("", "end", iid=s["id"], tags=tags, values=vals)
+        live = [v for v in self.engine.status.values() if v.startswith("⬇")]
         if self.updating:
             self.l_state.configure(text="● Updating...", text_color=ACCENT)
         elif self.engine.running:
-            self.l_state.configure(text="● Working...", text_color=PINK)
+            self.l_state.configure(text="● " + (live[0] if live else "Working..."), text_color=PINK)
         else:
             self.l_state.configure(text="● Ready", text_color=GREEN)
 
@@ -451,6 +458,7 @@ class App(ctk.CTk):
     def do_update(self):
         if self.engine.running:
             return messagebox.showinfo(core.APP_NAME, "A download is running. Wait for it to finish or click Stop, then update.")
+        live = [v for v in self.engine.status.values() if v.startswith("⬇")]
         if self.updating:
             return
         self.log("⬆ Checking for updates...")
@@ -578,11 +586,12 @@ class App(ctk.CTk):
             pass
         s["parallel"] = int(self.o_par.get())
         s["cookies_browser"] = self.o_ck.get()
+        s["quality"] = self.o_q.get()
         s["auto"] = bool(self.v_auto.get())
         s["auto_update"] = bool(self.v_autoupd.get())
         self.store.save()
         self.log(f"Settings saved: check every {s['check_hours']} h, {s['parallel']} parallel, "
-                 f"cookies: {s['cookies_browser']}, auto check: {'ON' if s['auto'] else 'OFF'}, "
+                 f"quality: {s['quality']}, cookies: {s['cookies_browser']}, auto check: {'ON' if s['auto'] else 'OFF'}, "
                  f"auto update: {'ON' if s['auto_update'] else 'OFF'}")
 
 

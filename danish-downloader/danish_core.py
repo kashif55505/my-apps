@@ -24,7 +24,7 @@ except Exception:
     FFMPEG_PATH = shutil.which("ffmpeg")
 
 APP_NAME = "Danish Downloader"
-VERSION = "1.4"
+VERSION = "1.5"
 GITHUB_USER = "kashif55505"
 GITHUB_REPO = "my-apps"
 GITHUB_FOLDER = "danish-downloader"
@@ -50,6 +50,7 @@ DEFAULT_SETTINGS = {
     "cookies_browser": "none",
     "cookies_file": "",
     "auto_update": True,
+    "quality": "1080p",
 }
 
 DEFAULT_SOURCE = {
@@ -322,14 +323,12 @@ class Engine:
     def download_opts(self, outdir):
         o = self.base_opts()
         o.update({
-            # Sab se best quality: jis quality mein upload hui, wohi (4K ho to 4K)
             "format": "bestvideo*+bestaudio/best",
-            # Pehle resolution, phir fps; same quality mein H.264/AAC (Facebook par sab se aasaan)
-            "format_sort": ["res", "fps", "vcodec:h264", "acodec:aac", "br"],
+            # 'res' = chhoti side (1080x1920 TikTok = 1080p). Quality setting tak, us se upar nahi.
+            "format_sort": self._format_sort(),
             "merge_output_format": "mp4",
             "outtmpl": os.path.join(outdir, "%(id)s.%(ext)s"),
             "concurrent_fragment_downloads": 8,   # ek video ke tukre ek saath (tez speed)
-            "http_chunk_size": 10 * 1024 * 1024,
             "progress_hooks": [self._hook],
             "overwrites": True,
             "writethumbnail": False,
@@ -337,6 +336,11 @@ class Engine:
         if FFMPEG_PATH:
             o["ffmpeg_location"] = FFMPEG_PATH
         return o
+
+    def _format_sort(self):
+        q = str(self.store.settings.get("quality") or "1080p").lower()
+        cap = {"1080p": "res:1080", "720p": "res:720", "480p": "res:480"}.get(q, "res")
+        return [cap, "fps", "vcodec:h264", "acodec:aac"]
 
     def _hook(self, d):
         if self.stop_event.is_set():
@@ -346,30 +350,59 @@ class Engine:
         self.status[src["id"]] = text
         self.on_change()
 
-    # ---- list videos of a creator (newest first)
-    def list_entries(self, url, limit):
+    # ---- list videos of a creator (newest first), STREAMING: pehli videos foran milti hain
+    @staticmethod
+    def _norm_entry(e):
+        vurl = e.get("webpage_url") or e.get("url") or ""
+        vid = str(e.get("id") or id_from_url(vurl) or "")
+        if vurl and not vurl.startswith("http"):
+            if "youtube" in (e.get("ie_key") or e.get("extractor_key") or "").lower() or len(vurl) == 11:
+                vurl = "https://www.youtube.com/watch?v=" + vurl
+            else:
+                return None
+        return {"id": vid, "url": vurl} if vurl else None
+
+    def iter_entries(self, url, _depth=0):
         o = self.base_opts()
-        o.update({"extract_flat": "in_playlist", "playlistend": limit, "noplaylist": False})
+        o.update({"extract_flat": "in_playlist", "noplaylist": False, "lazy_playlist": True})
         with yt_dlp.YoutubeDL(o) as ydl:
-            info = ydl.extract_info(url, download=False)
-        if not info:
-            return []
-        if info.get("_type") not in ("playlist", "multi_video") and not info.get("entries"):
-            return [{"id": str(info.get("id") or id_from_url(url)), "url": info.get("webpage_url") or url}]
+            info = ydl.extract_info(url, download=False, process=False)
+            if not info:
+                return
+            t = info.get("_type") or "video"
+            if t in ("url", "url_transparent") and _depth < 3 and info.get("url") and info["url"] != url:
+                yield from self.iter_entries(info["url"], _depth + 1)
+                return
+            if t not in ("playlist", "multi_video"):
+                yield {"id": str(info.get("id") or id_from_url(url)), "url": info.get("webpage_url") or url}
+                return
+            ents = info.get("entries") or []
+            if hasattr(ents, "getslice"):          # yt-dlp PagedList
+                ents = ents.getslice()
+            for e in ents:
+                if e:
+                    n = self._norm_entry(e)
+                    if n:
+                        yield n
+
+    def list_entries(self, url, limit):
         out = []
-        for e in info.get("entries") or []:
-            if not e:
-                continue
-            vurl = e.get("webpage_url") or e.get("url") or ""
-            vid = str(e.get("id") or id_from_url(vurl) or "")
-            if vurl and not vurl.startswith("http"):
-                if "youtube" in (e.get("ie_key") or "").lower():
-                    vurl = "https://www.youtube.com/watch?v=" + vurl
-                else:
-                    continue
-            if vurl:
-                out.append({"id": vid, "url": vurl})
+        for e in self.iter_entries(url):
+            out.append(e)
+            if limit and len(out) >= limit:
+                break
         return out
+
+    def _open(self, url):
+        """Iterator kholo aur pehli video tak pahuncho (error yahin pakda jaye)."""
+        it = iter(self.iter_entries(url))
+        first = next(it, None)
+
+        def chain():
+            if first is not None:
+                yield first
+            yield from it
+        return chain()
 
     @staticmethod
     def is_done(entry, done):
@@ -383,17 +416,17 @@ class Engine:
         sid = info.get("channel_id") or ""
         return sid if sid.startswith("MS4w") else ""
 
-    def _list_with_fallback(self, src, url, limit):
+    def _iter_with_fallback(self, src, url):
         """TikTok kabhi profile page se user ID nahi deta. Tab kisi video se ID nikal kar
-        'tiktokuser:<ID>' se list mangao."""
+        'tiktokuser:<ID>' se list mangao. ID mil jaye to yaad rakho (agli baar seedha, tez)."""
         is_tt = "tiktok.com/@" in url.lower()
         if is_tt and src.get("tiktok_secuid"):
             try:
-                return self.list_entries("tiktokuser:" + src["tiktok_secuid"], limit)
+                return self._open("tiktokuser:" + src["tiktok_secuid"])
             except Exception:
                 pass
         try:
-            return self.list_entries(url, limit)
+            return self._open(url)
         except Exception as first_err:
             if not is_tt:
                 raise
@@ -411,9 +444,16 @@ class Engine:
                     with self.store.lock:
                         src["tiktok_secuid"] = sid
                     self.store.save()
-                    self.log("   ✓ Found creator ID from video, getting list...")
-                    return self.list_entries("tiktokuser:" + sid, limit)
+                    self.log("   ✓ Found creator ID from video.")
+                    return self._open("tiktokuser:" + sid)
             raise first_err
+
+    @staticmethod
+    def _match(e, link):
+        lid = id_from_url(link) or ""
+        clean = link.strip().split("?")[0].rstrip("/")
+        return bool((lid and (e["id"] == lid or id_from_url(e["url"]) == lid)) or
+                    e["url"].split("?")[0].rstrip("/") == clean)
 
     @staticmethod
     def _find(entries, link):
@@ -446,7 +486,21 @@ class Engine:
         return True
 
     # ---- one video
-    def download_one(self, src, entry):
+    def download_one(self, src, entry, prog=None):
+        ok = self._download_one(src, entry)
+        if prog is not None:
+            with prog["lock"]:
+                prog["finished"] += 1
+                prog["ok"] += int(ok)
+                k, tot = prog["ok"], prog["submitted"]
+                active = prog["submitted"] - prog["finished"]
+            if ok:
+                self.log(f"     ↳ {k}/{prog['need']} downloaded")
+            if src.get("id") != "_links_":
+                self.set_status(src, f"⬇ {k}/{prog['need']} downloaded • {active} active")
+        return ok
+
+    def _download_one(self, src, entry):
         if self.stop_event.is_set():
             return False
         folder = src["folder"]
@@ -478,8 +532,10 @@ class Engine:
             if src.get("id") != "_links_" and cid.startswith("MS4w") and not src.get("tiktok_secuid"):
                 src["tiktok_secuid"] = cid
                 self.store.save()
-            h = info.get("height")
-            self.log(f"   ✓ {os.path.basename(final)}" + (f"  [{h}p]" if h else ""))
+            w, h = info.get("width"), info.get("height")
+            q = min(w, h) if w and h else h
+            mb = os.path.getsize(final) / 1048576
+            self.log(f"   ✓ {os.path.basename(final)}" + (f"  [{q}p, {mb:.1f} MB]" if q else f"  [{mb:.1f} MB]"))
             return True
         except DownloadCancelled:
             return False
@@ -530,19 +586,14 @@ class Engine:
         self.log(f"▶ {name}: {have} videos in folder, target {target} → need {need}")
         self.set_status(src, "Fetching video list...")
         url = normalize_source_url(src["url"])
-        skip_top = 0 if src.get("initialized") else int(src.get("skip_top") or 0)
-        done = set(src.get("done_ids", []))
-        has_links = not src.get("initialized") and (src.get("start_link") or src.get("end_link"))
-        # do link diye hon to poori list chahiye (taake wo links list mein mil jayein)
-        limit = None if has_links else len(done) + skip_top + need + 80
         try:
-            entries = self._list_with_fallback(src, url, limit)
+            it = self._iter_with_fallback(src, url)
         except Exception as e:
             msg = str(e).replace("ERROR: ", "").strip().splitlines()[0][:200]
             self.log(f"   ✗ Could not get creator's video list: {msg}")
             if "tiktok" in url.lower():
-                self.log("   ℹ Fix: Edit this creator and paste ANY one video link of this creator in "
-                         "'Any Video Link' — the app will use it to find the profile.")
+                self.log("   ℹ Fix: Edit this creator and paste any one video link of this creator "
+                         "(Start Link, Last Link or 'Any Video Link').")
             if "instagram" in url.lower():
                 self.log("   ℹ yt-dlp currently cannot list full Instagram profiles. "
                          "Use 'Download from Links' for Instagram reels.")
@@ -551,48 +602,99 @@ class Engine:
             self.store.save()
             return 0
 
-        if not src.get("initialized"):
-            if has_links:
-                if not self._mark_range(src, entries):
-                    src["last_result"] = "Link not found — Edit creator"
-                    self.set_status(src, src["last_result"])
-                    self.store.save()
-                    return 0
-            elif skip_top:
-                first = entries[:skip_top]
-                self.store.mark_done(src, *[e["id"] or e["url"] for e in first])
-                self.log(f"   Top {len(first)} videos marked as already downloaded.")
+        # --- pehli baar: Start/Last link (ya 'upar se N') wali videos ko 'ho chuki' mark karna,
+        #     list aate aate hi (poori list ka intezar nahi)
+        init = not src.get("initialized")
+        sl = (src.get("start_link") or "").strip() if init else ""
+        el = (src.get("end_link") or "").strip() if init else ""
+        links = [l for l in (sl, el) if l]
+        skip_top = int(src.get("skip_top") or 0) if init and not links else 0
+        zone = bool(el and not sl)          # sirf Last link: upar se us tak sab ho chuki
+        found = set()
+        to_mark = []
+        if init and not links and not skip_top:
             src["initialized"] = True
             self.store.save()
-            done = set(src.get("done_ids", []))
+            init = False
 
-        # Upar se (sab se nayi) shuru: jo download nahi hui wo pehle -> nayi videos pehle aati hain,
-        # phir wahin se aage jahan pichhli baar ruke the.
-        pending = [e for e in entries if not self.is_done(e, done)][:need]
-        if not pending:
+        done = set(src.get("done_ids", []))
+        par = max(1, min(int(self.store.settings.get("parallel") or 4), 16))
+        prog = {"lock": threading.Lock(), "submitted": 0, "finished": 0, "ok": 0, "need": need}
+        keys = set()
+        futs = []
+        scanned = 0
+        list_err = None
+        self.log(f"   Downloads start as soon as videos are found ({par} at a time)...")
+        ex = ThreadPoolExecutor(max_workers=par)
+        try:
+            for e in it:
+                if self.stop_event.is_set():
+                    break
+                scanned += 1
+                key = e["id"] or e["url"]
+                if init:
+                    hit = [l for l in links if l not in found and self._match(e, l)]
+                    if hit:
+                        found.update(hit)
+                        to_mark.append(key)
+                        zone = (len(links) == 2 and len(found) == 1)
+                        if len(found) == len(links):
+                            self.store.mark_done(src, *to_mark)
+                            to_mark = []
+                            src["initialized"] = True
+                            self.store.save()
+                            init = False
+                            self.log(f"   ✓ Found your link(s) after {scanned} videos — older videos continue from here.")
+                        continue
+                    if zone or (skip_top and scanned <= skip_top):
+                        to_mark.append(key)
+                        if skip_top and scanned == skip_top:
+                            self.store.mark_done(src, *to_mark)
+                            to_mark = []
+                            src["initialized"] = True
+                            self.store.save()
+                            init = False
+                            self.log(f"   Top {skip_top} videos marked as already downloaded.")
+                        continue
+                if self.is_done(e, done) or key in keys:
+                    continue
+                if prog["submitted"] >= need:
+                    break
+                keys.add(key)
+                with prog["lock"]:
+                    prog["submitted"] += 1
+                futs.append(ex.submit(self.download_one, src, e, prog))
+                if prog["submitted"] >= need:
+                    break
+                if scanned % 15 == 0:
+                    self.set_status(src, f"⬇ {prog['ok']}/{need} downloaded • scanned {scanned}")
+        except Exception as e:
+            list_err = str(e).replace("ERROR: ", "").strip().splitlines()[0][:200]
+        if to_mark:
+            self.store.mark_done(src, *to_mark)
+        if init and links and len(found) < len(links):
+            missing = [l for l in links if l not in found]
+            self.log(f"   ✗ Link not found in this creator's list: {missing[0]}")
+            self.log("     Check the link belongs to this creator (and wasn't deleted). Newer videos were still downloaded.")
+        if list_err:
+            self.log(f"   ⚠ Video list stopped early: {list_err}")
+        if not futs:
+            ex.shutdown(wait=True)
             src["last_result"] = f"No new videos ({have}/{target})"
             self.log("   No videos left that haven't been downloaded already.")
             self.set_status(src, src["last_result"])
             self.store.save()
             return 0
-
-        self.log(f"   Downloading {len(pending)} videos...")
-        par = max(1, min(int(self.store.settings.get("parallel") or 4), 16))
-        ok = 0
-        self.set_status(src, f"Download 0/{len(pending)}")
-        with ThreadPoolExecutor(max_workers=par) as ex:
-            futs = [ex.submit(self.download_one, src, e) for e in pending]
-            for i, f in enumerate(as_completed(futs), 1):
-                if f.result():
-                    ok += 1
-                self.set_status(src, f"Download {i}/{len(pending)}")
+        self.log(f"   List done ({scanned} scanned) — {len(futs)} videos queued, finishing downloads...")
+        ex.shutdown(wait=True)
+        ok = prog["ok"]
         self._clean_temp(folder)
-        src["last_result"] = f"{ok} new videos ({count_videos(folder)}/{target})"
+        src["last_result"] = f"✓ {ok} new videos ({count_videos(folder)}/{target})"
         if self.stop_event.is_set():
             src["last_result"] += " — stopped"
         self.set_status(src, src["last_result"])
         self.store.save()
-        self.log(f"■ {name}: {ok} videos downloaded.")
+        self.log(f"■ {name}: {ok}/{len(futs)} videos downloaded.")
         return ok
 
     # ---- paste links mode

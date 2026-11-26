@@ -1,5 +1,5 @@
 {
-  "version": "1.4",
+  "version": "1.5",
   "files": ["danish_core.py", "danish_downloader.py"],
-  "notes": "TikTok fix: 'Any Video Link' field when TikTok refuses the profile list."
+  "notes": "Faster: downloads start while list loads; 1080p default with Quality menu; live progress."
 }
