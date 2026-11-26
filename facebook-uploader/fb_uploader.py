@@ -793,6 +793,25 @@ def _fbb_prepare_profile(user_dir):
         pass
 
 
+COUNTRIES = [tuple(x.split(":", 1)) for x in """AF:Afghanistan;AL:Albania;DZ:Algeria;AS:American Samoa;AD:Andorra;AO:Angola;AI:Anguilla;AQ:Antarctica;AG:Antigua and Barbuda;AR:Argentina;AM:Armenia;AW:Aruba;AU:Australia;AT:Austria;AZ:Azerbaijan;BS:Bahamas;BH:Bahrain;BD:Bangladesh;BB:Barbados;BY:Belarus;BE:Belgium;BZ:Belize;BJ:Benin;BM:Bermuda;BT:Bhutan;BO:Bolivia;BQ:Bonaire, Sint Eustatius and Saba;BA:Bosnia and Herzegovina;BW:Botswana;BV:Bouvet Island;BR:Brazil;IO:British Indian Ocean Territory;BN:Brunei Darussalam;BG:Bulgaria;BF:Burkina Faso;BI:Burundi;CV:Cabo Verde;KH:Cambodia;CM:Cameroon;CA:Canada;KY:Cayman Islands;CF:Central African Republic;TD:Chad;CL:Chile;CN:China;CX:Christmas Island;CC:Cocos (Keeling) Islands;CO:Colombia;KM:Comoros;CG:Congo;CD:Congo, The Democratic Republic of the;CK:Cook Islands;CR:Costa Rica;HR:Croatia;CU:Cuba;CW:Curaçao;CY:Cyprus;CZ:Czechia;CI:Côte d'Ivoire;DK:Denmark;DJ:Djibouti;DM:Dominica;DO:Dominican Republic;EC:Ecuador;EG:Egypt;SV:El Salvador;GQ:Equatorial Guinea;ER:Eritrea;EE:Estonia;SZ:Eswatini;ET:Ethiopia;FK:Falkland Islands (Malvinas);FO:Faroe Islands;FJ:Fiji;FI:Finland;FR:France;GF:French Guiana;PF:French Polynesia;TF:French Southern Territories;GA:Gabon;GM:Gambia;GE:Georgia;DE:Germany;GH:Ghana;GI:Gibraltar;GR:Greece;GL:Greenland;GD:Grenada;GP:Guadeloupe;GU:Guam;GT:Guatemala;GG:Guernsey;GN:Guinea;GW:Guinea-Bissau;GY:Guyana;HT:Haiti;HM:Heard Island and McDonald Islands;VA:Holy See (Vatican City State);HN:Honduras;HK:Hong Kong;HU:Hungary;IS:Iceland;IN:India;ID:Indonesia;IR:Iran;IQ:Iraq;IE:Ireland;IM:Isle of Man;IL:Israel;IT:Italy;JM:Jamaica;JP:Japan;JE:Jersey;JO:Jordan;KZ:Kazakhstan;KE:Kenya;KI:Kiribati;KW:Kuwait;KG:Kyrgyzstan;LA:Laos;LV:Latvia;LB:Lebanon;LS:Lesotho;LR:Liberia;LY:Libya;LI:Liechtenstein;LT:Lithuania;LU:Luxembourg;MO:Macao;MG:Madagascar;MW:Malawi;MY:Malaysia;MV:Maldives;ML:Mali;MT:Malta;MH:Marshall Islands;MQ:Martinique;MR:Mauritania;MU:Mauritius;YT:Mayotte;MX:Mexico;FM:Micronesia, Federated States of;MD:Moldova;MC:Monaco;MN:Mongolia;ME:Montenegro;MS:Montserrat;MA:Morocco;MZ:Mozambique;MM:Myanmar;NA:Namibia;NR:Nauru;NP:Nepal;NL:Netherlands;NC:New Caledonia;NZ:New Zealand;NI:Nicaragua;NE:Niger;NG:Nigeria;NU:Niue;NF:Norfolk Island;KP:North Korea;MK:North Macedonia;MP:Northern Mariana Islands;NO:Norway;OM:Oman;PK:Pakistan;PW:Palau;PS:Palestine, State of;PA:Panama;PG:Papua New Guinea;PY:Paraguay;PE:Peru;PH:Philippines;PN:Pitcairn;PL:Poland;PT:Portugal;PR:Puerto Rico;QA:Qatar;RO:Romania;RU:Russia;RW:Rwanda;RE:Réunion;BL:Saint Barthélemy;SH:Saint Helena, Ascension and Tristan da Cunha;KN:Saint Kitts and Nevis;LC:Saint Lucia;MF:Saint Martin (French part);PM:Saint Pierre and Miquelon;VC:Saint Vincent and the Grenadines;WS:Samoa;SM:San Marino;ST:Sao Tome and Principe;SA:Saudi Arabia;SN:Senegal;RS:Serbia;SC:Seychelles;SL:Sierra Leone;SG:Singapore;SX:Sint Maarten (Dutch part);SK:Slovakia;SI:Slovenia;SB:Solomon Islands;SO:Somalia;ZA:South Africa;GS:South Georgia and the South Sandwich Islands;KR:South Korea;SS:South Sudan;ES:Spain;LK:Sri Lanka;SD:Sudan;SR:Suriname;SJ:Svalbard and Jan Mayen;SE:Sweden;CH:Switzerland;SY:Syria;TW:Taiwan;TJ:Tajikistan;TZ:Tanzania;TH:Thailand;TL:Timor-Leste;TG:Togo;TK:Tokelau;TO:Tonga;TT:Trinidad and Tobago;TN:Tunisia;TM:Turkmenistan;TC:Turks and Caicos Islands;TV:Tuvalu;TR:Türkiye;UG:Uganda;UA:Ukraine;AE:United Arab Emirates;GB:United Kingdom;US:United States;UM:United States Minor Outlying Islands;UY:Uruguay;UZ:Uzbekistan;VU:Vanuatu;VE:Venezuela;VN:Vietnam;VG:Virgin Islands, British;VI:Virgin Islands, U.S.;WF:Wallis and Futuna;EH:Western Sahara;YE:Yemen;ZM:Zambia;ZW:Zimbabwe;AX:Åland Islands""".split(";")]   # (code, naam)
+
+
+def ip_filter_verdict(cc, cfg=None):
+    """Block IP / Allow IP (Bob Prime jaisa). Return '' = chalne do, warna wajah."""
+    cfg = cfg or load_settings()
+    cc = (cc or "").upper()
+    if cfg.get("ipf_on") is None:            # kabhi set nahi kiya -> shuru mein Pakistan BLOCK
+        return "blocked" if cc == "PK" else ""
+    if not cfg.get("ipf_on"):
+        return ""
+    lst = [c.upper() for c in (cfg.get("ipf_list") or [])]
+    if not lst:
+        return ""
+    if cfg.get("ipf_mode", "block") == "allow":
+        return "" if cc in lst else "not in Allow list"
+    return "blocked" if cc in lst else ""
+
+
 def fb_browser_launch(pw, account, cfg, headless=False, log=print):
     """Apna browser kholo. Return (context, slot)."""
     acc = get_account(account["id"]) or account
@@ -873,12 +892,15 @@ def fb_browser_launch(pw, account, cfg, headless=False, log=print):
         except Exception:
             pass
     # ---- CHECK IP (Bob Prime jaisa): browser khulte hi IP + city + country ----
+    block_msg = ""
+    ip_ok = False
     try:
         _pg = ctx.pages[0] if ctx.pages else ctx.new_page()
         _pg.goto("http://ip-api.com/json/?fields=status,query,city,regionName,country,countryCode,timezone,isp",
                  timeout=25000)
         info = json.loads(_pg.inner_text("body"))
         if info.get("status") == "success":
+            ip_ok = True
             update_account(acc["id"], ip_info=info, last_ip=info.get("query"))
             log(T(f"[{acc['name']}] CHECK IP: {info.get('query')} — {info.get('city')}, {info.get('regionName')}, "
                   f"{info.get('country')} ({info.get('isp', '')})",
@@ -890,13 +912,14 @@ def fb_browser_launch(pw, account, cfg, headless=False, log=print):
                 pass
             if tz and info.get("timezone") and info["timezone"] != tz:
                 update_account(acc["id"], geo=None)   # agli dafa sahi timezone
-            allowed = [c.strip().upper() for c in (cfg.get("fbb_allowed_cc", "US") or "").split(",") if c.strip()]
-            if allowed and (info.get("countryCode") or "").upper() not in allowed:
-                msg = T(f"[{acc['name']}] IP is {info.get('country')} ({info.get('countryCode')}) — not {', '.join(allowed)}. "
-                        f"Facebook BLOCKED in this browser to protect the ID's location. Turn on the VPN / set a tunnel.",
-                        f"[{acc['name']}] IP {info.get('country')} ({info.get('countryCode')}) ka hai — {', '.join(allowed)} nahi. "
-                        f"ID ki location bachane ke liye is browser mein Facebook BAND. VPN on karein / tunnel lagayein.")
+            why = ip_filter_verdict(info.get("countryCode"), cfg)
+            if why:
+                msg = T(f"[{acc['name']}] BLOCK IP: {info.get('country')} IP ({why}) — nothing will run on this ID "
+                        f"(no login / upload / active). Turn on the VPN / set a tunnel.",
+                        f"[{acc['name']}] BLOCK IP: {info.get('country')} ka IP ({why}) — is ID par kuch nahi chalega "
+                        f"(na login / upload / active). VPN on karein / tunnel lagayein.")
                 log(msg)
+                block_msg = msg
                 if cfg.get("_manual_open"):
                     # manual: doosri sites chalen, Facebook domains band
                     def _block(route):
@@ -907,13 +930,6 @@ def fb_browser_launch(pw, account, cfg, headless=False, log=print):
                     for pat in ("**/*facebook.com/**", "**/*facebook.net/**", "**/*fbcdn.net/**",
                                 "**/*fb.com/**", "**/*messenger.com/**"):
                         ctx.route(pat, _block)
-                else:
-                    try:
-                        ctx.close()
-                    except Exception:
-                        pass
-                    _grid_free(slot)
-                    raise RuntimeError(msg)
         _pg.goto("about:blank")
     except Exception as e:
         log(T(f"[{acc['name']}] CHECK IP failed: {e.__class__.__name__}", f"[{acc['name']}] CHECK IP nahi hua."))
@@ -922,6 +938,17 @@ def fb_browser_launch(pw, account, cfg, headless=False, log=print):
             (ctx.pages[0] if ctx.pages else ctx.new_page()).goto("about:blank")
         except Exception:
             pass
+    if not ip_ok and cfg.get("ipf_on", True) and not cfg.get("_manual_open"):
+        block_msg = T(f"[{acc['name']}] BLOCK IP is ON but the IP could not be checked — not opening Facebook (safety).",
+                      f"[{acc['name']}] BLOCK IP ON hai magar IP check nahi hua — hifazat ke liye Facebook nahi khola.")
+        log(block_msg)
+    if block_msg and not cfg.get("_manual_open"):
+        try:
+            ctx.close()
+        except Exception:
+            pass
+        _grid_free(slot)
+        raise RuntimeError(block_msg)
     log(T(f"[{acc['name']}] FB Browser opened — {fp['screen_w']}x{fp['screen_h']}, {fp['cpu']} CPU, "
           f"{lang}, {tz or 'local time'}{', proxy ' + proxy['server'] if proxy else ''}.",
           f"[{acc['name']}] FB Browser khula — {fp['screen_w']}x{fp['screen_h']}, {fp['cpu']} CPU, "
@@ -7608,6 +7635,7 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         lb = ttk.Frame(lg); lb.pack(fill="x", padx=8, pady=3)
         ttk.Button(lb, text=T("LOGIN selected IDs", "LOGIN selected IDs"), command=self._login_selected).pack(side="left")
         ttk.Button(lb, text="STOP", command=self._stop_all).pack(side="left", padx=4)
+        self._build_ipf_controls(lb)
         lm = ttk.Frame(lg); lm.pack(fill="x", padx=8, pady=3)
         ttk.Button(lm, text=T("Check status + monetization", "Status + monetization check"),
                    command=lambda: self._status_selected(False)).pack(side="left")
@@ -8139,6 +8167,90 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
             finally:
                 bot.stop()
         threading.Thread(target=work, daemon=True).start()
+
+    # ---------- BLOCK IP (Bob Prime jaisa) ----------
+    def _build_ipf_controls(self, parent):
+        st = load_settings()
+        var = tk.IntVar(value=1 if st.get("ipf_on", True) else 0)
+        self._ipf_vars = getattr(self, "_ipf_vars", []) + [var]
+
+        def toggle():
+            v = var.get()
+            for x in self._ipf_vars:
+                if x is not var:
+                    x.set(v)
+            cur = load_settings()
+            upd = {"ipf_on": bool(v)}
+            if cur.get("ipf_on") is None:            # pehli dafa: default list sath save
+                upd.update(ipf_mode="block", ipf_list=["PK"])
+            save_settings(upd)
+            self.log_q.put(T(f"BLOCK IP {'ON' if v else 'OFF'}.", f"BLOCK IP {'ON' if v else 'OFF'}."))
+        ttk.Checkbutton(parent, variable=var, command=toggle).pack(side="left")
+        ttk.Button(parent, text="Block IP", command=self._ipf_dialog).pack(side="left", padx=(2, 0))
+
+    def _ipf_dialog(self):
+        st = load_settings()
+        names = {c: n for c, n in COUNTRIES}
+        sel = list(st.get("ipf_list") if st.get("ipf_on") is not None else ["PK"]) or []
+        w = tk.Toplevel(self); w.title("Block IP Settings"); w.configure(bg=PAL["bg"]); w.transient(self)
+        w.geometry(f"{int(520 * ui_px(self) / 1.5)}x{int(560 * ui_px(self) / 1.5)}")
+        hdr = tk.Frame(w, bg="#1565c0"); hdr.pack(fill="x")
+        tk.Label(hdr, text="  Block IP Settings", bg="#1565c0", fg="white", font=("Segoe UI", 15, "bold")).pack(side="left", pady=8)
+        top = ttk.Frame(w); top.pack(fill="x", padx=8, pady=8)
+        mode = tk.StringVar(value=st.get("ipf_mode", "block"))
+        ttk.Radiobutton(top, text="Block", value="block", variable=mode).pack(side="left")
+        ttk.Radiobutton(top, text="Allow", value="allow", variable=mode).pack(side="left", padx=8)
+        q = tk.StringVar()
+        ent = ttk.Entry(top, textvariable=q, width=22); ent.pack(side="left", padx=6, fill="x", expand=True)
+        ent.insert(0, ""); ent.focus_set()
+        info = ttk.Label(w, text=T("Type to search → double-click a country to add it. Double-click in the list below to remove.\n"
+                                   "Block = these countries' IPs are stopped.  Allow = ONLY these countries run.",
+                                   "Search mein likho → mulk par double-click se add. Neeche list mein double-click se hatao.\n"
+                                   "Block = in mulkon ke IP band.  Allow = SIRF yehi mulk chalenge."),
+                         style="Muted.TLabel", justify="left")
+        info.pack(anchor="w", padx=8)
+        res = tk.Listbox(w, height=6); res.pack(fill="x", padx=8, pady=4)
+        tv = ttk.Treeview(w, columns=("no", "country"), show="headings", height=8)
+        tv.heading("no", text="No."); tv.heading("country", text="Country")
+        tv.column("no", width=60, anchor="center", stretch=False); tv.column("country", width=300, anchor="w")
+        tv.pack(fill="both", expand=True, padx=8, pady=4)
+
+        def redraw():
+            tv.delete(*tv.get_children())
+            for i, c in enumerate(sel, 1):
+                tv.insert("", "end", iid=c, values=(i, f"{names.get(c, c)} ({c})"))
+
+        def search(*_):
+            t = q.get().strip().lower()
+            res.delete(0, "end")
+            for c, n in COUNTRIES:
+                if not t or t in n.lower() or t == c.lower():
+                    res.insert("end", f"{n} ({c})")
+        q.trace_add("write", search)
+
+        def add(_e=None):
+            for i in res.curselection():
+                c = res.get(i).rsplit("(", 1)[-1].rstrip(")")
+                if c not in sel:
+                    sel.append(c)
+            redraw()
+
+        def remove(_e=None):
+            for c in tv.selection():
+                if c in sel:
+                    sel.remove(c)
+            redraw()
+        res.bind("<Double-Button-1>", add); res.bind("<Return>", add)
+        tv.bind("<Double-Button-1>", remove); tv.bind("<Delete>", remove)
+
+        def save():
+            save_settings({"ipf_mode": mode.get(), "ipf_list": list(sel),
+                           "ipf_on": bool(load_settings().get("ipf_on", True))})
+            self.log_q.put(T(f"BLOCK IP saved: {mode.get().upper()} — {', '.join(names.get(c, c) for c in sel) or '(empty)'}",
+                             f"BLOCK IP save: {mode.get().upper()} — {', '.join(names.get(c, c) for c in sel) or '(khaali)'}"))
+            w.destroy()
+        ttk.Button(top, text="Save", style="Accent.TButton", command=save).pack(side="left")
+        search(); redraw()
 
     def _open_browser_manual(self, acc):
         """(neeche) — browser_cfg mein _manual_open=True: non-US IP par sirf Facebook band, baqi sites chalengi."""
@@ -9281,10 +9393,8 @@ downloads and replaces itself, then restarts. No manual download needed.
         ttk.Label(fr, text=T("Language (empty = from proxy):", "Zaban (khali = proxy se):")).pack(side="left", padx=(10, 0))
         self.set_fbb_lang = tk.StringVar(value=s.get("fbb_lang", ""))
         ttk.Entry(fr, textvariable=self.set_fbb_lang, width=7).pack(side="left", padx=2)
-        ttk.Label(fr, text=T("  Open Facebook only if IP country is:", "  Facebook sirf is mulk ke IP par:")).pack(side="left")
-        self.set_fbb_cc = tk.StringVar(value=s.get("fbb_allowed_cc", "US"))
-        ttk.Entry(fr, textvariable=self.set_fbb_cc, width=8).pack(side="left", padx=2)
-        ttk.Label(fr, text=T("(e.g. US — empty = any)", "(jaise US — khaali = koi bhi)"), style="Muted.TLabel").pack(side="left")
+        ipr = ttk.Frame(fr); ipr.pack(side="left", padx=(12, 0))
+        self._build_ipf_controls(ipr)
 
         lr = ttk.Frame(box); lr.pack(fill="x", padx=12, pady=4)
         self.set_ix_limit_on = tk.IntVar(value=1 if s.get("ix_limit_on") else 0)
@@ -9567,8 +9677,7 @@ downloads and replaces itself, then restarts. No manual download needed.
                 return d
         save_settings({"fbb_engine": self.set_fbb_engine.get(), "fbb_per_row": _int(self.set_fbb_row.get(), 4),
                        "fbb_w": _int(self.set_fbb_w.get(), 900), "fbb_h": _int(self.set_fbb_h.get(), 800),
-                       "fbb_mute": bool(self.set_fbb_mute.get()), "fbb_auto_tile": bool(self.set_fbb_tile.get()), "fbb_lang": self.set_fbb_lang.get().strip(),
-                       "fbb_allowed_cc": self.set_fbb_cc.get().strip().upper()})
+                       "fbb_mute": bool(self.set_fbb_mute.get()), "fbb_auto_tile": bool(self.set_fbb_tile.get()), "fbb_lang": self.set_fbb_lang.get().strip()})
         save_settings({"browser": br, "browser_path": self.set_path.get().strip(),
                        "use_ixbrowser": br == "ixbrowser", "ix_max_per_day": ix_max,
                        "ix_limit_on": bool(self.set_ix_limit_on.get()),
