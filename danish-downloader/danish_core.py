@@ -25,7 +25,7 @@ except Exception:
     FFMPEG_PATH = shutil.which("ffmpeg")
 
 APP_NAME = "Danish Downloader"
-VERSION = "1.10"
+VERSION = "1.10.1"
 GITHUB_USER = "kashif55505"
 GITHUB_REPO = "my-apps"
 GITHUB_FOLDER = "danish-downloader"
@@ -814,7 +814,12 @@ class Engine:
         except Exception as e:
             msg = str(e).replace("ERROR: ", "").strip().splitlines()[0][:200]
             self.log(f"   ✗ Could not get creator's video list: {msg}")
-            if "tiktok" in url.lower():
+            low = msg.lower()
+            has_link = any("/video/" in (src.get(k) or "") for k in ("sample_link", "start_link", "end_link"))
+            if "tiktok" in url.lower() and ("private" in low or "log in" in low or "login" in low):
+                self.log("   ℹ TikTok wants a LOGIN to show this creator's videos. Fix: open Firefox, log in to "
+                         "TikTok, then set Cookies = firefox below (or load a cookies.txt). Then try again.")
+            elif "tiktok" in url.lower() and not has_link:
                 self.log("   ℹ Fix: Edit this creator and paste any one video link of this creator "
                          "(Start Link, Last Link or 'Any Video Link').")
             if "instagram" in url.lower():
