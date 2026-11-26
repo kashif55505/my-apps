@@ -8284,7 +8284,10 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         names = {c: n for c, n in COUNTRIES}
         sel = list(st.get("ipf_list") if st.get("ipf_on") is not None else ["PK"]) or []
         w = tk.Toplevel(self); w.title("Block IP Settings"); w.configure(bg=PAL["bg"]); w.transient(self)
-        w.geometry(f"{int(520 * ui_px(self) / 1.5)}x{int(560 * ui_px(self) / 1.5)}")
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        ww, wh = min(760, int(sw * 0.6)), min(760, int(sh * 0.85))
+        w.geometry(f"{ww}x{wh}+{max(0, (sw - ww) // 2)}+{max(0, (sh - wh) // 3)}")
+        w.minsize(520, 520)
         hdr = tk.Frame(w, bg="#1565c0"); hdr.pack(fill="x")
         tk.Label(hdr, text="  Block IP Settings", bg="#1565c0", fg="white", font=("Segoe UI", 15, "bold")).pack(side="left", pady=8)
         top = ttk.Frame(w); top.pack(fill="x", padx=8, pady=8)
@@ -8300,7 +8303,9 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
                                    "Block = in mulkon ke IP band.  Allow = SIRF yehi mulk chalenge."),
                          style="Muted.TLabel", justify="left")
         info.pack(anchor="w", padx=8)
-        res = tk.Listbox(w, height=6); res.pack(fill="x", padx=8, pady=4)
+        res = tk.Listbox(w, height=8, bg=PAL.get("field", "#1b2740"), fg=PAL.get("text", "white"),
+                         selectbackground="#1565c0", font=("Segoe UI", 11))
+        res.pack(fill="x", padx=8, pady=4)
         tv = ttk.Treeview(w, columns=("no", "country"), show="headings", height=8)
         tv.heading("no", text="No."); tv.heading("country", text="Country")
         tv.column("no", width=60, anchor="center", stretch=False); tv.column("country", width=300, anchor="w")
@@ -8341,6 +8346,10 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
                              f"BLOCK IP save: {mode.get().upper()} — {', '.join(names.get(c, c) for c in sel) or '(khaali)'}"))
             w.destroy()
         ttk.Button(top, text="Save", style="Accent.TButton", command=save).pack(side="left")
+        bot_ = ttk.Frame(w); bot_.pack(fill="x", side="bottom", padx=8, pady=8)
+        ttk.Button(bot_, text=T("Add selected ↓", "Chuna hua add ↓"), command=add).pack(side="left")
+        ttk.Button(bot_, text=T("Remove selected", "Chuna hua hatao"), command=remove).pack(side="left", padx=6)
+        ttk.Button(bot_, text="Save", style="Accent.TButton", command=save).pack(side="right")
         search(); redraw()
 
     def _open_browser_manual(self, acc):
