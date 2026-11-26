@@ -108,8 +108,8 @@ def make_title(settings, caption, frame_jpg, avoid, log=print):
 def clean_title(t):
     t = (t or "").strip().splitlines()[0] if t and t.strip() else ""
     t = re.sub(r"#\S+", "", t)
+    t = re.sub(r"^\s*\**\s*(title|name)\s*:\s*", "", t, flags=re.I)
     t = t.strip().strip('"\'“”‘’*` ').strip()
-    t = re.sub(r"^(title|name)\s*:\s*", "", t, flags=re.I)
     return re.sub(r"\s+", " ", t).strip()
 
 
