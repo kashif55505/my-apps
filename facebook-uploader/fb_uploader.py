@@ -763,12 +763,22 @@ def _fbb_prepare_profile(user_dir):
                 os.remove(fp)
         except Exception:
             pass
+    for sd in ("Sessions", os.path.join("Default", "Sessions")):        # pichhle tabs ka record hatao
+        try:
+            sp = os.path.join(d, sd)
+            if os.path.isdir(sp):
+                shutil.rmtree(sp, ignore_errors=True)
+        except Exception:
+            pass
     pf = os.path.join(d, "Preferences")
     try:
         prefs = json.load(open(pf, encoding="utf-8")) if os.path.exists(pf) else {}
     except Exception:
         prefs = {}
     prefs["credentials_enable_service"] = False
+    prefs.setdefault("session", {})["restore_on_startup"] = 5          # purane tabs wapas NA khulen
+    prefs.setdefault("profile", {})["exit_type"] = "Normal"           # "Restore pages?" na pooche
+    prefs["profile"]["exited_cleanly"] = True
     prefs.setdefault("ntp", {})["shortcust_visible"] = False      # new tab par shortcuts na dikhen (Chrome ka asli spelling)
     prefs["ntp"]["shortcuts_visible"] = False
     prefs["credentials_enable_autosignin"] = False
@@ -854,9 +864,12 @@ def fb_browser_launch(pw, account, cfg, headless=False, log=print):
         _grid_free(slot)
         raise
     ctx.add_init_script(_stealth_js(fp, lang))
-    for _pg in list(ctx.pages):        # pehle se khula tab bhi naye fingerprint ke sath
+    for i_, _pg in enumerate(list(ctx.pages)):     # sirf ek khaali tab rakho (purane tabs band)
         try:
-            _pg.goto("about:blank")
+            if i_ == 0:
+                _pg.goto("about:blank")
+            else:
+                _pg.close()
         except Exception:
             pass
     # ---- CHECK IP (Bob Prime jaisa): browser khulte hi IP + city + country ----
@@ -877,6 +890,30 @@ def fb_browser_launch(pw, account, cfg, headless=False, log=print):
                 pass
             if tz and info.get("timezone") and info["timezone"] != tz:
                 update_account(acc["id"], geo=None)   # agli dafa sahi timezone
+            allowed = [c.strip().upper() for c in (cfg.get("fbb_allowed_cc", "US") or "").split(",") if c.strip()]
+            if allowed and (info.get("countryCode") or "").upper() not in allowed:
+                msg = T(f"[{acc['name']}] IP is {info.get('country')} ({info.get('countryCode')}) — not {', '.join(allowed)}. "
+                        f"Facebook BLOCKED in this browser to protect the ID's location. Turn on the VPN / set a tunnel.",
+                        f"[{acc['name']}] IP {info.get('country')} ({info.get('countryCode')}) ka hai — {', '.join(allowed)} nahi. "
+                        f"ID ki location bachane ke liye is browser mein Facebook BAND. VPN on karein / tunnel lagayein.")
+                log(msg)
+                if cfg.get("_manual_open"):
+                    # manual: doosri sites chalen, Facebook domains band
+                    def _block(route):
+                        try:
+                            route.abort()
+                        except Exception:
+                            pass
+                    for pat in ("**/*facebook.com/**", "**/*facebook.net/**", "**/*fbcdn.net/**",
+                                "**/*fb.com/**", "**/*messenger.com/**"):
+                        ctx.route(pat, _block)
+                else:
+                    try:
+                        ctx.close()
+                    except Exception:
+                        pass
+                    _grid_free(slot)
+                    raise RuntimeError(msg)
         _pg.goto("about:blank")
     except Exception as e:
         log(T(f"[{acc['name']}] CHECK IP failed: {e.__class__.__name__}", f"[{acc['name']}] CHECK IP nahi hua."))
@@ -2715,6 +2752,53 @@ class Automation:
                 self.log(f"[{acc['name']}] login form: {ex}")
             time.sleep(2)
         return False
+
+    def api_connect_flow(self, app_id, timeout=150):
+        """Is ID ke browser mein: tester invite accept -> OAuth Continue/Allow -> token (URL se)."""
+        import urllib.parse as _up
+        try:
+            self.page.goto("https://developers.facebook.com/requests/", wait_until="domcontentloaded")
+            time.sleep(random.uniform(4, 6))
+            for _ in range(3):
+                if not self._click_exact(["Confirm", "Accept"]):
+                    break
+                time.sleep(2)
+        except Exception:
+            pass
+        url = (f"https://www.facebook.com/{_gv()}/dialog/oauth?client_id={app_id}"
+               f"&redirect_uri={_up.quote(API_REDIRECT, safe='')}&response_type=token&scope={API_SCOPE}")
+        self.page.goto(url, wait_until="domcontentloaded")
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            u = self.page.url or ""
+            if "access_token=" in u:
+                frag = u.split("#", 1)[-1] if "#" in u else u.split("?", 1)[-1]
+                tok = _up.parse_qs(frag).get("access_token", [""])[0]
+                if tok:
+                    return tok
+            txt = self._page_text().lower()
+            if "url blocked" in txt or "can't load url" in txt or "invalid app id" in txt or "app not active" in txt:
+                self.log(T("App setting needed: in your app → Use cases → Customize → Settings, add "
+                           f"{API_REDIRECT} to 'Valid OAuth Redirect URIs' and turn ON 'Client OAuth login' + 'Web OAuth login'.",
+                           "App setting chahiye: app → Use cases → Customize → Settings mein "
+                           f"{API_REDIRECT} ko 'Valid OAuth Redirect URIs' mein daalein aur 'Client OAuth login' + 'Web OAuth login' ON karein."))
+                return ""
+            try:   # saare (current + future) pages chuno
+                for el in self.page.query_selector_all("[role='radio']:has-text('current and future'), "
+                                                       "label:has-text('current and future')"):
+                    if el.is_visible() and (el.get_attribute("aria-checked") or "") != "true":
+                        el.click(timeout=3000); time.sleep(1); break
+            except Exception:
+                pass
+            if not self._click_button(["Continue", "Save", "Allow", "Got it", "OK", "Next", "Done"]):
+                try:
+                    for el in self.page.query_selector_all("[role='button']:has-text('Continue as'), button:has-text('Continue as')"):
+                        if el.is_visible():
+                            el.click(timeout=3000); break
+                except Exception:
+                    pass
+            time.sleep(2.5)
+        return ""
 
     def _clear_browser_data(self):
         """Is browser ka cache + cookies + storage saaf karo (fresh session jaisa)."""
@@ -5703,6 +5787,37 @@ def api_fetch_pages(token):
     return out
 
 
+API_SCOPE = "pages_show_list,pages_read_engagement,pages_manage_posts,business_management"
+API_REDIRECT = "https://www.facebook.com/connect/login_success.html"
+
+
+def api_long_token(app_id, secret, short):
+    """Chhota (1-2 ghante) user token -> lamba (~60 din)."""
+    j = _http(f"{GRAPH}/{_gv()}/oauth/access_token?grant_type=fb_exchange_token&client_id={app_id}"
+              f"&client_secret={secret}&fb_exchange_token={short}")
+    return j.get("access_token") or short
+
+
+def api_add_tester(app_id, secret, uid):
+    """App ke Roles mein ID ko Tester banao (app token se)."""
+    return graph_post(f"{app_id}/roles", f"{app_id}|{secret}", user=uid, role="testers")
+
+
+def api_merge_pages(pages, owner_acc_id="", token=""):
+    with _API_LOCK:
+        d = api_load()
+        for p in pages:
+            cur = d["pages"].setdefault(p["id"], {"enabled": False, "kind": "reel", "times": "",
+                                                  "days": list(range(7)), "folders": [],
+                                                  "rotation": "order", "caption_mode": "auto"})
+            cur["name"], cur["token"] = p["name"], p["token"]
+            if owner_acc_id:
+                cur["owner"] = owner_acc_id
+        if token and token not in [t.get("token") for t in d["tokens"]]:
+            d["tokens"].append({"token": token, "added": time.strftime("%Y-%m-%d"), "owner": owner_acc_id})
+        api_save(d)
+
+
 def api_publish(page, file_path, caption, kind):
     """Ek file page par post. Return post/video id."""
     pid, tok = page["id"], page["token"]
@@ -5806,6 +5921,7 @@ def api_run_page(pid, log=print, file_path=None):
         if file_path and page.get("delete_after"):
             try:
                 os.remove(file_path)
+                captions_remove(os.path.dirname(file_path), os.path.basename(file_path))
             except Exception:
                 pass
         return True
@@ -5876,11 +5992,33 @@ class ApiPagesMixin:
         ttk.Button(r, text=T("How to get token?", "Token kaise milega?"),
                    command=lambda: messagebox.showinfo("API", API_HELP)).pack(side="left", padx=4)
 
+        # ---- saari IDs ko app se khud jodo ----
+        con = ttk.LabelFrame(f, text=T("CONNECT ALL IDs TO YOUR APP (bot does it in each ID's own browser)",
+                                       "SAARI IDs APP SE JODO (bot har ID ke apne browser mein khud karta hai)"))
+        con.pack(fill="x", padx=8, pady=(0, 6))
+        cr = ttk.Frame(con); cr.pack(fill="x", padx=6, pady=4)
+        dd = api_load()
+        ttk.Label(cr, text="App ID:").pack(side="left")
+        self.api_appid = tk.StringVar(value=dd.get("app_id", ""))
+        ttk.Entry(cr, textvariable=self.api_appid, width=20).pack(side="left", padx=4)
+        ttk.Label(cr, text="App Secret:").pack(side="left")
+        self.api_secret = tk.StringVar(value=dd.get("app_secret", ""))
+        ttk.Entry(cr, textvariable=self.api_secret, show="•", width=34).pack(side="left", padx=4)
+        ttk.Button(cr, text=T("CONNECT ticked IDs", "Ticked IDs JODO"), style="Accent.TButton",
+                   command=self._api_connect_ids).pack(side="left", padx=6)
+        ttk.Label(con, text=T("Tick IDs in Accounts (✔), then press CONNECT. For each ID the bot: adds it as Tester in your app → "
+                              "accepts the invite → presses Continue/Allow → saves a 60-day token → brings its pages here.\n"
+                              "App ID + App Secret: developers.facebook.com → My Apps → DK Uploader → App settings → Basic.",
+                              "Accounts mein IDs ✔ karein, phir CONNECT dabayein. Har ID par bot: app mein Tester banata hai → "
+                              "invite accept → Continue/Allow → 60 din ka token save → us ke pages yahan le aata hai.\n"
+                              "App ID + App Secret: developers.facebook.com → My Apps → DK Uploader → App settings → Basic."),
+                  style="Muted.TLabel", wraplength=1200, justify="left").pack(anchor="w", padx=8, pady=(0, 4))
+
         body = ttk.Frame(f); body.pack(fill="both", expand=True, padx=8)
         left = ttk.LabelFrame(body, text=T("PAGES AUTOMATION  (✔ = automation ON)", "PAGES AUTOMATION  (✔ = automation ON)"))
         left.pack(side="left", fill="both", expand=True)
         cols = ("name", "kind", "times", "files", "status")
-        self.api_tree = ttk.Treeview(left, columns=cols, show="tree headings", height=6, selectmode="browse")
+        self.api_tree = ttk.Treeview(left, columns=cols, show="tree headings", height=6, selectmode="extended")
         self.api_tree.column("#0", width=50, anchor="center", stretch=False); self.api_tree.heading("#0", text="On")
         for c, t, w in (("name", "Page", 220), ("kind", "Type", 70), ("times", "Times", 140),
                         ("files", "New files", 80), ("status", "Status", 140)):
@@ -5888,7 +6026,13 @@ class ApiPagesMixin:
         self.api_tree.pack(fill="x", padx=4, pady=4)
         self.api_tree.bind("<Button-1>", self._api_tree_click)
         bb = ttk.Frame(left); bb.pack(fill="x", padx=4, pady=4)
-        ttk.Button(bb, text=T("POST NOW (selected)", "ABHI POST (selected)"), command=self._api_post_now).pack(side="left")
+        ttk.Button(bb, text=T("POST NOW (selected pages)", "ABHI POST (selected pages)"), command=self._api_post_now).pack(side="left")
+        ttk.Label(bb, text=T(" videos per page:", " har page par videos:")).pack(side="left")
+        self.api_pn_count = tk.StringVar(value=str(load_settings().get("api_pn_count", 3)))
+        tk.Spinbox(bb, from_=1, to=20, textvariable=self.api_pn_count, width=4).pack(side="left")
+        ttk.Label(bb, text=T(" gap (sec):", " gap (sec):")).pack(side="left")
+        self.api_pn_gap = tk.StringVar(value=str(load_settings().get("api_pn_gap", 30)))
+        tk.Spinbox(bb, from_=0, to=3600, textvariable=self.api_pn_gap, width=5).pack(side="left", padx=(0, 6))
         ttk.Button(bb, text=T("Remove page", "Page hatao"), command=self._api_remove).pack(side="left", padx=4)
         ttk.Button(bb, text=T("Refresh", "Refresh"), command=self._api_refresh).pack(side="left")
 
@@ -6061,12 +6205,102 @@ class ApiPagesMixin:
         self._api_refresh()
 
     def _api_post_now(self):
-        pid = self.api_cur
-        if not pid:
-            messagebox.showwarning("API", T("Click a page first.", "Pehle page par click karein."))
+        pids = list(self.api_tree.selection()) or ([self.api_cur] if self.api_cur else [])
+        if not pids:
+            messagebox.showwarning("API", T("Select page(s) first (Ctrl+click for many).",
+                                            "Pehle page(s) chunein (zyada ke liye Ctrl+click)."))
             return
-        threading.Thread(target=lambda: (api_run_page(pid, lambda m: self.log_q.put(m)),
-                                         self.after(0, self._api_refresh)), daemon=True).start()
+        try:
+            n = max(1, int(self.api_pn_count.get() or 1)); gap = max(0, int(self.api_pn_gap.get() or 0))
+        except ValueError:
+            n, gap = 1, 30
+        save_settings({"api_pn_count": n, "api_pn_gap": gap})
+        log = lambda m: self.log_q.put(m)
+        log(T(f"[API] POST NOW: {len(pids)} page(s) × {n} video(s), gap {gap}s.",
+              f"[API] ABHI POST: {len(pids)} page × {n} video, gap {gap}s."))
+
+        def one_page(pid):
+            for k in range(n):
+                ok = api_run_page(pid, log)
+                self.after(0, self._api_refresh)
+                if not ok and api_load()["pages"].get(pid, {}).get("status") == "No new file":
+                    break
+                if k < n - 1:
+                    time.sleep(gap + random.randint(0, max(1, gap // 4)))
+
+        def run_all():
+            ths = []
+            for pid in pids:
+                while len([t for t in ths if t.is_alive()]) >= 4:
+                    time.sleep(1)
+                t = threading.Thread(target=one_page, args=(pid,), daemon=True); t.start(); ths.append(t)
+                time.sleep(random.uniform(2, 5))
+            for t in ths:
+                t.join()
+            log(T("[API] POST NOW finished.", "[API] ABHI POST mukammal."))
+        threading.Thread(target=run_all, daemon=True).start()
+
+    def _api_connect_ids(self):
+        app_id = self.api_appid.get().strip(); secret = self.api_secret.get().strip()
+        if not app_id or not secret:
+            messagebox.showwarning("API", T("Enter App ID and App Secret first.", "Pehle App ID aur App Secret daalein."))
+            return
+        accs = self.acc_table.checked_accounts() if hasattr(self, "acc_table") else []
+        if not accs:
+            messagebox.showwarning("API", T("Tick IDs (✔) in Accounts first.", "Pehle Accounts mein IDs ✔ karein."))
+            return
+        with _API_LOCK:
+            d = api_load(); d["app_id"], d["app_secret"] = app_id, secret; api_save(d)
+        log = lambda m: self.log_q.put(m)
+        log(T(f"[API] CONNECT: {len(accs)} ID(s)...", f"[API] CONNECT: {len(accs)} ID..."))
+        self.stop_flag.clear()
+
+        def one(acc):
+            bot = Automation(log=log, headless=False, browser_cfg=load_settings())
+            try:
+                bot.start(acc)
+                if not bot.login(wait_for_2fa_callback=self._wait_2fa):
+                    log(f"[API] {acc['name']}: login failed — skipped."); return
+                uid = bot._fb_uid()
+                if uid:
+                    try:
+                        api_add_tester(app_id, secret, uid)
+                        log(T(f"[API] {acc['name']}: added as Tester.", f"[API] {acc['name']}: Tester ban gayi."))
+                    except Exception as e:
+                        log(f"[API] {acc['name']}: tester: {str(e)[:120]}")
+                short = bot.api_connect_flow(app_id)
+                if not short:
+                    log(T(f"[API] {acc['name']}: token NOT received (see browser).",
+                          f"[API] {acc['name']}: token NAHI mila (browser dekhein).")); return
+                tok = api_long_token(app_id, secret, short)
+                pages = api_fetch_pages(tok)
+                api_merge_pages(pages, acc["id"], tok)
+                update_account(acc["id"], api_connected=time.strftime("%Y-%m-%d"))
+                log(T(f"[API] {acc['name']}: connected ✔ — {len(pages)} page(s).",
+                      f"[API] {acc['name']}: jur gayi ✔ — {len(pages)} page."))
+                self.after(0, self._api_refresh)
+            except Exception as e:
+                log(f"[API] {acc['name']}: {str(e)[:160]}")
+            finally:
+                try:
+                    bot.stop()
+                except Exception:
+                    pass
+
+        def run():
+            set_tile_count(min(2, len(accs)))
+            ths = []
+            for a in accs:
+                if self.stop_flag.is_set():
+                    break
+                while len([t for t in ths if t.is_alive()]) >= 2:
+                    time.sleep(2)
+                t = threading.Thread(target=one, args=(a,), daemon=True); t.start(); ths.append(t)
+                time.sleep(random.uniform(5, 10))
+            for t in ths:
+                t.join()
+            log(T("[API] CONNECT finished.", "[API] CONNECT mukammal."))
+        threading.Thread(target=run, daemon=True).start()
 
     def _api_remove(self):
         pid = self.api_cur
@@ -7907,13 +8141,18 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         threading.Thread(target=work, daemon=True).start()
 
     def _open_browser_manual(self, acc):
+        """(neeche) — browser_cfg mein _manual_open=True: non-US IP par sirf Facebook band, baqi sites chalengi."""
+        return self._open_browser_manual2(acc)
+
+    def _open_browser_manual2(self, acc):
         """Is ID ka FB Browser (apni profile + proxy/VPN + fingerprint) kholo, bot login NAHI karega.
         Aap khud login karein; login hote hi bot UID save karke ID 'Live' kar dega."""
         def work():
             log = lambda m: self.log_q.put(m)
             if not ensure_runtime(log=log):
                 return
-            bot = Automation(log=log, headless=False, browser_cfg=load_settings())
+            cfg_m = dict(load_settings()); cfg_m["_manual_open"] = True
+            bot = Automation(log=log, headless=False, browser_cfg=cfg_m)
             try:
                 bot.start(acc)
                 try:        # khaali tab — aap jo chahein kholein (Facebook bhi)
@@ -7932,7 +8171,12 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
                             url = (bot.page.url or "").lower()
                             if uid and "checkpoint" not in url and "two_step" not in url:
                                 marked = True
-                                bot.is_logged_in()
+                                # page ko haath nahi lagana (aap jo khol rahe hain wahi rahe) — sirf cookie se UID
+                                try:
+                                    if (get_account(acc["id"]) or {}).get("uid") != uid:
+                                        update_account(acc["id"], uid=uid)
+                                except Exception:
+                                    pass
                                 self.after(0, lambda: self._set_status_all(acc["id"], "Live"))
                                 log(T(f"[{acc['name']}] Logged in (manual) — session saved.",
                                       f"[{acc['name']}] Login ho gaya (manual) — session save."))
@@ -9037,6 +9281,10 @@ downloads and replaces itself, then restarts. No manual download needed.
         ttk.Label(fr, text=T("Language (empty = from proxy):", "Zaban (khali = proxy se):")).pack(side="left", padx=(10, 0))
         self.set_fbb_lang = tk.StringVar(value=s.get("fbb_lang", ""))
         ttk.Entry(fr, textvariable=self.set_fbb_lang, width=7).pack(side="left", padx=2)
+        ttk.Label(fr, text=T("  Open Facebook only if IP country is:", "  Facebook sirf is mulk ke IP par:")).pack(side="left")
+        self.set_fbb_cc = tk.StringVar(value=s.get("fbb_allowed_cc", "US"))
+        ttk.Entry(fr, textvariable=self.set_fbb_cc, width=8).pack(side="left", padx=2)
+        ttk.Label(fr, text=T("(e.g. US — empty = any)", "(jaise US — khaali = koi bhi)"), style="Muted.TLabel").pack(side="left")
 
         lr = ttk.Frame(box); lr.pack(fill="x", padx=12, pady=4)
         self.set_ix_limit_on = tk.IntVar(value=1 if s.get("ix_limit_on") else 0)
@@ -9319,7 +9567,8 @@ downloads and replaces itself, then restarts. No manual download needed.
                 return d
         save_settings({"fbb_engine": self.set_fbb_engine.get(), "fbb_per_row": _int(self.set_fbb_row.get(), 4),
                        "fbb_w": _int(self.set_fbb_w.get(), 900), "fbb_h": _int(self.set_fbb_h.get(), 800),
-                       "fbb_mute": bool(self.set_fbb_mute.get()), "fbb_auto_tile": bool(self.set_fbb_tile.get()), "fbb_lang": self.set_fbb_lang.get().strip()})
+                       "fbb_mute": bool(self.set_fbb_mute.get()), "fbb_auto_tile": bool(self.set_fbb_tile.get()), "fbb_lang": self.set_fbb_lang.get().strip(),
+                       "fbb_allowed_cc": self.set_fbb_cc.get().strip().upper()})
         save_settings({"browser": br, "browser_path": self.set_path.get().strip(),
                        "use_ixbrowser": br == "ixbrowser", "ix_max_per_day": ix_max,
                        "ix_limit_on": bool(self.set_ix_limit_on.get()),
