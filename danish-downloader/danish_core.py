@@ -25,7 +25,7 @@ except Exception:
     FFMPEG_PATH = shutil.which("ffmpeg")
 
 APP_NAME = "Danish Downloader"
-VERSION = "1.9"
+VERSION = "1.10"
 GITHUB_USER = "kashif55505"
 GITHUB_REPO = "my-apps"
 GITHUB_FOLDER = "danish-downloader"
@@ -40,6 +40,7 @@ DATA_FILE = os.path.join(BASE_DIR, "danish_data.json")
 LOG_FILE = os.path.join(BASE_DIR, "danish_log.txt")
 VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".m4v", ".avi"}
 TEMP_DIR_NAME = ".danish_temp"
+PHOTOS_DIR = "Photos"
 MAX_TAGS = 4
 MAX_NAME_LEN = 150
 MAX_FAILS = 3  # itni baar fail ho to video chhor di jaye (maslan TikTok photo post)
@@ -59,6 +60,7 @@ DEFAULT_SETTINGS = {
     "ai_model": "",
     "ai_paid": False,
     "max_mb": 40,
+    "photos": True,
 }
 
 DEFAULT_SOURCE = {
@@ -377,6 +379,90 @@ class Engine:
         return [cap, "fps", "vcodec:h264", "acodec:aac"]
 
     @staticmethod
+    def _is_photo_post(info, url):
+        if "/photo/" in (url or ""):
+            return True
+        fmts = info.get("formats") or []
+        return "tiktok" in (info.get("extractor_key") or "").lower() and bool(fmts) and \
+            all((f.get("vcodec") or "") == "none" for f in fmts)
+
+    def _download_photos(self, ydl, src, entry, info):
+        """TikTok photo post: saari tasveerein  <folder>/Photos/  mein."""
+        vid = str(info.get("id") or entry["id"])
+        if not self.store.settings.get("photos", True):
+            self.store.mark_done(src, vid, entry["id"])
+            self.log(f"   ⏭ Photo post skipped (photos OFF): {entry['url']}")
+            return "photo"
+        folder = os.path.join(src["folder"], PHOTOS_DIR)
+        os.makedirs(folder, exist_ok=True)
+        ie = ydl.get_info_extractor("TikTok")
+        user = info.get("uploader") or (re.search(r"@([\w.-]+)", entry["url"]) or [None, "_"])[1]
+        page = f"https://www.tiktok.com/@{user}/photo/{vid}"
+        data, status = ie._extract_web_data_and_status(page, vid)
+        imgs = []
+        for im in ((data or {}).get("imagePost") or {}).get("images") or []:
+            urls = (im.get("imageURL") or {}).get("urlList") or []
+            if urls:
+                imgs.append(urls)
+        if not imgs:
+            raise RuntimeError("Photo post: no images found")
+        cap = caption_of(info)
+        title = None
+        st = self.store.settings
+        if st.get("ai_names") and st.get("ai_key") and is_hashtag_only(cap):
+            try:
+                first = ydl.urlopen(imgs[0][0]).read()
+                profile = self.get_profile(src, info) if src.get("id") != "_links_" else ""
+                title = danish_ai.make_title(st, cap, first, self._recent_names(src["folder"]),
+                                             log=self.log, profile=profile)
+            except Exception as e:
+                self.log(f"   ⚠ AI name error: {e}")
+        base = clean_caption(title, max_tags=0) if title else clean_caption(cap)
+        saved = 0
+        with self.name_lock:
+            if not base:
+                base = numbered_name(folder).replace(PHOTOS_DIR, os.path.basename(os.path.normpath(src["folder"])))
+            stem = base
+            k = 2
+            while any(os.path.exists(os.path.join(folder, f"{stem} {i}.jpg")) for i in (1,)) or \
+                    os.path.exists(os.path.join(folder, stem + ".jpg")):
+                stem = f"{base} ({k})"
+                k += 1
+            multi = len(imgs) > 1
+            for i, urls in enumerate(imgs, 1):
+                raw = None
+                for u in urls:
+                    try:
+                        raw = ydl.urlopen(u).read()
+                        break
+                    except Exception:
+                        continue
+                if not raw:
+                    continue
+                out = os.path.join(folder, f"{stem} {i}.jpg" if multi else f"{stem}.jpg")
+                if raw[:4] == b"RIFF" or raw[:4] == b"\x00\x00\x00\x1c" or raw[4:8] == b"ftyp":
+                    tmp = out + ".src"
+                    with open(tmp, "wb") as f:
+                        f.write(raw)
+                    try:
+                        import subprocess
+                        subprocess.run([FFMPEG_PATH, "-y", "-loglevel", "error", "-i", tmp, out], capture_output=True,
+                                       timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                    finally:
+                        if os.path.exists(tmp):
+                            os.remove(tmp)
+                    if not os.path.exists(out):
+                        continue
+                else:
+                    with open(out, "wb") as f:
+                        f.write(raw)
+                saved += 1
+            self._recent.setdefault(src["folder"], []).append(stem)
+        self.store.mark_done(src, vid, entry["id"])
+        self.log(f"   🖼 {stem}  [{saved} photo{'s' if saved != 1 else ''} → {PHOTOS_DIR}]")
+        return "photo"
+
+    @staticmethod
     def _chosen_size(info):
         fmts = info.get("requested_formats") or [info]
         tot = 0
@@ -582,7 +668,14 @@ class Engine:
 
     # ---- one video
     def download_one(self, src, entry, prog=None):
-        ok = self._download_one(src, entry)
+        res = self._download_one(src, entry)
+        if res == "photo":
+            if prog is not None:
+                with prog["lock"]:
+                    prog["finished"] += 1
+                    prog["photos"] = prog.get("photos", 0) + 1
+            return False
+        ok = res
         if prog is not None:
             with prog["lock"]:
                 prog["finished"] += 1
@@ -609,6 +702,8 @@ class Engine:
                 opts["max_filesize"] = int(max_mb * 1048576)
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(entry["url"], download=False)
+                if self._is_photo_post(info, entry["url"]):
+                    return self._download_photos(ydl, src, entry, info)
                 size = self._chosen_size(info)
                 if max_mb > 0 and size and size > max_mb * 1048576:
                     self.store.mark_done(src, str(info.get("id") or entry["id"]), entry["id"])
@@ -688,7 +783,7 @@ class Engine:
             shutil.rmtree(t, ignore_errors=True)
 
     # ---- one creator/folder
-    def check_source(self, src, force=False):
+    def check_source(self, src, force=False, _round=0):
         folder = src["folder"]
         name = os.path.basename(os.path.normpath(folder))
         os.makedirs(folder, exist_ok=True)
@@ -822,7 +917,11 @@ class Engine:
             src["last_result"] += " — stopped"
         self.set_status(src, src["last_result"])
         self.store.save()
-        self.log(f"■ {name}: {ok}/{len(futs)} videos downloaded.")
+        ph = prog.get("photos", 0)
+        self.log(f"■ {name}: {ok} videos downloaded" + (f", {ph} photo posts saved in {PHOTOS_DIR}." if ph else "."))
+        if ph and _round < 3 and not self.stop_event.is_set() and count_videos(folder) < target:
+            self.log("   Photo posts used some slots — getting more videos to fill the folder...")
+            return ok + self.check_source(src, force=True, _round=_round + 1)
         return ok
 
     # ---- paste links mode

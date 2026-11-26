@@ -434,6 +434,9 @@ class App(ctk.CTk):
         self.e_mb = ctk.CTkEntry(sf, width=50, fg_color=PANEL2, border_color=BORDER)
         self.e_mb.insert(0, str(s.get("max_mb", 40)))
         self.e_mb.pack(side="left")
+        self.v_photos = tk.BooleanVar(value=s.get("photos", True))
+        ctk.CTkSwitch(sf, text="Photos", variable=self.v_photos, progress_color=GREEN, font=(FONT, 12),
+                      width=60, command=self.save_settings).pack(side="left", padx=(12, 0))
         lab("|   Cookies")
         self.o_ck = ctk.CTkOptionMenu(sf, values=["none", "firefox", "edge", "chrome", "brave", "opera"], width=100,
                                       fg_color=SEC, button_color=ACCENT, button_hover_color=ACCENT_H, text_color=SEC_TEXT,
@@ -702,6 +705,7 @@ class App(ctk.CTk):
         s["parallel"] = int(self.o_par.get())
         s["cookies_browser"] = self.o_ck.get()
         s["quality"] = self.o_q.get()
+        s["photos"] = bool(self.v_photos.get())
         try:
             s["max_mb"] = max(float(self.e_mb.get()), 0)
         except ValueError:

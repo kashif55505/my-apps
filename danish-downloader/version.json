@@ -1,5 +1,5 @@
 {
-  "version": "1.9",
+  "version": "1.10",
   "files": ["danish_ai.py", "danish_core.py", "danish_downloader.py"],
-  "notes": "AI names: short one-line, Spanish for Spanish creators, English for others, no @mentions."
+  "notes": "TikTok photo posts saved in a Photos folder inside each creator folder."
 }
