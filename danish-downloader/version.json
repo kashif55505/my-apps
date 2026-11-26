@@ -1,5 +1,5 @@
 {
-  "version": "1.10.1",
+  "version": "1.11",
   "files": ["danish_ai.py", "danish_core.py", "danish_downloader.py"],
-  "notes": "TikTok photo posts saved in a Photos folder inside each creator folder."
+  "notes": "Fix false TikTok login error for creators who did not post this week."
 }

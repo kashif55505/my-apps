@@ -25,7 +25,7 @@ except Exception:
     FFMPEG_PATH = shutil.which("ffmpeg")
 
 APP_NAME = "Danish Downloader"
-VERSION = "1.10.1"
+VERSION = "1.11"
 GITHUB_USER = "kashif55505"
 GITHUB_REPO = "my-apps"
 GITHUB_FOLDER = "danish-downloader"
@@ -543,7 +543,24 @@ class Engine:
                 return None
         return {"id": vid, "url": vurl} if vurl else None
 
+    def _tiktok_secuid_entries(self, sec_uid):
+        """yt-dlp ka 'tiktokuser:' rasta pehle hafte mein video na mile to ghalat 'login' error deta hai.
+        Yahan wahi list khud mangwate hain, bina us jaanch ke (purane hafte bhi dekhta hai)."""
+        o = self.base_opts()
+        with yt_dlp.YoutubeDL(o) as ydl:
+            ie = ydl.get_info_extractor("TikTokUser")
+            for r in ie._entries(sec_uid, None, fail_early=False):
+                n = self._norm_entry(r or {})
+                if n:
+                    yield n
+
     def iter_entries(self, url, _depth=0):
+        if url.startswith("tiktokuser:"):
+            try:
+                yield from self._tiktok_secuid_entries(url.split(":", 1)[1])
+                return
+            except TypeError:
+                pass                      # yt-dlp ka andaaz badal gaya ho to purana rasta
         o = self.base_opts()
         o.update({"extract_flat": "in_playlist", "noplaylist": False, "lazy_playlist": True})
         with yt_dlp.YoutubeDL(o) as ydl:
@@ -908,6 +925,9 @@ class Engine:
             self.log(f"   ⚠ Video list stopped early: {list_err}")
         if not futs:
             ex.shutdown(wait=True)
+            if scanned == 0 and not list_err:
+                self.log("   ⚠ TikTok returned an empty list for this creator. If the profile is public, try again later "
+                         "or set Cookies = firefox (logged in to TikTok).")
             src["last_result"] = f"No new videos ({have}/{target})"
             self.log("   No videos left that haven't been downloaded already.")
             self.set_status(src, src["last_result"])
