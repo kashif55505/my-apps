@@ -12,6 +12,7 @@ import urllib.request
 import urllib.error
 
 DEFAULT_MODELS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"]
+MODEL_CHOICES = ["Auto (Flash)", "gemini-pro-latest", "gemini-2.5-pro", "gemini-flash-latest", "gemini-2.5-flash"]
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _lock = threading.Lock()
@@ -54,18 +55,80 @@ def _call(model, key, parts):
     return " ".join(texts).strip()
 
 
-def make_title(settings, caption, frame_jpg, avoid, log=print):
-    """Gemini se ek naya, alag naam. Na mile to None."""
+def _models(settings):
+    m = (settings.get("ai_model") or "").strip()
+    if not m or m.startswith("Auto"):
+        return DEFAULT_MODELS
+    return [x.strip() for x in m.split(",") if x.strip()] + DEFAULT_MODELS
+
+
+def _gap(settings):
+    return 0.0 if settings.get("ai_paid") else MIN_GAP
+
+
+def _ask(settings, parts, log, what):
     key = (settings.get("ai_key") or "").strip()
-    if not key:
+    last = None
+    for model in _models(settings):
+        for attempt in range(3):
+            gap = _gap(settings)
+            if gap:
+                with _lock:
+                    wait = gap - (time.time() - _last_call[0])
+                    if wait > 0:
+                        time.sleep(wait)
+                    _last_call[0] = time.time()
+            try:
+                t = _call(model, key, parts)
+                if t:
+                    return t
+                break
+            except urllib.error.HTTPError as e:
+                msg = e.read().decode("utf-8", "ignore")[:300]
+                last = f"{model}: HTTP {e.code} {msg}"
+                if e.code in (429, 500, 503) and "limit: 0" not in msg:
+                    time.sleep(5 * (attempt + 1))
+                    continue
+                break
+            except Exception as e:
+                last = f"{model}: {e}"
+                time.sleep(2)
+    if last:
+        log(f"   ⚠ AI {what} failed ({last[:160]})")
+    return None
+
+
+def build_profile(settings, handle, bio, captions, frames, log=print):
+    """Creator ko samjho: bio + kuch videos ki tasveerein + naam -> chhota sa description."""
+    caps = "\n".join(f"- {c}" for c in captions[:20]) or "(none)"
+    prompt = (
+        "You are studying a short-video creator before writing titles for their videos.\n"
+        f"Creator handle: {handle or '(unknown)'}\n"
+        f"Creator bio: {bio or '(not available)'}\n"
+        f"Some of their video captions:\n{caps}\n"
+        f"{len(frames)} frames from their videos are attached.\n"
+        "In 4-6 short lines describe: what kind of content this is (niche), what typically happens in the videos, "
+        "the tone, the audience, and what makes a good title for THIS creator. Be specific. No hashtags."
+    )
+    parts = [{"text": prompt}] + [{"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(f).decode()}}
+                                  for f in frames if f]
+    t = _ask(settings, parts, log, "creator profile")
+    return (t or "").strip()
+
+
+def make_title(settings, caption, frame_jpg, avoid, log=print, profile=""):
+    """Gemini se ek naya, alag naam. Na mile to None."""
+    if not (settings.get("ai_key") or "").strip():
         return None
     lang = settings.get("ai_language") or "English"
     style = (settings.get("ai_style") or "").strip()
     avoid_txt = "\n".join(f"- {a}" for a in avoid[-40:]) or "(none)"
     prompt = (
         "You write titles for short videos that will be posted on a Facebook page.\n"
-        f"Original caption (may be only hashtags): {caption or '(none)'}\n"
-        "Look at the video frame and write ONE new, catchy, natural title that describes this video.\n"
+        + (f"About this creator (use it to understand the content):\n{profile}\n" if profile else "")
+        + f"Original caption (may be only hashtags): {caption or '(none)'}\n"
+        "Look at the video frame and write ONE new, natural title that describes what happens in THIS video, "
+        "in the style that fits this creator.\n"
         f"Rules: {lang} language. 4 to 10 words. NO hashtags. No quotes. No emojis. "
         "Do not copy the original caption. Must be clearly different from every title in this list:\n"
         f"{avoid_txt}\n"
@@ -75,34 +138,11 @@ def make_title(settings, caption, frame_jpg, avoid, log=print):
     parts = [{"text": prompt}]
     if frame_jpg:
         parts.append({"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(frame_jpg).decode()}})
-    models = [m.strip() for m in (settings.get("ai_model") or "").split(",") if m.strip()] or DEFAULT_MODELS
-    last = None
-    for model in models:
-        for attempt in range(3):
-            with _lock:
-                wait = MIN_GAP - (time.time() - _last_call[0])
-                if wait > 0:
-                    time.sleep(wait)
-                _last_call[0] = time.time()
-            try:
-                t = _call(model, key, parts)
-                t = clean_title(t)
-                if t:
-                    return t
-                break
-            except urllib.error.HTTPError as e:
-                msg = e.read().decode("utf-8", "ignore")[:300]
-                last = f"{model}: HTTP {e.code} {msg}"
-                if e.code == 429 and "limit: 0" not in msg:
-                    time.sleep(15 * (attempt + 1))      # zyada requests: thora ruko
-                    continue
-                break                                    # model nahi chala, agla try karo
-            except Exception as e:
-                last = f"{model}: {e}"
-                time.sleep(3)
-    if last:
-        log(f"   ⚠ AI name failed ({last[:160]}) — using caption instead.")
-    return None
+    t = _ask(settings, parts, log, "name")
+    t = clean_title(t)
+    if not t:
+        log("   ⚠ AI name failed — using caption instead.")
+    return t or None
 
 
 def clean_title(t):

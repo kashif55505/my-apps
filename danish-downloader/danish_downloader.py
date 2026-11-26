@@ -232,7 +232,7 @@ class AIDialog(ctk.CTkToplevel):
         self.app = app
         s = app.store.settings
         self.title("AI Names (Gemini)")
-        self.geometry("600x560")
+        self.geometry("620x700")
         self.configure(fg_color=PANEL)
         self.transient(app)
         self.after(100, self.grab_set)
@@ -248,7 +248,10 @@ class AIDialog(ctk.CTkToplevel):
         self.v_on = tk.BooleanVar(value=s.get("ai_names", False))
         ctk.CTkSwitch(f, text="Use AI to name videos (no hashtags, every name different)", variable=self.v_on,
                       progress_color=GREEN, font=(FONT, 13, "bold")).pack(anchor="w")
-        label("Gemini API Key", "Free key: aistudio.google.com/apikey → Create API key → copy and paste here.")
+        ctk.CTkLabel(f, text="Only videos whose caption is just hashtags get an AI name. Gemini first studies the creator "
+                     "(bio, a few videos and their captions), then names each video.", font=(FONT, 11),
+                     text_color=MUTED, anchor="w", justify="left", wraplength=540).pack(fill="x", pady=(4, 0))
+        label("Gemini API Key", "aistudio.google.com/apikey → Create API key → copy and paste here.")
         row = ctk.CTkFrame(f, fg_color="transparent")
         row.pack(fill="x", pady=(4, 0))
         self.e_key = ctk.CTkEntry(row, height=36, fg_color=PANEL2, border_color=BORDER, show="•")
@@ -256,22 +259,24 @@ class AIDialog(ctk.CTkToplevel):
         self.e_key.insert(0, s.get("ai_key", ""))
         btn(row, "Get Key", lambda: __import__("webbrowser").open("https://aistudio.google.com/apikey"),
             color=SEC, hover=SEC_H, width=90).pack(side="left", padx=(8, 0))
+        self.v_paid = tk.BooleanVar(value=s.get("ai_paid", False))
+        ctk.CTkSwitch(f, text="Paid key (fast — no waiting, many names at once)", variable=self.v_paid,
+                      progress_color=GREEN, font=(FONT, 12)).pack(anchor="w", pady=(8, 0))
         label("Name Language")
         self.o_lang = ctk.CTkOptionMenu(f, values=["English", "Roman Urdu", "Urdu", "Hindi", "Spanish", "Portuguese",
                                                    "Arabic", "Same as original caption"],
                                         fg_color=SEC, button_color=ACCENT, button_hover_color=ACCENT_H, text_color=SEC_TEXT)
         self.o_lang.set(s.get("ai_language", "English"))
         self.o_lang.pack(anchor="w", pady=(4, 0))
-        label("Style (optional)", "e.g. 'funny and short', 'curious, makes people watch', 'add one emoji'.")
+        label("Extra instruction (optional)", "Leave empty — Gemini decides the style from the creator.")
         self.e_style = ctk.CTkEntry(f, height=36, fg_color=PANEL2, border_color=BORDER)
         self.e_style.pack(fill="x", pady=(4, 0))
         self.e_style.insert(0, s.get("ai_style", ""))
-        label("Model (optional)", "Leave empty — the app tries the free Gemini Flash models automatically.")
-        self.e_model = ctk.CTkEntry(f, height=36, fg_color=PANEL2, border_color=BORDER,
-                                    placeholder_text=", ".join(core.danish_ai.DEFAULT_MODELS))
-        self.e_model.pack(fill="x", pady=(4, 0))
-        if s.get("ai_model"):
-            self.e_model.insert(0, s["ai_model"])
+        label("Model", "Auto uses Gemini Flash. Choose a Pro model if your key has it.")
+        self.o_model = ctk.CTkComboBox(f, values=core.danish_ai.MODEL_CHOICES, width=260, fg_color=PANEL2,
+                                       border_color=BORDER, button_color=ACCENT, button_hover_color=ACCENT_H)
+        self.o_model.set(s.get("ai_model") or "Auto (Flash)")
+        self.o_model.pack(anchor="w", pady=(4, 0))
         self.l_test = ctk.CTkLabel(f, text="", font=(FONT, 12), text_color=ACCENT, anchor="w", wraplength=540, justify="left")
         self.l_test.pack(fill="x", pady=(10, 0))
         bar = ctk.CTkFrame(self, fg_color="transparent")
@@ -282,7 +287,7 @@ class AIDialog(ctk.CTkToplevel):
     def _collect(self):
         return {"ai_names": bool(self.v_on.get()), "ai_key": self.e_key.get().strip(),
                 "ai_language": self.o_lang.get(), "ai_style": self.e_style.get().strip(),
-                "ai_model": self.e_model.get().strip()}
+                "ai_model": self.o_model.get().strip(), "ai_paid": bool(self.v_paid.get())}
 
     def test(self):
         cfg = dict(self.app.store.settings)
@@ -313,8 +318,12 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(f"{core.APP_NAME}  v{core.VERSION}")
-        self.geometry("1220x780")
-        self.minsize(1040, 640)
+        self.geometry("1400x800")
+        self.minsize(1100, 640)
+        try:
+            self.after(50, lambda: self.state("zoomed"))   # poori screen par khule
+        except Exception:
+            pass
         self.configure(fg_color=BG)
         try:
             self.iconbitmap(os.path.join(core.BASE_DIR, "danish.ico"))
@@ -421,6 +430,10 @@ class App(ctk.CTk):
                                      command=lambda v: self.save_settings())
         self.o_q.set(s.get("quality", "1080p"))
         self.o_q.pack(side="left")
+        lab("|   Max MB")
+        self.e_mb = ctk.CTkEntry(sf, width=50, fg_color=PANEL2, border_color=BORDER)
+        self.e_mb.insert(0, str(s.get("max_mb", 40)))
+        self.e_mb.pack(side="left")
         lab("|   Cookies")
         self.o_ck = ctk.CTkOptionMenu(sf, values=["none", "firefox", "edge", "chrome", "brave", "opera"], width=100,
                                       fg_color=SEC, button_color=ACCENT, button_hover_color=ACCENT_H, text_color=SEC_TEXT,
@@ -550,10 +563,10 @@ class App(ctk.CTk):
         s = self.selected()
         if not s:
             return messagebox.showinfo(core.APP_NAME, "Select creators first (hold Ctrl to select multiple).")
-        n = sum(core.count_videos(x["folder"]) for x in s)
         names = ", ".join(os.path.basename(x["folder"]) for x in s)
         if messagebox.askyesno(core.APP_NAME, f"Give new AI names to the videos already in:\n{names}\n\n"
-                               f"({n} videos. Videos already named by AI are skipped.)"):
+                               f"Only videos whose name is just hashtags (or a number) will be renamed.\n"
+                               f"Videos with real names stay the same."):
             self.engine.run_async(ids=[x["id"] for x in s], rename=True)
 
     # ------------------------------------------------------------ updates
@@ -689,11 +702,15 @@ class App(ctk.CTk):
         s["parallel"] = int(self.o_par.get())
         s["cookies_browser"] = self.o_ck.get()
         s["quality"] = self.o_q.get()
+        try:
+            s["max_mb"] = max(float(self.e_mb.get()), 0)
+        except ValueError:
+            pass
         s["auto"] = bool(self.v_auto.get())
         s["auto_update"] = bool(self.v_autoupd.get())
         self.store.save()
         self.log(f"Settings saved: check every {s['check_hours']} h, {s['parallel']} parallel, "
-                 f"quality: {s['quality']}, cookies: {s['cookies_browser']}, auto check: {'ON' if s['auto'] else 'OFF'}, "
+                 f"quality: {s['quality']}, max {s['max_mb']:.0f} MB, cookies: {s['cookies_browser']}, auto check: {'ON' if s['auto'] else 'OFF'}, "
                  f"auto update: {'ON' if s['auto_update'] else 'OFF'}")
 
 

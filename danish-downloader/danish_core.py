@@ -25,7 +25,7 @@ except Exception:
     FFMPEG_PATH = shutil.which("ffmpeg")
 
 APP_NAME = "Danish Downloader"
-VERSION = "1.7"
+VERSION = "1.8"
 GITHUB_USER = "kashif55505"
 GITHUB_REPO = "my-apps"
 GITHUB_FOLDER = "danish-downloader"
@@ -57,6 +57,8 @@ DEFAULT_SETTINGS = {
     "ai_language": "English",
     "ai_style": "",
     "ai_model": "",
+    "ai_paid": False,
+    "max_mb": 40,
 }
 
 DEFAULT_SOURCE = {
@@ -186,6 +188,18 @@ def clean_caption(text, max_tags=MAX_TAGS, max_len=MAX_NAME_LEN):
     return text
 
 
+def is_hashtag_only(text):
+    """Caption mein sirf hashtags (ya kuch bhi nahi) — tab AI naam banayega."""
+    t = HASHTAG_RE.sub("", text or "")
+    t = re.sub(r"\(\d+\)\s*$", "", t)
+    return not re.search(r"[^\W_]", t)
+
+
+def is_numbered_name(stem, folder):
+    fname = os.path.basename(os.path.normpath(folder))
+    return bool(re.fullmatch(r"\d+ " + re.escape(fname) + r"( \(\d+\))?", stem.strip(), re.I))
+
+
 def unique_path(folder, name, ext):
     path = os.path.join(folder, name + ext)
     i = 2
@@ -305,6 +319,7 @@ class Engine:
         self.last_auto = 0.0
         self.running = False
         self._recent = {}
+        self._plocks = {}
 
     def _recent_names(self, folder):
         try:
@@ -356,6 +371,64 @@ class Engine:
         q = str(self.store.settings.get("quality") or "1080p").lower()
         cap = {"1080p": "res:1080", "720p": "res:720", "480p": "res:480"}.get(q, "res")
         return [cap, "fps", "vcodec:h264", "acodec:aac"]
+
+    @staticmethod
+    def _chosen_size(info):
+        fmts = info.get("requested_formats") or [info]
+        tot = 0
+        for f in fmts:
+            sz = f.get("filesize") or f.get("filesize_approx")
+            if not sz:
+                return 0
+            tot += sz
+        return tot
+
+    def get_profile(self, src, info=None):
+        """Creator ki samajh (bio + videos ki tasveerein + naam). Ek baar bana kar yaad rakho."""
+        st = self.store.settings
+        folder = src["folder"]
+        lock = self._plocks.setdefault(src["id"], threading.Lock())
+        with lock:
+            have = count_videos(folder)
+            if src.get("ai_profile") and (src.get("ai_profile_n", 0) >= 3 or have < 3):
+                return src["ai_profile"]
+            files = sorted((f for f in os.listdir(folder) if os.path.splitext(f)[1].lower() in VIDEO_EXTS),
+                           key=lambda f: os.path.getmtime(os.path.join(folder, f)), reverse=True)
+            pick = files[:: max(1, len(files) // 4)][:4]
+            frames = [danish_ai.grab_frame(os.path.join(folder, f), FFMPEG_PATH) for f in pick]
+            frames = [f for f in frames if f]
+            caps = [os.path.splitext(f)[0] for f in files[:20]]
+            if info is not None and caption_of(info):
+                caps.insert(0, caption_of(info))
+            handle = (info or {}).get("uploader") or (info or {}).get("channel") or \
+                (re.search(r"@([\w.-]+)", src.get("url", "")) or [None, ""])[1]
+            bio = src.get("bio") or self._fetch_bio(src.get("url", ""))
+            if bio:
+                src["bio"] = bio
+            self.log(f"   ✨ Studying creator '{handle}' ({len(frames)} videos{', bio' if bio else ''})...")
+            prof = danish_ai.build_profile(st, handle, bio, caps, frames, log=self.log)
+            if prof:
+                src["ai_profile"] = prof
+                src["ai_profile_n"] = len(frames)
+                self.store.save()
+                self.log("   ✨ Creator understood: " + prof.replace("\n", " ")[:160] + "...")
+            return prof
+
+    @staticmethod
+    def _fetch_bio(url):
+        if "tiktok.com/@" not in (url or ""):
+            return ""
+        try:
+            import urllib.request, html
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"})
+            page = urllib.request.urlopen(req, timeout=20).read().decode("utf-8", "ignore")
+            m = re.search(r'"signature":"(.*?)(?<!\\)"', page)
+            if m:
+                return html.unescape(json.loads('"' + m.group(1) + '"'))[:400]
+        except Exception:
+            pass
+        return ""
 
     def _hook(self, d):
         if self.stop_event.is_set():
@@ -521,9 +594,20 @@ class Engine:
         folder = src["folder"]
         temp = os.path.join(folder, TEMP_DIR_NAME)
         os.makedirs(temp, exist_ok=True)
+        t0 = time.time()
         try:
-            with yt_dlp.YoutubeDL(self.download_opts(temp)) as ydl:
-                info = ydl.extract_info(entry["url"], download=True)
+            max_mb = float(self.store.settings.get("max_mb") or 0)
+            opts = self.download_opts(temp)
+            if max_mb > 0:
+                opts["max_filesize"] = int(max_mb * 1048576)
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(entry["url"], download=False)
+                size = self._chosen_size(info)
+                if max_mb > 0 and size and size > max_mb * 1048576:
+                    self.store.mark_done(src, str(info.get("id") or entry["id"]), entry["id"])
+                    self.log(f"   ⏭ Skipped (too big: {size / 1048576:.0f} MB > {max_mb:.0f} MB): {entry['url']}")
+                    return False
+                info = ydl.process_ie_result(info, download=True)
             vid = str(info.get("id") or entry["id"])
             path = None
             for rd in info.get("requested_downloads") or []:
@@ -534,16 +618,22 @@ class Engine:
                     if fn.startswith(vid + ".") and os.path.splitext(fn)[1].lower() in VIDEO_EXTS:
                         path = os.path.join(temp, fn)
             if not path:
+                if max_mb > 0:
+                    self.store.mark_done(src, vid, entry["id"])
+                    self.log(f"   ⏭ Skipped (bigger than {max_mb:.0f} MB or not a video): {entry['url']}")
+                    return False
                 raise RuntimeError("Output file not found (maybe a photo post, not a video)")
+            dl_secs = time.time() - t0
             ext = os.path.splitext(path)[1].lower()
             cap = caption_of(info)
             title = None
             st = self.store.settings
-            if st.get("ai_names") and st.get("ai_key"):
+            if st.get("ai_names") and st.get("ai_key") and is_hashtag_only(cap):
                 try:
                     frame = danish_ai.grab_frame(path, FFMPEG_PATH)
+                    profile = self.get_profile(src, info) if src.get("id") != "_links_" else ""
                     avoid = self._recent_names(folder)
-                    title = danish_ai.make_title(st, cap, frame, avoid, log=self.log)
+                    title = danish_ai.make_title(st, cap, frame, avoid, log=self.log, profile=profile)
                 except Exception as e:
                     self.log(f"   ⚠ AI name error: {e}")
             with self.name_lock:
@@ -564,7 +654,9 @@ class Engine:
             w, h = info.get("width"), info.get("height")
             q = min(w, h) if w and h else h
             mb = os.path.getsize(final) / 1048576
-            self.log(f"   ✓ {os.path.basename(final)}" + (f"  [{q}p, {mb:.1f} MB]" if q else f"  [{mb:.1f} MB]"))
+            spd = mb / dl_secs if dl_secs > 0 else 0
+            meta = (f"{q}p, " if q else "") + f"{mb:.1f} MB, {dl_secs:.0f}s, {spd:.1f} MB/s" + (", AI name" if title else "")
+            self.log(f"   ✓ {os.path.basename(final)}  [{meta}]")
             return True
         except DownloadCancelled:
             return False
@@ -749,39 +841,56 @@ class Engine:
         files = sorted(f for f in os.listdir(folder)
                        if os.path.splitext(f)[1].lower() in VIDEO_EXTS and os.path.isfile(os.path.join(folder, f)))
         done_set = set(src.get("ai_renamed", []))
-        todo = [f for f in files if f not in done_set]
-        self.log(f"▶ {name}: renaming {len(todo)} videos with AI ({len(files) - len(todo)} already AI-named)...")
-        ok = 0
-        for i, fn in enumerate(todo, 1):
+        todo = [f for f in files if f not in done_set and
+                (is_hashtag_only(os.path.splitext(f)[0]) or is_numbered_name(os.path.splitext(f)[0], folder))]
+        self.log(f"▶ {name}: {len(todo)} hashtag-only videos to rename "
+                 f"({len(files) - len(todo)} have real names — kept as they are).")
+        if not todo:
+            src["last_result"] = "Nothing to rename"
+            self.set_status(src, src["last_result"])
+            return
+        profile = self.get_profile(src)
+        cnt = {"ok": 0, "n": 0}
+        lk = threading.Lock()
+
+        def one(fn):
             if self.stop_event.is_set():
-                break
+                return
             path = os.path.join(folder, fn)
             stem, ext = os.path.splitext(fn)
-            self.set_status(src, f"✨ Renaming {i}/{len(todo)}")
             frame = danish_ai.grab_frame(path, FFMPEG_PATH)
-            title = danish_ai.make_title(st, stem, frame, self._recent_names(folder), log=self.log)
+            title = danish_ai.make_title(st, stem, frame, self._recent_names(folder), log=self.log, profile=profile)
+            with lk:
+                cnt["n"] += 1
             if not title:
-                continue
+                return
             with self.name_lock:
                 new = clean_caption(title, max_tags=0)
                 if not new or new == stem:
-                    continue
+                    return
                 final = unique_path(folder, new, ext)
                 try:
                     os.rename(path, final)
                 except OSError as e:
                     self.log(f"   ✗ {fn}: {e} (file open in another program?)")
-                    continue
+                    return
                 self._recent.setdefault(folder, []).append(os.path.splitext(os.path.basename(final))[0])
             with self.store.lock:
                 src.setdefault("ai_renamed", []).append(os.path.basename(final))
             self.store.save()
-            ok += 1
-            self.log(f"   ✓ {fn}  →  {os.path.basename(final)}   ({i}/{len(todo)})")
-        src["last_result"] = f"✨ {ok} videos renamed"
+            with lk:
+                cnt["ok"] += 1
+                k = cnt["ok"]
+            self.log(f"   ✓ {fn}  →  {os.path.basename(final)}   ({k}/{len(todo)})")
+            self.set_status(src, f"✨ Renamed {k}/{len(todo)}")
+
+        workers = 6 if st.get("ai_paid") else 1
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            list(ex.map(one, todo))
+        src["last_result"] = f"✨ {cnt['ok']} videos renamed"
         self.set_status(src, src["last_result"])
         self.store.save()
-        self.log(f"■ {name}: {ok} videos renamed.")
+        self.log(f"■ {name}: {cnt['ok']}/{len(todo)} videos renamed.")
 
     # ---- run all / some
     def run(self, ids=None, force=False, links=None, links_folder=None, rename=False):

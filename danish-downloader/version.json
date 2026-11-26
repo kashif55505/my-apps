@@ -1,5 +1,5 @@
 {
-  "version": "1.7",
+  "version": "1.8",
   "files": ["danish_ai.py", "danish_core.py", "danish_downloader.py"],
-  "notes": "AI Names (Gemini) + Rename with AI for videos already in folders."
+  "notes": "Max 40 MB per video, AI studies creator first, AI only for hashtag-only names, paid key fast mode, Pro model, speed in log."
 }
