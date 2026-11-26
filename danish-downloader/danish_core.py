@@ -15,6 +15,7 @@ import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import yt_dlp
+import danish_ai
 from yt_dlp.utils import DownloadCancelled
 
 try:
@@ -24,7 +25,7 @@ except Exception:
     FFMPEG_PATH = shutil.which("ffmpeg")
 
 APP_NAME = "Danish Downloader"
-VERSION = "1.5"
+VERSION = "1.6"
 GITHUB_USER = "kashif55505"
 GITHUB_REPO = "my-apps"
 GITHUB_FOLDER = "danish-downloader"
@@ -51,6 +52,11 @@ DEFAULT_SETTINGS = {
     "cookies_file": "",
     "auto_update": True,
     "quality": "1080p",
+    "ai_names": False,
+    "ai_key": "",
+    "ai_language": "English",
+    "ai_style": "",
+    "ai_model": "",
 }
 
 DEFAULT_SOURCE = {
@@ -298,6 +304,15 @@ class Engine:
         self.status = {}          # source id -> live status text
         self.last_auto = 0.0
         self.running = False
+        self._recent = {}
+
+    def _recent_names(self, folder):
+        try:
+            names = [os.path.splitext(f)[0] for f in os.listdir(folder)
+                     if os.path.splitext(f)[1].lower() in VIDEO_EXTS]
+        except OSError:
+            names = []
+        return (names + self._recent.get(folder, []))[-40:]
 
     # ---- yt-dlp options
     def base_opts(self):
@@ -521,12 +536,23 @@ class Engine:
             if not path:
                 raise RuntimeError("Output file not found (maybe a photo post, not a video)")
             ext = os.path.splitext(path)[1].lower()
+            cap = caption_of(info)
+            title = None
+            st = self.store.settings
+            if st.get("ai_names") and st.get("ai_key"):
+                try:
+                    frame = danish_ai.grab_frame(path, FFMPEG_PATH)
+                    avoid = self._recent_names(folder)
+                    title = danish_ai.make_title(st, cap, frame, avoid, log=self.log)
+                except Exception as e:
+                    self.log(f"   ⚠ AI name error: {e}")
             with self.name_lock:
-                name = clean_caption(caption_of(info))
+                name = clean_caption(title, max_tags=0) if title else clean_caption(cap)
                 if not name:
                     name = numbered_name(folder)
                 final = unique_path(folder, name, ext)
                 shutil.move(path, final)
+                self._recent.setdefault(folder, []).append(os.path.splitext(os.path.basename(final))[0])
             self.store.mark_done(src, vid, entry["id"], id_from_url(entry["url"]))
             cid = str(info.get("channel_id") or "")
             if src.get("id") != "_links_" and cid.startswith("MS4w") and not src.get("tiktok_secuid"):

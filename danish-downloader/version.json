@@ -1,5 +1,5 @@
 {
-  "version": "1.5",
-  "files": ["danish_core.py", "danish_downloader.py"],
-  "notes": "Faster: downloads start while list loads; 1080p default with Quality menu; live progress."
+  "version": "1.6",
+  "files": ["danish_ai.py", "danish_core.py", "danish_downloader.py"],
+  "notes": "AI Names with Gemini (no hashtags, unique names)."
 }

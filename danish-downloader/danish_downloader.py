@@ -225,6 +225,90 @@ class LinksDialog(ctk.CTkToplevel):
         self.destroy()
 
 
+class AIDialog(ctk.CTkToplevel):
+    """Gemini se naye naam (hashtags ke baghair)."""
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        s = app.store.settings
+        self.title("AI Names (Gemini)")
+        self.geometry("600x560")
+        self.configure(fg_color=PANEL)
+        self.transient(app)
+        self.after(100, self.grab_set)
+        f = ctk.CTkFrame(self, fg_color=PANEL)
+        f.pack(fill="both", expand=True, padx=18, pady=14)
+
+        def label(t, sub=None):
+            ctk.CTkLabel(f, text=t, font=(FONT, 13, "bold"), text_color=TEXT, anchor="w").pack(fill="x", pady=(10, 0))
+            if sub:
+                ctk.CTkLabel(f, text=sub, font=(FONT, 11), text_color=MUTED, anchor="w",
+                             justify="left", wraplength=540).pack(fill="x")
+
+        self.v_on = tk.BooleanVar(value=s.get("ai_names", False))
+        ctk.CTkSwitch(f, text="Use AI to name videos (no hashtags, every name different)", variable=self.v_on,
+                      progress_color=GREEN, font=(FONT, 13, "bold")).pack(anchor="w")
+        label("Gemini API Key", "Free key: aistudio.google.com/apikey → Create API key → copy and paste here.")
+        row = ctk.CTkFrame(f, fg_color="transparent")
+        row.pack(fill="x", pady=(4, 0))
+        self.e_key = ctk.CTkEntry(row, height=36, fg_color=PANEL2, border_color=BORDER, show="•")
+        self.e_key.pack(side="left", fill="x", expand=True)
+        self.e_key.insert(0, s.get("ai_key", ""))
+        btn(row, "Get Key", lambda: __import__("webbrowser").open("https://aistudio.google.com/apikey"),
+            color=SEC, hover=SEC_H, width=90).pack(side="left", padx=(8, 0))
+        label("Name Language")
+        self.o_lang = ctk.CTkOptionMenu(f, values=["English", "Roman Urdu", "Urdu", "Hindi", "Spanish", "Portuguese",
+                                                   "Arabic", "Same as original caption"],
+                                        fg_color=SEC, button_color=ACCENT, button_hover_color=ACCENT_H, text_color=SEC_TEXT)
+        self.o_lang.set(s.get("ai_language", "English"))
+        self.o_lang.pack(anchor="w", pady=(4, 0))
+        label("Style (optional)", "e.g. 'funny and short', 'curious, makes people watch', 'add one emoji'.")
+        self.e_style = ctk.CTkEntry(f, height=36, fg_color=PANEL2, border_color=BORDER)
+        self.e_style.pack(fill="x", pady=(4, 0))
+        self.e_style.insert(0, s.get("ai_style", ""))
+        label("Model (optional)", "Leave empty — the app tries the free Gemini Flash models automatically.")
+        self.e_model = ctk.CTkEntry(f, height=36, fg_color=PANEL2, border_color=BORDER,
+                                    placeholder_text=", ".join(core.danish_ai.DEFAULT_MODELS))
+        self.e_model.pack(fill="x", pady=(4, 0))
+        if s.get("ai_model"):
+            self.e_model.insert(0, s["ai_model"])
+        self.l_test = ctk.CTkLabel(f, text="", font=(FONT, 12), text_color=ACCENT, anchor="w", wraplength=540, justify="left")
+        self.l_test.pack(fill="x", pady=(10, 0))
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.pack(fill="x", padx=18, pady=12)
+        btn(bar, "Save", self.save, color=GREEN, hover=GREEN_H, width=110).pack(side="right")
+        btn(bar, "Test Key", self.test, color=SEC, hover=SEC_H, width=110).pack(side="right", padx=8)
+
+    def _collect(self):
+        return {"ai_names": bool(self.v_on.get()), "ai_key": self.e_key.get().strip(),
+                "ai_language": self.o_lang.get(), "ai_style": self.e_style.get().strip(),
+                "ai_model": self.e_model.get().strip()}
+
+    def test(self):
+        cfg = dict(self.app.store.settings)
+        cfg.update(self._collect())
+        if not cfg["ai_key"]:
+            return self.l_test.configure(text="Paste your API key first.", text_color=RED)
+        self.l_test.configure(text="Testing...", text_color=ACCENT)
+
+        def work():
+            try:
+                t = core.danish_ai.test_key(cfg)
+                msg, col = (f"✓ Working! Example name: {t}", GREEN_H) if t else ("✗ Key not working (see Activity Log).", RED)
+            except Exception as e:
+                msg, col = (f"✗ {e}", RED)
+            self.after(0, lambda: self.l_test.configure(text=msg, text_color=col))
+        threading.Thread(target=work, daemon=True).start()
+
+    def save(self):
+        self.app.store.settings.update(self._collect())
+        self.app.store.save()
+        on = self.app.store.settings["ai_names"]
+        self.app.log(f"AI Names: {'ON' if on else 'OFF'} ({self.app.store.settings['ai_language']})")
+        self.app.b_ai.configure(text="✨ AI Names: ON" if on else "✨ AI Names")
+        self.destroy()
+
+
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -343,6 +427,9 @@ class App(ctk.CTk):
         self.o_ck.set(s.get("cookies_browser", "none"))
         self.o_ck.pack(side="left")
         btn(sf, "cookies.txt", self.pick_cookies, color=SEC, hover=SEC_H, width=100).pack(side="left", padx=8)
+        self.b_ai = btn(sf, "✨ AI Names: ON" if s.get("ai_names") else "✨ AI Names", lambda: AIDialog(self),
+                        color=PINK, hover=PINK_H, width=140)
+        self.b_ai.pack(side="left", padx=4)
         btn(sf, "Save Settings", self.save_settings, width=120).pack(side="right", padx=14)
 
         # log
