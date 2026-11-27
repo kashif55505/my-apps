@@ -3134,6 +3134,7 @@ class Automation:
         try:
             self.page.goto("https://developers.facebook.com/requests/", wait_until="domcontentloaded")
             time.sleep(random.uniform(4, 6))
+            self.log("    requests page: " + " ".join(self._page_text().split())[:160])
             for _ in range(3):
                 if not self._click_exact(["Confirm", "Accept"]):
                     break
@@ -3153,6 +3154,13 @@ class Automation:
                     return tok
             txt = self._page_text().lower()
             if "url blocked" in txt or "can't load url" in txt or "invalid app id" in txt or "app not active" in txt:
+                self.log("    Facebook says: " + " ".join(self._page_text().split())[:260])
+                if "app not active" in txt:
+                    self.log(T("    → 'App not active' = this ID's tester invite is not accepted yet (Pending). It must be accepted "
+                               "at developers.facebook.com/requests (needs this ID registered as a Meta developer).",
+                               "    → 'App not active' = is ID ka tester invite abhi accept nahi hua (Pending). Ye "
+                               "developers.facebook.com/requests par accept hota hai (is ID ka Meta developer register hona zaroori)."))
+                    return ""
                 self.log(T("App setting needed: in your app → Use cases → Customize → Settings, add "
                            f"{API_REDIRECT} to 'Valid OAuth Redirect URIs' and turn ON 'Client OAuth login' + 'Web OAuth login'.",
                            "App setting chahiye: app → Use cases → Customize → Settings mein "
