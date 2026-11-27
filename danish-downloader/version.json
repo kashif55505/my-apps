@@ -1,5 +1,5 @@
 {
-  "version": "1.14",
+  "version": "1.15",
   "files": ["danish.ico", "danish_ai.py", "danish_core.py", "danish_downloader.py"],
-  "notes": "New logo (Split Green Navy)."
+  "notes": "New KD logo."
 }
