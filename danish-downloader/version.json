@@ -1,5 +1,5 @@
 {
-  "version": "1.13",
+  "version": "1.14",
   "files": ["danish.ico", "danish_ai.py", "danish_core.py", "danish_downloader.py"],
-  "notes": "New app logo + desktop shortcut with logo."
+  "notes": "New logo (Split Green Navy)."
 }

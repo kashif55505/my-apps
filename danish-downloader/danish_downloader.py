@@ -473,7 +473,7 @@ class App(ctk.CTk):
     def make_shortcut(self, force=False):
         """Desktop par 'Danish Downloader' shortcut, apne logo ke saath (ek dafa)."""
         st = self.store.settings
-        if (st.get("shortcut_v1") and not force) or getattr(sys, "frozen", False) or os.name != "nt":
+        if (st.get("shortcut_v2") and not force) or getattr(sys, "frozen", False) or os.name != "nt":
             return
         if not os.path.exists(ICON):
             return
@@ -492,7 +492,7 @@ class App(ctk.CTk):
             r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
                                capture_output=True, text=True, timeout=30, creationflags=NO_WINDOW)
             if r.returncode == 0:
-                st["shortcut_v1"] = True
+                st["shortcut_v2"] = True
                 self.store.save()
                 self.log("✓ Desktop shortcut 'Danish Downloader' created with the app logo. "
                          "You can delete the old shortcut.")
