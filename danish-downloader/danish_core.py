@@ -25,7 +25,7 @@ except Exception:
     FFMPEG_PATH = shutil.which("ffmpeg")
 
 APP_NAME = "Danish Downloader"
-VERSION = "1.15"
+VERSION = "1.16"
 GITHUB_USER = "kashif55505"
 GITHUB_REPO = "my-apps"
 GITHUB_FOLDER = "danish-downloader"
@@ -1101,6 +1101,9 @@ class Engine:
 
     # ---- run all / some
     def run(self, ids=None, force=False, links=None, links_folder=None, rename=False):
+        if getattr(self, "locked", False):
+            self.log("🔒 License not active — downloads are locked.")
+            return
         if not self.run_lock.acquire(blocking=False):
             self.log("⏳ A job is already running, please wait.")
             return
@@ -1145,7 +1148,8 @@ class Engine:
         while True:
             s = self.store.settings
             hours = max(float(s.get("check_hours") or 3), 0.25)
-            if s.get("auto", True) and not self.running and time.time() - self.last_auto >= hours * 3600:
+            if s.get("auto", True) and not self.running and not getattr(self, "locked", False) \
+                    and time.time() - self.last_auto >= hours * 3600:
                 self.last_auto = time.time()
                 self.log(f"⟳ Auto check started — {now_str()}")
                 self.run(force=False)

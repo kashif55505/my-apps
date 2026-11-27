@@ -1,5 +1,5 @@
 {
-  "version": "1.15",
-  "files": ["danish.ico", "danish_ai.py", "danish_core.py", "danish_downloader.py"],
-  "notes": "New KD logo."
+  "version": "1.16",
+  "files": ["danish_license.py", "danish.ico", "danish_ai.py", "danish_core.py", "danish_downloader.py"],
+  "notes": "License system: Machine ID activation, owner Licenses panel."
 }
