@@ -7,6 +7,7 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -123,6 +124,7 @@ type Task struct {
 	Title     string `json:"title,omitempty"`
 	estimate  int64  // video: expected total size (estimate)
 	exactSize int64  // video: exact total size from the servers
+	streaming int    // parts receiving data right now
 }
 
 func newID() string { return strconv.FormatInt(time.Now().UnixNano(), 36) }
@@ -375,6 +377,9 @@ func (t *Task) reqHeaders(req *http.Request) {
 	}
 }
 
+// HTTP/1.1 only, on purpose: with HTTP/2 all parts of a download would share ONE
+// TCP connection (streams), so servers that limit speed per connection would give
+// no more speed than a single connection. Like IDM, every part gets its own connection.
 var httpClient = &http.Client{Transport: &http.Transport{
 	Proxy:                 http.ProxyFromEnvironment,
 	MaxIdleConnsPerHost:   64,
@@ -382,7 +387,17 @@ var httpClient = &http.Client{Transport: &http.Transport{
 	DisableCompression:    true,
 	TLSHandshakeTimeout:   20 * time.Second,
 	ResponseHeaderTimeout: 30 * time.Second,
+	ForceAttemptHTTP2:     false,
+	TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
 }}
+
+// errConnLimit: the server refuses more connections while others are downloading;
+// the extra connection stops and its part goes to a connection that works
+var errConnLimit = errors.New("server allows fewer connections")
+
+func refusalStatus(code int) bool {
+	return code == 403 || code == 429 || code == 503 || code == 509 || code == 421
+}
 
 func (t *Task) probe(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", t.URL, nil)
@@ -722,6 +737,32 @@ func (t *Task) nextSeg() *Seg {
 	return ns
 }
 
+// workLeft: any part not fully downloaded yet
+func (t *Task) workLeft() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, s := range t.Segs {
+		if s.Pos <= s.End {
+			return true
+		}
+	}
+	return false
+}
+
+// partsWaiting: some unfinished parts are taken, but fewer connections are
+// receiving data than there are taken parts
+func (t *Task) partsWaiting() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	taken := 0
+	for _, s := range t.Segs {
+		if s.Pos <= s.End && t.busy[s] {
+			taken++
+		}
+	}
+	return taken > t.streaming
+}
+
 func (t *Task) worker(ctx context.Context, f *os.File, seg *Seg) error {
 	t.mu.Lock()
 	t.active++
@@ -731,6 +772,7 @@ func (t *Task) worker(ctx context.Context, f *os.File, seg *Seg) error {
 		t.active--
 		t.mu.Unlock()
 	}()
+	parked := 0
 	for seg != nil {
 		err := t.fetchSeg(ctx, f, seg)
 		t.mu.Lock()
@@ -740,19 +782,46 @@ func (t *Task) worker(ctx context.Context, f *os.File, seg *Seg) error {
 		if ctx.Err() != nil {
 			return nil
 		}
+		if err == errConnLimit {
+			// The server is full: the part was released above, so working connections
+			// can take it. Wait a little (longer each time), then try again if work is left.
+			parked++
+			wait := time.Duration(1<<min(parked-1, 4)) * time.Second // 1, 2, 4, 8, 16, 16 ... s
+			for until := time.Now().Add(wait); time.Now().Before(until); {
+				if ctx.Err() != nil || !t.workLeft() {
+					return nil // finished meanwhile: don't keep the download waiting
+				}
+				time.Sleep(250 * time.Millisecond)
+			}
+			seg = t.nextSeg()
+			continue
+		}
 		if unfinished {
 			return err
 		}
+		parked = 0
 		seg = t.nextSeg()
+		// No free part right now, but some parts are held by connections that are not
+		// downloading (waiting after a refusal, or still connecting): wait for them
+		// instead of quitting, or the download would slow to a single connection
+		for seg == nil && ctx.Err() == nil && t.partsWaiting() {
+			select {
+			case <-ctx.Done():
+			case <-time.After(250 * time.Millisecond):
+			}
+			seg = t.nextSeg()
+		}
 	}
 	return nil
 }
 
 func (t *Task) fetchSeg(ctx context.Context, f *os.File, seg *Seg) error {
-	retries := 0
+	retries, refusals := 0, 0
 	buf := make([]byte, chunkSize)
 	var lastErr error
 	for ctx.Err() == nil {
+		var got int64    // bytes received in this attempt
+		refused := false // server said no (or gave nothing) to this connection
 		t.mu.Lock()
 		start, end := seg.Pos, seg.End
 		t.mu.Unlock()
@@ -771,6 +840,7 @@ func (t *Task) fetchSeg(ctx context.Context, f *os.File, seg *Seg) error {
 			}
 			resp, err := httpClient.Do(req)
 			if err != nil {
+				refused = true
 				return err
 			}
 			defer resp.Body.Close()
@@ -778,6 +848,7 @@ func (t *Task) fetchSeg(ctx context.Context, f *os.File, seg *Seg) error {
 				return errFileChanged
 			}
 			if resp.StatusCode != 206 {
+				refused = refusalStatus(resp.StatusCode)
 				return fmt.Errorf("range request failed (HTTP %d)", resp.StatusCode)
 			}
 			// The server must say which bytes it sends; never trust that it is exactly what we asked for
@@ -799,6 +870,14 @@ func (t *Task) fetchSeg(ctx context.Context, f *os.File, seg *Seg) error {
 			if ce := strings.ToLower(resp.Header.Get("Content-Encoding")); ce != "" && ce != "identity" {
 				return errors.New("server compressed a range response")
 			}
+			t.mu.Lock()
+			t.streaming++
+			t.mu.Unlock()
+			defer func() {
+				t.mu.Lock()
+				t.streaming--
+				t.mu.Unlock()
+			}()
 			for {
 				n, rerr := resp.Body.Read(buf)
 				if n > 0 {
@@ -814,6 +893,7 @@ func (t *Task) fetchSeg(ctx context.Context, f *os.File, seg *Seg) error {
 					_, werr := f.WriteAt(buf[:n], seg.Pos)
 					if werr == nil {
 						seg.Pos += int64(n)
+						got += int64(n)
 					}
 					t.mu.Unlock()
 					if werr != nil {
@@ -825,12 +905,35 @@ func (t *Task) fetchSeg(ctx context.Context, f *os.File, seg *Seg) error {
 					return nil
 				}
 				if rerr != nil {
+					if got == 0 {
+						refused = true // connection dropped before any data
+					}
 					return rerr
 				}
 			}
 		}()
 		if err == errFileChanged {
 			return err
+		}
+		// Too many connections for this server? If this one keeps being refused while
+		// other parts are downloading, stop it so its part goes to a working connection.
+		if err != nil && refused && got == 0 {
+			refusals++
+			if refusals >= 1 {
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(300 * time.Millisecond):
+				}
+				t.mu.Lock()
+				others := t.streaming
+				t.mu.Unlock()
+				if others > 0 {
+					return errConnLimit
+				}
+			}
+		} else if got > 0 {
+			refusals = 0
 		}
 		if err == nil {
 			t.mu.Lock()
