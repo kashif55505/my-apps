@@ -238,68 +238,104 @@ class AIDialog(ctk.CTkToplevel):
         super().__init__(app)
         self.app = app
         s = app.store.settings
-        self.title("AI Names (Gemini)")
-        self.geometry("620x700")
+        self.title("AI Names")
+        self.geometry("640x760")
         self.configure(fg_color=PANEL)
         self.transient(app)
         self.after(100, self.grab_set)
-        f = ctk.CTkFrame(self, fg_color=PANEL)
+        f = ctk.CTkScrollableFrame(self, fg_color=PANEL)
         f.pack(fill="both", expand=True, padx=18, pady=14)
 
-        def label(t, sub=None):
-            ctk.CTkLabel(f, text=t, font=(FONT, 13, "bold"), text_color=TEXT, anchor="w").pack(fill="x", pady=(10, 0))
+        def label(t, sub=None, parent=None):
+            parent = parent or f
+            ctk.CTkLabel(parent, text=t, font=(FONT, 13, "bold"), text_color=TEXT, anchor="w").pack(fill="x", pady=(10, 0))
             if sub:
-                ctk.CTkLabel(f, text=sub, font=(FONT, 11), text_color=MUTED, anchor="w",
+                ctk.CTkLabel(parent, text=sub, font=(FONT, 11), text_color=MUTED, anchor="w",
                              justify="left", wraplength=540).pack(fill="x")
 
         self.v_on = tk.BooleanVar(value=s.get("ai_names", False))
         ctk.CTkSwitch(f, text="Use AI to name videos (no hashtags, every name different)", variable=self.v_on,
                       progress_color=GREEN, font=(FONT, 13, "bold")).pack(anchor="w")
-        ctk.CTkLabel(f, text="Only videos whose caption is just hashtags get an AI name. Gemini first studies the creator "
-                     "(bio, a few videos and their captions), then names each video.", font=(FONT, 11),
+        ctk.CTkLabel(f, text="Only videos whose caption is just hashtags (or empty) get an AI name. The AI first studies "
+                     "the creator (bio, a few videos and their captions), then names each video.", font=(FONT, 11),
                      text_color=MUTED, anchor="w", justify="left", wraplength=540).pack(fill="x", pady=(4, 0))
-        label("Gemini API Key", "aistudio.google.com/apikey → Create API key → copy and paste here.")
-        row = ctk.CTkFrame(f, fg_color="transparent")
-        row.pack(fill="x", pady=(4, 0))
-        self.e_key = ctk.CTkEntry(row, height=36, fg_color=PANEL2, border_color=BORDER, show="•")
+        label("AI Provider")
+        self.o_prov = ctk.CTkSegmentedButton(f, values=["Claude", "Gemini"], command=self._show,
+                                             selected_color=GREEN, selected_hover_color=GREEN_H, font=(FONT, 13, "bold"))
+        self.o_prov.set(core.danish_ai.provider(s))
+        self.o_prov.pack(anchor="w", pady=(4, 0))
+
+        # --- Claude
+        self.fc = ctk.CTkFrame(f, fg_color=BG, corner_radius=12)
+        label("Claude API Key", "platform.claude.com → API Keys → Create Key → copy (starts with sk-ant-).", self.fc)
+        row = ctk.CTkFrame(self.fc, fg_color="transparent")
+        row.pack(fill="x", pady=(4, 0), padx=2)
+        self.e_ckey = ctk.CTkEntry(row, height=36, fg_color=PANEL, border_color=BORDER, show="•")
+        self.e_ckey.pack(side="left", fill="x", expand=True)
+        self.e_ckey.insert(0, s.get("claude_key", ""))
+        btn(row, "Get Key", lambda: __import__("webbrowser").open("https://platform.claude.com/settings/keys"),
+            color=SEC, hover=SEC_H, width=90).pack(side="left", padx=(8, 0))
+        label("Claude Model", "Haiku = fast and cheap (recommended). Sonnet/Opus = smarter, costs more.", self.fc)
+        self.o_cmodel = ctk.CTkComboBox(self.fc, values=core.danish_ai.CLAUDE_MODELS, width=260, fg_color=PANEL,
+                                        border_color=BORDER, button_color=ACCENT, button_hover_color=ACCENT_H)
+        self.o_cmodel.set(s.get("claude_model") or core.danish_ai.CLAUDE_MODELS[0])
+        self.o_cmodel.pack(anchor="w", pady=(4, 12))
+
+        # --- Gemini
+        self.fg = ctk.CTkFrame(f, fg_color=BG, corner_radius=12)
+        label("Gemini API Key", "aistudio.google.com/apikey → Create API key → copy and paste here.", self.fg)
+        row = ctk.CTkFrame(self.fg, fg_color="transparent")
+        row.pack(fill="x", pady=(4, 0), padx=2)
+        self.e_key = ctk.CTkEntry(row, height=36, fg_color=PANEL, border_color=BORDER, show="•")
         self.e_key.pack(side="left", fill="x", expand=True)
         self.e_key.insert(0, s.get("ai_key", ""))
         btn(row, "Get Key", lambda: __import__("webbrowser").open("https://aistudio.google.com/apikey"),
             color=SEC, hover=SEC_H, width=90).pack(side="left", padx=(8, 0))
         self.v_paid = tk.BooleanVar(value=s.get("ai_paid", False))
-        ctk.CTkSwitch(f, text="Paid key (fast — no waiting, many names at once)", variable=self.v_paid,
+        ctk.CTkSwitch(self.fg, text="Paid key (fast — no waiting, many names at once)", variable=self.v_paid,
                       progress_color=GREEN, font=(FONT, 12)).pack(anchor="w", pady=(8, 0))
+        label("Gemini Model", "Auto uses Gemini Flash. Choose a Pro model if your key has it.", self.fg)
+        self.o_model = ctk.CTkComboBox(self.fg, values=core.danish_ai.MODEL_CHOICES, width=260, fg_color=PANEL,
+                                       border_color=BORDER, button_color=ACCENT, button_hover_color=ACCENT_H)
+        self.o_model.set(s.get("ai_model") or "Auto (Flash)")
+        self.o_model.pack(anchor="w", pady=(4, 12))
+
+        self.anchor = ctk.CTkFrame(f, fg_color="transparent", height=1)
+        self.anchor.pack(fill="x")
         label("Name Language")
-        self.o_lang = ctk.CTkOptionMenu(f, values=[core.danish_ai.AUTO_LANG, "English", "Roman Urdu", "Urdu", "Hindi", "Spanish", "Portuguese",
-                                                   "Arabic", "Same as original caption"],
+        self.o_lang = ctk.CTkOptionMenu(f, values=[core.danish_ai.AUTO_LANG, "English", "Roman Urdu", "Urdu", "Hindi",
+                                                   "Spanish", "Portuguese", "Arabic", "Same as original caption"],
                                         fg_color=SEC, button_color=ACCENT, button_hover_color=ACCENT_H, text_color=SEC_TEXT)
         self.o_lang.set(s.get("ai_language") or core.danish_ai.AUTO_LANG)
         self.o_lang.pack(anchor="w", pady=(4, 0))
-        label("Extra instruction (optional)", "Leave empty — Gemini decides the style from the creator.")
+        label("Extra instruction (optional)", "Leave empty — the AI decides the style from the creator.")
         self.e_style = ctk.CTkEntry(f, height=36, fg_color=PANEL2, border_color=BORDER)
         self.e_style.pack(fill="x", pady=(4, 0))
         self.e_style.insert(0, s.get("ai_style", ""))
-        label("Model", "Auto uses Gemini Flash. Choose a Pro model if your key has it.")
-        self.o_model = ctk.CTkComboBox(f, values=core.danish_ai.MODEL_CHOICES, width=260, fg_color=PANEL2,
-                                       border_color=BORDER, button_color=ACCENT, button_hover_color=ACCENT_H)
-        self.o_model.set(s.get("ai_model") or "Auto (Flash)")
-        self.o_model.pack(anchor="w", pady=(4, 0))
         self.l_test = ctk.CTkLabel(f, text="", font=(FONT, 12), text_color=ACCENT, anchor="w", wraplength=540, justify="left")
         self.l_test.pack(fill="x", pady=(10, 0))
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.pack(fill="x", padx=18, pady=12)
         btn(bar, "Save", self.save, color=GREEN, hover=GREEN_H, width=110).pack(side="right")
         btn(bar, "Test Key", self.test, color=SEC, hover=SEC_H, width=110).pack(side="right", padx=8)
+        self._show(self.o_prov.get())
+
+    def _show(self, prov):
+        self.fc.pack_forget()
+        self.fg.pack_forget()
+        (self.fc if prov == "Claude" else self.fg).pack(fill="x", pady=(10, 0), before=self.anchor, ipadx=10)
 
     def _collect(self):
-        return {"ai_names": bool(self.v_on.get()), "ai_key": self.e_key.get().strip(),
+        return {"ai_names": bool(self.v_on.get()), "ai_provider": self.o_prov.get(),
+                "claude_key": self.e_ckey.get().strip(), "claude_model": self.o_cmodel.get().strip(),
+                "ai_key": self.e_key.get().strip(),
                 "ai_language": self.o_lang.get(), "ai_style": self.e_style.get().strip(),
                 "ai_model": self.o_model.get().strip(), "ai_paid": bool(self.v_paid.get())}
 
     def test(self):
         cfg = dict(self.app.store.settings)
         cfg.update(self._collect())
-        if not cfg["ai_key"]:
+        if not core.danish_ai.has_key(cfg):
             return self.l_test.configure(text="Paste your API key first.", text_color=RED)
         self.l_test.configure(text="Testing...", text_color=ACCENT)
 
@@ -316,7 +352,8 @@ class AIDialog(ctk.CTkToplevel):
         self.app.store.settings.update(self._collect())
         self.app.store.save()
         on = self.app.store.settings["ai_names"]
-        self.app.log(f"AI Names: {'ON' if on else 'OFF'} ({self.app.store.settings['ai_language']})")
+        st = self.app.store.settings
+        self.app.log(f"AI Names: {'ON' if on else 'OFF'} — {core.danish_ai.provider(st)} ({st['ai_language']})")
         self.app.b_ai.configure(text="✨ AI Names: ON" if on else "✨ AI Names")
         self.destroy()
 
@@ -707,7 +744,7 @@ class App(ctk.CTk):
             self.lock_win.grab_release()
             self.lock_win.destroy()
         self.lock_win = None
-        if msg == "Owner":
+        if msg == "Owner" and self.store.settings.get("owner_token"):
             self.b_lic.pack(side="right", padx=(0, 10))
         if was:
             self.log(f"🔓 {msg}")
@@ -852,8 +889,8 @@ class App(ctk.CTk):
 
     def rename_ai(self):
         st = self.store.settings
-        if not (st.get("ai_names") or st.get("ai_key")) or not st.get("ai_key"):
-            messagebox.showinfo(core.APP_NAME, "First set up AI Names (paste your free Gemini key).")
+        if not core.danish_ai.has_key(st):
+            messagebox.showinfo(core.APP_NAME, "First set up AI Names (paste your Claude or Gemini key).")
             return AIDialog(self)
         s = self.selected()
         if not s:

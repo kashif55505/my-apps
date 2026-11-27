@@ -56,6 +56,33 @@ def _call(model, key, parts):
     return " ".join(texts).strip()
 
 
+CLAUDE_MODELS = ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"]
+
+
+def provider(settings):
+    return "Claude" if (settings.get("ai_provider") or "").lower().startswith("claude") else "Gemini"
+
+
+def has_key(settings):
+    k = settings.get("claude_key") if provider(settings) == "Claude" else settings.get("ai_key")
+    return bool((k or "").strip())
+
+
+def _call_claude(model, key, parts):
+    content = []
+    for p in parts:                       # tasveerein pehle, phir text
+        if "inline_data" in p:
+            content.append({"type": "image", "source": {"type": "base64", "media_type": p["inline_data"]["mime_type"],
+                                                        "data": p["inline_data"]["data"]}})
+    content += [{"type": "text", "text": p["text"]} for p in parts if "text" in p]
+    body = json.dumps({"model": model, "max_tokens": 400, "messages": [{"role": "user", "content": content}]}).encode()
+    req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=body, headers={
+        "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"})
+    with urllib.request.urlopen(req, timeout=90) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    return " ".join(b.get("text", "") for b in data.get("content") or [] if b.get("type") == "text").strip()
+
+
 def _models(settings):
     m = (settings.get("ai_model") or "").strip()
     if not m or m.startswith("Auto"):
@@ -64,13 +91,20 @@ def _models(settings):
 
 
 def _gap(settings):
-    return 0.0 if settings.get("ai_paid") else MIN_GAP
+    return 0.0 if (settings.get("ai_paid") or provider(settings) == "Claude") else MIN_GAP
 
 
 def _ask(settings, parts, log, what):
-    key = (settings.get("ai_key") or "").strip()
+    claude = provider(settings) == "Claude"
+    key = ((settings.get("claude_key") if claude else settings.get("ai_key")) or "").strip()
+    if claude:
+        m = (settings.get("claude_model") or CLAUDE_MODELS[0]).strip()
+        models = [m] + [x for x in CLAUDE_MODELS if x != m]
+        call = _call_claude
+    else:
+        models, call = _models(settings), _call
     last = None
-    for model in _models(settings):
+    for model in models:
         for attempt in range(3):
             gap = _gap(settings)
             if gap:
@@ -80,14 +114,16 @@ def _ask(settings, parts, log, what):
                         time.sleep(wait)
                     _last_call[0] = time.time()
             try:
-                t = _call(model, key, parts)
+                t = call(model, key, parts)
                 if t:
                     return t
                 break
             except urllib.error.HTTPError as e:
                 msg = e.read().decode("utf-8", "ignore")[:300]
                 last = f"{model}: HTTP {e.code} {msg}"
-                if e.code in (429, 500, 503) and "limit: 0" not in msg:
+                if e.code in (401, 403):
+                    break
+                if e.code in (429, 500, 503, 529) and "limit: 0" not in msg:
                     time.sleep(5 * (attempt + 1))
                     continue
                 break
@@ -121,7 +157,7 @@ def build_profile(settings, handle, bio, captions, frames, log=print):
 
 def make_title(settings, caption, frame_jpg, avoid, log=print, profile=""):
     """Gemini se ek naya, alag naam. Na mile to None."""
-    if not (settings.get("ai_key") or "").strip():
+    if not has_key(settings):
         return None
     lang = pick_language(settings, profile)
     style = (settings.get("ai_style") or "").strip()

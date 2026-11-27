@@ -25,7 +25,7 @@ except Exception:
     FFMPEG_PATH = shutil.which("ffmpeg")
 
 APP_NAME = "Danish Downloader"
-VERSION = "1.16"
+VERSION = "1.17"
 GITHUB_USER = "kashif55505"
 GITHUB_REPO = "my-apps"
 GITHUB_FOLDER = "danish-downloader"
@@ -55,6 +55,9 @@ DEFAULT_SETTINGS = {
     "quality": "1080p",
     "ai_names": False,
     "ai_key": "",
+    "ai_provider": "Gemini",
+    "claude_key": "",
+    "claude_model": "claude-haiku-5-5",
     "ai_language": "Auto (Spanish creator → Spanish, others → English)",
     "ai_style": "",
     "ai_model": "",
@@ -413,7 +416,7 @@ class Engine:
         cap = caption_of(info)
         title = None
         st = self.store.settings
-        if st.get("ai_names") and st.get("ai_key") and is_hashtag_only(cap):
+        if st.get("ai_names") and danish_ai.has_key(st) and is_hashtag_only(cap):
             try:
                 first = ydl.urlopen(imgs[0][0]).read()
                 profile = self.get_profile(src, info) if src.get("id") != "_links_" else ""
@@ -823,7 +826,7 @@ class Engine:
             cap = caption_of(info)
             title = None
             st = self.store.settings
-            if st.get("ai_names") and st.get("ai_key") and is_hashtag_only(cap):
+            if st.get("ai_names") and danish_ai.has_key(st) and is_hashtag_only(cap):
                 try:
                     frame = danish_ai.grab_frame(path, FFMPEG_PATH)
                     profile = self.get_profile(src, info) if src.get("id") != "_links_" else ""

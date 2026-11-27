@@ -136,6 +136,9 @@ def check(settings):
             except ValueError:
                 pass
         return False, f"Cannot check license (no internet?): {e}", {"mid": mid}
+    if mid in (data.get("owners") or []):
+        settings["lic_ok_until"] = (today + datetime.timedelta(days=30)).isoformat()
+        return True, "Owner", {"owner": True, "mid": mid}
     entry = (data.get("machines") or {}).get(mid)
     st = entry_state(entry, today)
     if st == "ok":

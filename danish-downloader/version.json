@@ -1,5 +1,5 @@
 {
-  "version": "1.16",
+  "version": "1.17",
   "files": ["danish_license.py", "danish.ico", "danish_ai.py", "danish_core.py", "danish_downloader.py"],
-  "notes": "License system: Machine ID activation, owner Licenses panel."
+  "notes": "Claude AI for names; owner PCs by Machine ID (no token needed)."
 }
