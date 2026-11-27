@@ -66,7 +66,7 @@ if sys.platform.startswith("win"):
 # ============================================================
 # VERSION + AUTO-UPDATE (GitHub se)
 # ============================================================
-APP_VERSION = "1.65"
+APP_VERSION = "1.66"
 # Apni GitHub repo (update isi se aayega)
 GITHUB_OWNER = "kashif55505"
 GITHUB_REPO = "my-apps"
