@@ -3175,6 +3175,111 @@ class Automation:
             time.sleep(2.5)
         return ""
 
+    def api_explorer_flow(self, app_id, timeout=150):
+        """Graph API Explorer se token (app mein Login setting ki zaroorat nahi):
+        explorer (isi app ke saath) -> permissions -> Generate Access Token -> popup Continue/Save -> token."""
+        import re as _re
+        perms = [p_.strip() for p_ in API_SCOPE.split(",") if p_.strip()]
+        ctx = self.page.context
+        url = (f"https://developers.facebook.com/tools/explorer/{app_id}/"
+               f"?method=GET&path=me%2Faccounts&version={_gv()}")
+        self.log(T("    → Graph API Explorer: getting token...", "    → Graph API Explorer: token le rahe hain..."))
+        try:
+            self.page.goto(url, wait_until="domcontentloaded")
+        except Exception:
+            pass
+        time.sleep(random.uniform(5, 7))
+
+        def read_tok():
+            try:
+                return self.page.evaluate("""() => {
+                    for (const e of document.querySelectorAll('input, textarea')) {
+                        const v = (e.value || '').trim();
+                        if (/^EAA[A-Za-z0-9]{60,}$/.test(v)) return v;
+                    }
+                    return '';
+                }""") or ""
+            except Exception:
+                return ""
+        txt = self._page_text().lower()
+        if "register" in txt and ("developer" in txt) and "generate access token" not in txt:
+            self.log(T("    This ID is not registered as a Meta developer — open developers.facebook.com in this browser and press "
+                       "'Get Started' once, then CONNECT again.",
+                       "    Ye ID Meta developer registered nahi — is browser mein developers.facebook.com khol kar ek dafa "
+                       "'Get Started' karein, phir CONNECT dobara."))
+        # 1) permissions daalo
+        for pm in perms:
+            try:
+                box = None
+                for el in self.page.query_selector_all("input"):
+                    ph = ((el.get_attribute("placeholder") or "") + " " + (el.get_attribute("aria-label") or "")).lower()
+                    if "permission" in ph and el.is_visible():
+                        box = el; break
+                if not box:
+                    break
+                box.click(); box.fill(""); box.type(pm, delay=25); time.sleep(0.9)
+                picked = False
+                for opt in self.page.query_selector_all("[role='option'], li[role='option'], [role='listbox'] *"):
+                    try:
+                        if opt.is_visible() and (opt.inner_text() or "").strip().lower() == pm:
+                            opt.click(); picked = True; break
+                    except Exception:
+                        continue
+                if not picked:
+                    box.press("Enter")
+                time.sleep(0.5)
+            except Exception:
+                continue
+        # 2) Generate Access Token -> popup
+        popup = None
+        try:
+            with ctx.expect_page(timeout=15000) as pinfo:
+                if not self._click_button(["Generate Access Token", "Get Access Token", "Get User Access Token"]):
+                    raise RuntimeError("no generate button")
+            popup = pinfo.value
+        except Exception:
+            popup = None
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            tok = read_tok()
+            if tok and (popup is None or popup.is_closed()):
+                self.log(T("    → token received from Graph API Explorer ✔", "    → Graph API Explorer se token mil gaya ✔"))
+                return tok
+            if popup is not None and not popup.is_closed():
+                try:
+                    old = self.page
+                    self.page = popup
+                    try:
+                        for el in popup.query_selector_all("[role='radio']:has-text('current and future'), "
+                                                           "label:has-text('current and future')"):
+                            if el.is_visible() and (el.get_attribute("aria-checked") or "") != "true":
+                                el.click(timeout=3000); time.sleep(1); break
+                    except Exception:
+                        pass
+                    if not self._click_button(["Continue", "Save", "Allow", "Got it", "OK", "Next", "Done"]):
+                        try:
+                            for el in popup.query_selector_all("[role='button']:has-text('Continue as'), button:has-text('Continue as')"):
+                                if el.is_visible():
+                                    el.click(timeout=3000); break
+                        except Exception:
+                            pass
+                finally:
+                    self.page = old
+            elif not tok and time.time() - t0 > 25:
+                # popup nahi aaya / band ho gaya magar token nahi -> button dobara
+                try:
+                    with ctx.expect_page(timeout=10000) as pinfo:
+                        self._click_button(["Generate Access Token", "Get Access Token"])
+                    popup = pinfo.value
+                except Exception:
+                    popup = None
+                t0 = min(t0 + 20, time.time())
+            time.sleep(2)
+        tok = read_tok()
+        if not tok:
+            self.log(T("    Graph API Explorer: token not found on the page.", "    Graph API Explorer: page par token nahi mila."))
+        return tok
+
     def _clear_browser_data(self):
         """Is browser ka cache + cookies + storage saaf karo (fresh session jaisa)."""
         try:
@@ -7155,7 +7260,9 @@ class ApiPagesMixin:
                                 api_add_tester(app_id, secret, uid)
                             except Exception as e2:
                                 log(f"[API] {acc['name']}: tester: {str(e2)[:120]}")
-                short = bot.api_connect_flow(app_id)
+                short = bot.api_connect_flow(app_id, timeout=40)
+                if not short:
+                    short = bot.api_explorer_flow(app_id)
                 if not short:
                     log(T(f"[API] {acc['name']}: token NOT received (see browser).",
                           f"[API] {acc['name']}: token NAHI mila (browser dekhein).")); return
@@ -7185,15 +7292,15 @@ class ApiPagesMixin:
                     pass
 
         def run():
-            set_tile_count(min(2, len(accs)))
+            set_tile_count(min(3, len(accs)))
             ths = []
             for a in accs:
                 if self.stop_flag.is_set():
                     break
-                while len([t for t in ths if t.is_alive()]) >= 2:
+                while len([t for t in ths if t.is_alive()]) >= 3:
                     time.sleep(2)
                 t = threading.Thread(target=one, args=(a,), daemon=True); t.start(); ths.append(t)
-                time.sleep(random.uniform(5, 10))
+                time.sleep(random.uniform(3, 6))
             for t in ths:
                 t.join()
             log(T("[API] CONNECT finished.", "[API] CONNECT mukammal."))
@@ -11770,18 +11877,57 @@ downloads and replaces itself, then restarts. No manual download needed.
                 self._log_btn.config(text="▸ Live log  (click to show)")
         self._log_btn.bind("<Button-1>", _toggle)
         self.after(50, lambda: _toggle(init=True))
+        # filter: sirf API / Login / Download / Post wali lines
+        tk.Label(lh, text="   Show:", bg=PAL["bg"], fg="#9fb3d1", font=("Segoe UI", 10)).pack(side="left")
+        self._log_filter = tk.StringVar(value="All")
+        self._log_all = []
+        fcb = ttk.Combobox(lh, textvariable=self._log_filter, state="readonly", width=10,
+                           values=["All", "API", "Login", "Download", "Post", "Errors"])
+        fcb.pack(side="left", padx=4)
+        fcb.bind("<<ComboboxSelected>>", lambda e: self._log_rerender())
         self.log_text = tk.Text(lf, height=5, state="disabled", bg="#060b14", fg="#5eead4", font=("Consolas", 10, "bold"),
                                 relief="flat", highlightthickness=0)
         self.log_text.pack(fill="both", expand=True, padx=4, pady=4)
+
+    def _log_match(self, m):
+        f = self._log_filter.get() if hasattr(self, "_log_filter") else "All"
+        low = m.lower()
+        if f == "All":
+            return True
+        if f == "API":
+            return low.startswith("[api]") or "graph api" in low or "token" in low
+        if f == "Download":
+            return low.startswith("[source]")
+        if f == "Post":
+            return any(k in low for k in ("post", "upload", "reel", "publish")) and not low.startswith("[source]")
+        if f == "Errors":
+            return any(k in low for k in ("error", "fail", "nahi mila", "not received", "not found", "skip"))
+        if f == "Login":
+            return any(k in low for k in ("login", "2fa", "captcha", "checkpoint", "security check", "browser opened"))
+        return True
+
+    def _log_rerender(self):
+        self.log_text.config(state="normal")
+        self.log_text.delete("1.0", tk.END)
+        for m in self._log_all[-1500:]:
+            if self._log_match(m):
+                self.log_text.insert(tk.END, m + "\n")
+        self.log_text.see(tk.END)
+        self.log_text.config(state="disabled")
 
     def _drain_log(self):
         try:
             while True:
                 msg = self.log_q.get_nowait()
-                self.log_text.config(state="normal")
-                self.log_text.insert(tk.END, str(msg) + "\n")
-                self.log_text.see(tk.END)
-                self.log_text.config(state="disabled")
+                if hasattr(self, "_log_all"):
+                    self._log_all.append(str(msg))
+                    if len(self._log_all) > 3000:
+                        self._log_all = self._log_all[-2000:]
+                if self._log_match(str(msg)):
+                    self.log_text.config(state="normal")
+                    self.log_text.insert(tk.END, str(msg) + "\n")
+                    self.log_text.see(tk.END)
+                    self.log_text.config(state="disabled")
                 sm = str(msg)
                 self.log_buffer.append(sm)
                 if len(self.log_buffer) > 300:
