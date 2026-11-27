@@ -1,5 +1,5 @@
 {
-  "version": "1.12",
-  "files": ["danish_ai.py", "danish_core.py", "danish_downloader.py"],
-  "notes": "TikWM backup list (no login) when TikTok refuses a creator."
+  "version": "1.13",
+  "files": ["danish.ico", "danish_ai.py", "danish_core.py", "danish_downloader.py"],
+  "notes": "New app logo + desktop shortcut with logo."
 }

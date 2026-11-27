@@ -43,6 +43,12 @@ YTDLP_UPDATE_EVERY = 24 * 3600   # update yt-dlp once a day
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 ctk.set_appearance_mode("light")
+ICON = os.path.join(core.BASE_DIR, "danish.ico")
+try:   # taskbar par apna logo (Python ka nahi)
+    import ctypes
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Danish.Downloader")
+except Exception:
+    pass
 
 
 def btn(parent, text, cmd, color=ACCENT, hover=ACCENT_H, width=150):
@@ -325,10 +331,8 @@ class App(ctk.CTk):
         except Exception:
             pass
         self.configure(fg_color=BG)
-        try:
-            self.iconbitmap(os.path.join(core.BASE_DIR, "danish.ico"))
-        except Exception:
-            pass
+        self._set_icon()
+        self.after(300, self._set_icon)      # customtkinter apna icon baad mein lagata hai, us ke baad dobara
 
         self.logq = queue.Queue()
         self.store = core.Store()
@@ -342,6 +346,7 @@ class App(ctk.CTk):
         self.after(1500, self._tick)
         self.engine.start_scheduler()
         threading.Thread(target=self._auto_update_loop, daemon=True).start()
+        threading.Thread(target=self.make_shortcut, daemon=True).start()
         if not core.FFMPEG_PATH:
             self.log("⚠ FFmpeg not found — needed for 1080p/4K. Run 1_Install again.")
         self.log(f"Danish Downloader v{core.VERSION} started — {core.now_str()}. "
@@ -457,6 +462,44 @@ class App(ctk.CTk):
                                     font=("Consolas", 11), corner_radius=10)
         self.t_log.pack(fill="both", expand=True, padx=10, pady=(4, 10))
         self.t_log.configure(state="disabled")
+
+    def _set_icon(self):
+        try:
+            if os.path.exists(ICON):
+                self.iconbitmap(ICON)
+        except Exception:
+            pass
+
+    def make_shortcut(self, force=False):
+        """Desktop par 'Danish Downloader' shortcut, apne logo ke saath (ek dafa)."""
+        st = self.store.settings
+        if (st.get("shortcut_v1") and not force) or getattr(sys, "frozen", False) or os.name != "nt":
+            return
+        if not os.path.exists(ICON):
+            return
+        py = sys.executable
+        if py.lower().endswith("python.exe"):
+            alt = py[:-10] + "pythonw.exe"
+            py = alt if os.path.exists(alt) else py
+        script = os.path.join(core.BASE_DIR, "danish_downloader.py")
+        q = lambda x: x.replace("'", "''")
+        ps = ("$d=[Environment]::GetFolderPath('Desktop');"
+              "$s=(New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $d 'Danish Downloader.lnk'));"
+              f"$s.TargetPath='{q(py)}';$s.Arguments='\"{q(script)}\"';"
+              f"$s.WorkingDirectory='{q(core.BASE_DIR)}';$s.IconLocation='{q(ICON)},0';"
+              "$s.Description='Danish Downloader';$s.Save()")
+        try:
+            r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+                               capture_output=True, text=True, timeout=30, creationflags=NO_WINDOW)
+            if r.returncode == 0:
+                st["shortcut_v1"] = True
+                self.store.save()
+                self.log("✓ Desktop shortcut 'Danish Downloader' created with the app logo. "
+                         "You can delete the old shortcut.")
+            else:
+                self.log("⚠ Could not create desktop shortcut: " + (r.stderr or "").strip()[:150])
+        except Exception as e:
+            self.log(f"⚠ Could not create desktop shortcut: {e}")
 
     # ------------------------------------------------------------ helpers
     def log(self, msg):
