@@ -3142,7 +3142,7 @@ class Automation:
         except Exception:
             pass
         url = (f"https://www.facebook.com/{_gv()}/dialog/oauth?client_id={app_id}"
-               f"&redirect_uri={_up.quote(API_REDIRECT, safe='')}&response_type=token&scope={API_SCOPE}")
+               f"&redirect_uri={_up.quote(api_redirect(), safe='')}&response_type=token&scope={API_SCOPE}")
         self.page.goto(url, wait_until="domcontentloaded")
         t0 = time.time()
         while time.time() - t0 < timeout:
@@ -3161,10 +3161,10 @@ class Automation:
                                "    → 'App not active' = is ID ka tester invite abhi accept nahi hua (Pending). Ye "
                                "developers.facebook.com/requests par accept hota hai (is ID ka Meta developer register hona zaroori)."))
                     return ""
-                self.log(T("App setting needed: in your app → Use cases → Customize → Settings, add "
-                           f"{API_REDIRECT} to 'Valid OAuth Redirect URIs' and turn ON 'Client OAuth login' + 'Web OAuth login'.",
-                           "App setting chahiye: app → Use cases → Customize → Settings mein "
-                           f"{API_REDIRECT} ko 'Valid OAuth Redirect URIs' mein daalein aur 'Client OAuth login' + 'Web OAuth login' ON karein."))
+                self.log(T("App setting needed: developers.facebook.com → your app → Facebook Login for Business → Settings: "
+                           f"add {api_redirect()} to 'Valid OAuth Redirect URIs', turn ON 'Client OAuth login' + 'Web OAuth login', Save.",
+                           "App setting chahiye: developers.facebook.com → app → Facebook Login for Business → Settings: "
+                           f"{api_redirect()} ko 'Valid OAuth Redirect URIs' mein daalein, 'Client OAuth login' + 'Web OAuth login' ON, Save."))
                 return ""
             try:   # saare (current + future) pages chuno
                 for el in self.page.query_selector_all("[role='radio']:has-text('current and future'), "
@@ -6551,8 +6551,18 @@ def api_fetch_pages(token):
     return out
 
 
-API_SCOPE = "pages_show_list,pages_read_engagement,pages_manage_posts,business_management"
-API_REDIRECT = "https://www.facebook.com/connect/login_success.html"
+API_SCOPE = "business_management,pages_show_list,pages_read_engagement,pages_manage_posts,pages_manage_metadata,read_insights"
+# Facebook apna (facebook.com) link Redirect URI mein nahi lene deta — apni (muft) website ka link.
+# Token URL ke '#' hisse mein aata hai (server tak jata hi nahi) — bot browser ke address bar se padhta hai.
+API_REDIRECT_DEFAULT = "https://kashif55505.github.io/dk-callback/"
+API_REDIRECT = API_REDIRECT_DEFAULT
+
+
+def api_redirect():
+    try:
+        return (api_load().get("redirect") or API_REDIRECT_DEFAULT).strip()
+    except Exception:
+        return API_REDIRECT_DEFAULT
 
 
 def api_long_token(app_id, secret, short):
@@ -6882,6 +6892,33 @@ class ApiPagesMixin:
         ttk.Button(cr, text="Export", command=self._api_export_app).pack(side="left", padx=2)
         ttk.Button(cr, text="Pages", style="Green.TButton", command=self._page_manager).pack(side="right", padx=6)
         ttk.Button(cr, text="Import", command=self._api_import_app).pack(side="left", padx=2)
+        rr = ttk.Frame(con); rr.pack(fill="x", padx=8, pady=(2, 2))
+        ttk.Label(rr, text="OAuth Redirect URI:").pack(side="left")
+        self.api_redir = tk.StringVar(value=api_redirect())
+        ttk.Entry(rr, textvariable=self.api_redir, width=46).pack(side="left", padx=4)
+
+        def _copy(v):
+            self.clipboard_clear(); self.clipboard_append(v)
+            self.log_q.put(T("Copied: ", "Copy ho gaya: ") + v)
+        ttk.Button(rr, text="⧉ Copy", command=lambda: _copy(self.api_redir.get().strip())).pack(side="left", padx=(0, 10))
+        ttk.Label(rr, text="Permissions / scopes:").pack(side="left")
+        sc = tk.StringVar(value=API_SCOPE)
+        ttk.Entry(rr, textvariable=sc, width=60, state="readonly").pack(side="left", padx=4, fill="x", expand=True)
+        ttk.Button(rr, text="⧉ Copy", command=lambda: _copy(API_SCOPE)).pack(side="left")
+
+        def _save_redir(*_):
+            v = self.api_redir.get().strip()
+            if v.startswith("https://"):
+                with _API_LOCK:
+                    d_ = api_load(); d_["redirect"] = v; api_save(d_)
+        self.api_redir.trace_add("write", _save_redir)
+        ttk.Label(con, text=T("ONE-TIME app setting: developers.facebook.com → your app → Facebook Login for Business → Settings → "
+                              "turn ON 'Client OAuth login' + 'Web OAuth login', paste the Redirect URI above into "
+                              "'Valid OAuth Redirect URIs' → Save changes.",
+                              "EK DAFA app setting: developers.facebook.com → app → Facebook Login for Business → Settings → "
+                              "'Client OAuth login' + 'Web OAuth login' ON, upar wala Redirect URI 'Valid OAuth Redirect URIs' "
+                              "mein paste → Save changes."),
+                  style="Muted.TLabel", wraplength=1200, justify="left").pack(anchor="w", padx=8)
         ttk.Label(con, text=T("Several apps: one app takes about 50 IDs (testers). Add App 2, App 3... with '+ New app' — when an app "
                               "is full, CONNECT automatically uses the next app. App ID / Secret are saved as you type.",
                               "Kai apps: ek app mein takreeban 50 IDs (testers). '+ Nayi app' se App 2, App 3... daalein — jab ek app "
