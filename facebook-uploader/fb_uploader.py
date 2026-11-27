@@ -6555,8 +6555,38 @@ def api_long_token(app_id, secret, short):
 
 
 def api_add_tester(app_id, secret, uid):
-    """App ke Roles mein ID ko Tester banao (app token se)."""
-    return graph_post(f"{app_id}/roles", f"{app_id}|{secret}", user=uid, role="testers")
+    """App ke Roles mein ID ko Tester banao. Pehle app token; Facebook mana kare (business app)
+    to app ke ADMIN (developer ID, jaise Kashif Iqbal) ke apne token se."""
+    errs = []
+    try:
+        return graph_post(f"{app_id}/roles", f"{app_id}|{secret}", user=uid, role="testers")
+    except Exception as e:
+        errs.append(str(e))
+    d = api_load()
+    toks = []
+    for t_ in d.get("tokens", []):           # admin (developer) ka token pehle, phir baaqi
+        tk_ = t_.get("token")
+        if tk_ and tk_ not in toks:
+            if t_.get("admin") or not t_.get("owner"):
+                toks.insert(0, tk_)
+            else:
+                toks.append(tk_)
+    for tk_ in toks[:12]:
+        try:
+            r = graph_post(f"{app_id}/roles", tk_, user=uid, role="testers")
+            with _API_LOCK:                      # jis token se chala woh admin hai — yaad rakho
+                d2 = api_load()
+                for t2 in d2.get("tokens", []):
+                    if t2.get("token") == tk_:
+                        t2["admin"] = True
+                api_save(d2)
+            return r
+        except Exception as e:
+            em = str(e).lower()
+            if "already" in em:
+                return {"success": True}
+            errs.append(str(e))
+    raise RuntimeError(errs[-1] if errs else "tester add failed")
 
 
 def api_merge_pages(pages, owner_acc_id="", token=""):
