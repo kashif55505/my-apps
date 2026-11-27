@@ -3277,16 +3277,49 @@ class Automation:
         relogins = 0
         last_fill = time.time()
         uid_since = 0
+        busy_since = 0
+        busy_told = False
+        empty_cap_since = 0
+        cap_reloads = 0
         while time.time() - t0 < max_secs:
             if getattr(self, "stop_event", None) and self.stop_event.is_set():
                 return False
+            txt = self._ptext()
+            url = (self.page.url or "").lower()
+
+            # 0) "Running security checks / Please wait / Verifying" — Facebook khud check kar raha hai:
+            #    kuch mat chhero (na relogin, na page badlo), bas intezaar (2 min tak, phir 1 dafa reload)
+            if any(k in txt for k in ("running security check", "security checks", "please wait",
+                                      "verifying", "just a moment", "checking your browser")) \
+                    and len(txt) < 1500 and "code" not in txt and "password" not in txt:
+                busy_since = busy_since or time.time()
+                if not busy_told:
+                    busy_told = True
+                    self.log(T(f"[{acc['name']}] Facebook is running security checks — waiting patiently...",
+                               f"[{acc['name']}] Facebook security check chala raha hai — sabr se intezaar..."))
+                if time.time() - busy_since < 120:
+                    last_fill = time.time()          # is dauran relogin bilkul nahi
+                    time.sleep(3); continue
+                try:
+                    self.log(T(f"[{acc['name']}] Security check stuck for 2 min — reloading the page once.",
+                               f"[{acc['name']}] Security check 2 min se atka — page 1 dafa reload."))
+                    self.page.reload(wait_until="domcontentloaded")
+                except Exception:
+                    pass
+                busy_since = time.time() - 60       # agli dafa 1 min baad
+                time.sleep(5); continue
+            busy_since = 0
+
             if self._fb_uid():
-                url = (self.page.url or "").lower()
                 if "checkpoint" not in url and "two_step" not in url and "two_factor" not in url:
                     return True
-                # login ho chuka (cookie mil gayi) magar koi beech ka page atka — zyada intezaar nahi
+                # login ho chuka (cookie mil gayi) magar koi beech ka page atka.
+                # 2FA / captcha / code wala page ho to BILKUL na chhoro — pehle use poora karo.
+                actionable = ("two_step" in url or "two_factor" in url or "code" in txt
+                              or "authentication" in txt or "recaptcha" in txt or "robot" in txt
+                              or self._has_captcha())
                 uid_since = uid_since or time.time()
-                if time.time() - uid_since > 15:
+                if not actionable and time.time() - uid_since > 20:
                     self.log(T(f"[{acc['name']}] Logged in — skipping the leftover screen.",
                                f"[{acc['name']}] Login ho gaya — bacha hua page chhor kar aage."))
                     try:
@@ -3297,8 +3330,52 @@ class Automation:
                     if self._fb_uid() and "checkpoint" not in u2 and "two_step" not in u2 and "two_factor" not in u2:
                         return True
                     uid_since = time.time()
-            txt = self._ptext()
-            url = (self.page.url or "").lower()
+
+            # 0b) Meta ka reCAPTCHA page khula magar "I'm not a robot" ka dabba load hi nahi hua
+            #     (khaali page) -> 12 sec intezaar, phir page reload (5 dafa tak), dabba aate hi hal karo
+            cap_page = ("recaptcha enterprise" in txt or "combat harmful conduct" in txt
+                        or "i'm not a robot" in txt)
+            if cap_page:
+                a_el, _b = self._find_iframe_el("anchor")
+                c_el, _b2 = self._find_iframe_el("challenge")
+                if not a_el and not c_el:
+                    empty_cap_since = empty_cap_since or time.time()
+                    last_fill = time.time()
+                    if time.time() - empty_cap_since > 12:
+                        if cap_reloads < 5:
+                            cap_reloads += 1
+                            self.log(T(f"[{acc['name']}] Captcha box did not load — reloading page ({cap_reloads}/5)...",
+                                       f"[{acc['name']}] Captcha ka dabba load nahi hua — page reload ({cap_reloads}/5)..."))
+                            try:
+                                self.page.reload(wait_until="domcontentloaded")
+                            except Exception:
+                                pass
+                            empty_cap_since = time.time()
+                            captcha_tries = min(captcha_tries, 2)
+                            time.sleep(6); continue
+                        elif cap_reloads == 5:
+                            cap_reloads += 1
+                            try:
+                                self.page.bring_to_front()
+                            except Exception:
+                                pass
+                            self.log(T(f"[{acc['name']}] Captcha box still not loading after 5 reloads — please tick it in the browser if it shows (I keep watching).",
+                                       f"[{acc['name']}] 5 reload ke baad bhi captcha ka dabba nahi aaya — aaye to browser mein tick kar dein (main dekh raha hoon)."))
+                    time.sleep(2); continue
+                empty_cap_since = 0
+                if captcha_tries >= 6 and cap_reloads < 5:
+                    # 6 koshishen ho chukin — fresh captcha ke liye reload, phir dobara
+                    cap_reloads += 1
+                    self.log(T(f"[{acc['name']}] Fresh captcha — reloading ({cap_reloads}/5)...",
+                               f"[{acc['name']}] Naya captcha — reload ({cap_reloads}/5)..."))
+                    try:
+                        self.page.reload(wait_until="domcontentloaded")
+                    except Exception:
+                        pass
+                    captcha_tries = 2
+                    time.sleep(6); continue
+            else:
+                empty_cap_since = 0
 
             # 1) Text captcha (free OCR) / reCAPTCHA (2captcha)
             if captcha_tries < 3 and self._has_text_captcha():
