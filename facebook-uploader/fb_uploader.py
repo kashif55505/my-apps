@@ -2732,6 +2732,33 @@ _NOT_NAMES = {"facebook", "notifications", "chats", "home", "manage profile", "e
               "settings & privacy", "account", "accounts center", "professional dashboard", "meta"}
 
 
+def valid_fb_name(t, acc=None):
+    """Asli insaani naam hai? 'Facebook', menu ke lafz, email, numbers wagaira — NAHI."""
+    import re as _re
+    if not t:
+        return ""
+    t = _re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", str(t)).split("\n")[0].strip()
+    t = _re.sub(r"^\(\d+\)\s*", "", t)
+    t = t.split("|")[0].strip()
+    t = _re.sub(r"\s*[-–·]\s*facebook$", "", t, flags=_re.I).strip()
+    low = " ".join(t.lower().split())
+    if not low or len(low) < 2 or len(low) > 60:
+        return ""
+    if low in _NOT_NAMES or "facebook" in low or "@" in low or "http" in low or "/" in low:
+        return ""
+    if low.startswith(("log in", "sign up", "welcome", "see more", "what's on your mind", "create ")):
+        return ""
+    if sum(ch.isdigit() for ch in low) > 2:
+        return ""
+    if acc:
+        em = (acc.get("email") or "").lower().split("@")[0]
+        if em and low.replace(" ", "") == em and " " not in low:
+            return ""          # email ka hissa — naam nahi
+    if not any(ch.isalpha() for ch in low):
+        return ""
+    return t
+
+
 class Automation:
     def __init__(self, log=print, headless=False, browser_cfg=None):
         self.log = log
@@ -3258,6 +3285,26 @@ class Automation:
         self.log(T(f"[{acc['name']}] {self.last_error}", f"[{acc['name']}] {self.last_error}"))
         return False
 
+    def _frames_text(self):
+        """Main page ke ilawa saare (iframe) frames ka text — Meta ka captcha page frame ke andar hota hai."""
+        out = []
+        try:
+            for fr in self.page.frames:
+                if fr == self.page.main_frame:
+                    continue
+                fu = (fr.url or "").lower()
+                if not fu or fu.startswith("about:") or "google.com/recaptcha" in fu:
+                    continue
+                try:
+                    t = fr.evaluate("() => document.body ? document.body.innerText : ''")
+                    if t:
+                        out.append(t.lower()[:3000])
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return " ".join(out)
+
     def _ptext(self):
         try:
             return (self.page.inner_text("body") or "").lower()
@@ -3333,8 +3380,16 @@ class Automation:
 
             # 0b) Meta ka reCAPTCHA page khula magar "I'm not a robot" ka dabba load hi nahi hua
             #     (khaali page) -> 12 sec intezaar, phir page reload (5 dafa tak), dabba aate hi hal karo
-            cap_page = ("recaptcha enterprise" in txt or "combat harmful conduct" in txt
-                        or "i'm not a robot" in txt)
+            ftxt = self._frames_text()
+            cap_page = any(k in (txt + " " + ftxt) for k in (
+                "recaptcha enterprise", "combat harmful conduct", "i'm not a robot", "i am not a robot"))
+            if not cap_page:
+                try:
+                    cap_page = any("captcha" in (fr.url or "").lower() and "about:blank" not in (fr.url or "")
+                                   for fr in self.page.frames if fr != self.page.main_frame) \
+                               and len(txt.strip()) < 400
+                except Exception:
+                    pass
             if cap_page:
                 a_el, _b = self._find_iframe_el("anchor")
                 c_el, _b2 = self._find_iframe_el("challenge")
@@ -3732,6 +3787,7 @@ class Automation:
             self.log(f"2captcha submit error: {d.get('request')}")
             return None
         cid = d["request"]
+        self._last_cap_id = cid
         t0 = time.time()
         time.sleep(4)
         while time.time() - t0 < wait_secs:
@@ -3746,6 +3802,83 @@ class Automation:
                 return None
         self.log("2captcha timeout.")
         return None
+
+    def _twocap_bad(self, key):
+        """Ghalat jawab 2Captcha ko report (paise wapas + worker ki rating kam)."""
+        cid = getattr(self, "_last_cap_id", None)
+        if not cid:
+            return
+        self._last_cap_id = None
+        try:
+            import urllib.request
+            urllib.request.urlopen(f"https://2captcha.com/res.php?key={key}&action=reportbad&id={cid}", timeout=15)
+        except Exception:
+            pass
+
+    def _grid_solve_in_frame(self, key, bframe, rounds_max=8):
+        """Google challenge frame tak rasai ho to: asli hidayat + tasveeron ka grid 2Captcha ko
+        (recaptcha=1 grid method — coordinates se zyada sahi), phir sahi tiles par click."""
+        import base64
+        for rnd in range(rounds_max):
+            try:
+                tbl = bframe.query_selector("table[class*='rc-imageselect-table']")
+            except Exception:
+                return None
+            if not tbl or not tbl.is_visible():
+                return None if rnd == 0 else "done"
+            inst_el = bframe.query_selector(".rc-imageselect-desc-wrapper, .rc-imageselect-instructions")
+            inst = " ".join((inst_el.inner_text() if inst_el else "").split())
+            rows = tbl.query_selector_all("tr")
+            n_rows = len(rows) or 3
+            n_cols = len(rows[0].query_selector_all("td")) if rows else 3
+            time.sleep(1.5)                      # tasveerein poori load hon (adhuri tasveer = ghalat jawab)
+            png = tbl.screenshot(scale="css")
+            dynamic = "none left" in inst.lower()
+            self.log(T(f"Captcha images ({n_rows}x{n_cols}): '{inst[:60]}' → 2Captcha...",
+                       f"Captcha tasveerein ({n_rows}x{n_cols}): '{inst[:60]}' → 2Captcha..."))
+            ans = self._twocap(key, {"method": "base64", "body": base64.b64encode(png).decode(),
+                                     "recaptcha": 1, "textinstructions": inst or "Select all matching images",
+                                     "recaptcharows": n_rows, "recaptchacols": n_cols,
+                                     "can_no_answer": 1}, wait_secs=100)
+            if ans is None:
+                try:
+                    bframe.click("#recaptcha-reload-button", timeout=3000)
+                except Exception:
+                    pass
+                time.sleep(3); continue
+            tiles = tbl.query_selector_all("td")
+            picks = []
+            if ans.lower().startswith("click:"):
+                for part in ans.split(":", 1)[1].split("/"):
+                    try:
+                        picks.append(int(part.strip()))
+                    except Exception:
+                        pass
+            for n in picks:
+                if 1 <= n <= len(tiles):
+                    self._human_click(bframe, tiles[n - 1])
+                    time.sleep(random.uniform(0.3, 0.7))
+            if dynamic and picks:
+                time.sleep(4.5)                  # nayi tasveerein aane do, phir dobara
+                continue
+            time.sleep(0.8)
+            try:
+                vb = bframe.query_selector("#recaptcha-verify-button")
+                if vb:
+                    self._human_click(bframe, vb)
+            except Exception:
+                pass
+            time.sleep(3)
+            try:
+                err = bframe.query_selector(".rc-imageselect-incorrect-response, .rc-imageselect-error-select-more, "
+                                            ".rc-imageselect-error-dynamic-more, .rc-imageselect-error-select-something")
+                if err and err.is_visible():
+                    self.log(T("Captcha: wrong answer — reported to 2Captcha, trying again.",
+                               "Captcha: ghalat jawab — 2Captcha ko report, dobara."))
+                    self._twocap_bad(key)
+            except Exception:
+                pass
+        return "done"
 
     def _find_iframe_el(self, kinds):
         """Sab frames mein captcha iframe ELEMENT dhoondo (frame khud list na ho tab bhi)."""
@@ -3826,12 +3959,28 @@ class Automation:
                         self.log(T("Captcha ticked ✔", "Captcha tick ho gaya ✔"))
                         return True
                 continue
-            # tasveerein aayi hain -> 2Captcha
+            # tasveerein aayi hain -> pehle asli grid tareeqa (frame tak rasai ho to), warna coordinates
             rounds += 1
             time.sleep(1.2)                       # tasveerein poori load hon
             ch, cb = self._find_iframe_el("challenge")
             if not ch:
                 continue
+            if not getattr(self, "_grid_failed", False):
+                try:
+                    bf = ch.content_frame()
+                except Exception:
+                    bf = None
+                if bf:
+                    r = self._grid_solve_in_frame(key, bf)
+                    if r == "done":
+                        time.sleep(2)
+                        el, b = self._find_iframe_el("anchor")
+                        if el and self._anchor_ticked(el):
+                            self.log(T("Captcha ticked ✔", "Captcha tick ho gaya ✔"))
+                            return True
+                        continue
+                    self._grid_failed = True       # frame andar se nahi parha ja saka — coordinates
+            prev_png = None
             if rounds in (3, 6):
                 # 2 dafa ghalat — naya (aasaan) challenge lo
                 self.log(T("Captcha: taking a new challenge...", "Captcha: naya challenge le rahe hain..."))
@@ -3848,8 +3997,9 @@ class Automation:
                        f"Captcha tasveerein → 2Captcha (round {rounds})..."))
             ans = self._twocap(key, {"method": "base64", "body": base64.b64encode(png).decode(),
                                      "coordinatescaptcha": 1,
-                                     "textinstructions": "Follow the instruction in the blue header and click every matching "
-                                                         "image tile. If none match, click the Skip/Verify button."},
+                                     "textinstructions": "Read the BLUE header. Click the CENTER of EVERY image tile that "
+                                                         "matches (check each tile carefully, include partial matches for 4x4). "
+                                                         "Do NOT click the header or buttons."},
                                wait_secs=90)
             ch, cb = self._find_iframe_el("challenge")
             if not ch:
@@ -3858,7 +4008,8 @@ class Automation:
                 # naya challenge lo (reload button: neeche baayen)
                 self._click_xy(cb["x"] + 28, cb["y"] + cb["height"] - 28)
                 time.sleep(3); continue
-            pts = re.findall(r"x=(\d+),y=(\d+)", ans)
+            pts = [(xs, ys) for xs, ys in re.findall(r"x=(\d+),y=(\d+)", ans)
+                   if int(ys) > 90 and int(ys) < cb["height"] - 60]   # header/buttons par click nahi
             for xs, ys in pts:
                 self._click_xy(cb["x"] + int(xs), cb["y"] + int(ys))
                 time.sleep(random.uniform(0.25, 0.6))
@@ -3867,6 +4018,10 @@ class Automation:
             if ch2:     # Verify / Skip (neeche daayen)
                 self._click_xy(cb2["x"] + cb2["width"] - 50, cb2["y"] + cb2["height"] - 28)
             time.sleep(4)
+            ch3, _cb3 = self._find_iframe_el("challenge")
+            e3, _b3 = self._find_iframe_el("anchor")
+            if ch3 and pts and not (e3 and self._anchor_ticked(e3)):
+                self._twocap_bad(key)            # ghalat tiles — report (agla worker behtar)
         el, b = self._find_iframe_el("anchor")
         return bool(el and self._anchor_ticked(el))
 
@@ -4765,26 +4920,56 @@ class Automation:
                 self.page.goto(f"https://www.facebook.com/profile.php?id={u0}", wait_until="domcontentloaded")
                 time.sleep(random.uniform(4, 6))
             nm = ""
-            for sel in ("[role='main'] h1", "h1"):
+            # 1) profile ke andar asli h1 (naam) — saare h1 dekho, pehla sahi naam lo
+            for _try in range(3):
                 try:
-                    for h1 in self.page.query_selector_all(sel):
-                        t = (h1.inner_text() or "").split("\n")[0].strip()
-                        if t and len(t) < 80 and t.lower() not in _NOT_NAMES:
-                            nm = t; break
+                    cands = self.page.evaluate("""() => {
+                        const out = [];
+                        const main = document.querySelector('[role="main"]');
+                        for (const h of (main || document).querySelectorAll('h1, h2')) {
+                            const r = h.getBoundingClientRect();
+                            if (r.width > 0 && r.height > 0) out.push(h.innerText || '');
+                        }
+                        const og = document.querySelector('meta[property="og:title"]');
+                        if (og) out.push(og.content || '');
+                        out.push(document.title || '');
+                        return out;
+                    }""") or []
                 except Exception:
-                    pass
+                    cands = []
+                for c in cands:
+                    v = valid_fb_name(c, acc)
+                    if v:
+                        nm = v; break
                 if nm:
                     break
-            if not nm:
-                try:      # tab title: "Kashif Iqbal | Facebook"
-                    t = (self.page.title() or "").split("|")[0].strip()
-                    t = _re.sub(r"^\(\d+\)\s*", "", t)
-                    if t and t.lower() not in _NOT_NAMES and "@" not in t:
-                        nm = t
+                time.sleep(2)
+            # 2) Home ke baayen menu mein apni profile ka link (naam ke saath)
+            if not nm and u0:
+                try:
+                    self.page.goto(FB_HOME, wait_until="domcontentloaded"); time.sleep(random.uniform(4, 6))
+                    cands = self.page.evaluate("""(uid) => {
+                        const out = [];
+                        for (const a of document.querySelectorAll('a[href*="' + uid + '"], [role="navigation"] a[href*="/me"]')) {
+                            const t = (a.innerText || a.getAttribute('aria-label') || '').trim();
+                            if (t) out.push(t);
+                        }
+                        return out;
+                    }""", u0) or []
+                    for c in cands:
+                        v = valid_fb_name(c, acc)
+                        if v:
+                            nm = v; break
+                    self.page.goto(f"https://www.facebook.com/profile.php?id={u0}", wait_until="domcontentloaded")
+                    time.sleep(random.uniform(3, 5))
                 except Exception:
                     pass
+            if not nm:
+                self.log(T("    (real profile name not found this time — will try again next login; email name NOT used)",
+                           "    (asli profile naam is dafa nahi mila — agli login par dobara; email wala naam NAHI lagaya)"))
             if nm:
                 upd["name"] = nm
+                upd["name_ok"] = True
             # asli DP (profile picture) save — export ke waqt folder mein copy hogi
             try:
                 dp_url = self.page.evaluate("""() => {
@@ -6111,13 +6296,54 @@ GRAPH_VIDEO = "https://graph-video.facebook.com"
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
+APP_TESTER_LIMIT = 48        # Facebook ~50 tester per app (bina business verification) — 2 ki gunjaish
+
+
 def api_load():
     d = _load(API_FILE, {})
     d.setdefault("tokens", [])
     d.setdefault("pages", {})
     d.setdefault("history", [])
     d.setdefault("graph_version", "v22.0")
+    apps = d.setdefault("apps", [])
+    if not apps and d.get("app_id"):
+        apps.append({"id": d.get("app_id", ""), "secret": d.get("app_secret", "")})
     return d
+
+
+def api_apps(d=None):
+    d = d or api_load()
+    return [a for a in d.get("apps", []) if a.get("id") and a.get("secret")]
+
+
+def api_app_secret(app_id, d=None):
+    for a in api_apps(d):
+        if a["id"] == app_id:
+            return a["secret"]
+    d = d or api_load()
+    return d.get("app_secret", "") if d.get("app_id") == app_id else ""
+
+
+def api_app_users(app_id):
+    """Is app mein kitni IDs (testers) lag chuki hain."""
+    return [a["id"] for a in load_accounts() if a.get("api_app") == app_id]
+
+
+def api_pick_app(acc, d=None):
+    """ID ke liye app: pehle se jis app mein hai wahi; warna pehli app jis mein jagah ho (50 se kam)."""
+    apps = api_apps(d)
+    if not apps:
+        return None
+    cur = acc.get("api_app")
+    for a in apps:
+        if a["id"] == cur:
+            return a
+    for a in apps:
+        if a.get("full"):
+            continue
+        if len(api_app_users(a["id"])) < APP_TESTER_LIMIT:
+            return a
+    return None
 
 
 def api_save(d):
@@ -6383,14 +6609,15 @@ def api_run_page(pid, log=print, file_path=None, prog=""):
 def api_token_watch(log):
     """Din mein ek dafa: jis token ki muddat 7 din se kam reh gayi, us ID ko khud dobara CONNECT."""
     d = api_load()
-    if not d.get("app_id") or not d.get("app_secret"):
+    if not api_apps(d):
         return
     due = []
     for t_ in d.get("tokens", []):
         exp = t_.get("expires")
         if not exp:
             try:     # Facebook se poochho kab khatam hoga
-                j = _http(f"{GRAPH}/{_gv()}/debug_token?input_token={t_['token']}&access_token={d['app_id']}|{d['app_secret']}")
+                aid = t_.get("app_id") or api_apps(d)[0]["id"]
+                j = _http(f"{GRAPH}/{_gv()}/debug_token?input_token={t_['token']}&access_token={aid}|{api_app_secret(aid, d)}")
                 exp = (j.get("data") or {}).get("data_access_expires_at") or (j.get("data") or {}).get("expires_at") or 0
                 if exp:
                     t_["expires"] = exp
@@ -6489,17 +6716,34 @@ class ApiPagesMixin:
         con.pack(fill="x", padx=8, pady=(0, 6))
         cr = ttk.Frame(con); cr.pack(fill="x", padx=6, pady=4)
         dd = api_load()
+        ttk.Label(cr, text="App:").pack(side="left")
+        self.api_app_idx = 0
+        self.api_app_cb = ttk.Combobox(cr, state="readonly", width=24)
+        self.api_app_cb.pack(side="left", padx=(2, 2))
+        self.api_app_cb.bind("<<ComboboxSelected>>", lambda e: self._api_app_select(self.api_app_cb.current()))
+        ttk.Button(cr, text=T("+ New app", "+ Nayi app"), command=self._api_app_new).pack(side="left", padx=2)
+        ttk.Button(cr, text=T("Delete app", "App hatao"), command=self._api_app_del).pack(side="left", padx=(2, 8))
         ttk.Label(cr, text="App ID:").pack(side="left")
-        self.api_appid = tk.StringVar(value=dd.get("app_id", ""))
-        ttk.Entry(cr, textvariable=self.api_appid, width=20).pack(side="left", padx=4)
+        a0 = (dd.get("apps") or [{}])[0]
+        self.api_appid = tk.StringVar(value=a0.get("id", ""))
+        ttk.Entry(cr, textvariable=self.api_appid, width=18).pack(side="left", padx=4)
         ttk.Label(cr, text="App Secret:").pack(side="left")
-        self.api_secret = tk.StringVar(value=dd.get("app_secret", ""))
-        ttk.Entry(cr, textvariable=self.api_secret, show="•", width=34).pack(side="left", padx=4)
+        self.api_secret = tk.StringVar(value=a0.get("secret", ""))
+        ttk.Entry(cr, textvariable=self.api_secret, show="•", width=30).pack(side="left", padx=4)
+        self._api_app_loading = False
+        self.api_appid.trace_add("write", lambda *_: self._api_app_autosave())
+        self.api_secret.trace_add("write", lambda *_: self._api_app_autosave())
+        self.after(300, self._api_app_list)
         ttk.Button(cr, text=T("CONNECT ticked IDs", "Ticked IDs JODO"), style="Accent.TButton",
                    command=self._api_connect_ids).pack(side="left", padx=6)
         ttk.Button(cr, text="Export", command=self._api_export_app).pack(side="left", padx=2)
         ttk.Button(cr, text="Pages", style="Green.TButton", command=self._page_manager).pack(side="right", padx=6)
         ttk.Button(cr, text="Import", command=self._api_import_app).pack(side="left", padx=2)
+        ttk.Label(con, text=T("Several apps: one app takes about 50 IDs (testers). Add App 2, App 3... with '+ New app' — when an app "
+                              "is full, CONNECT automatically uses the next app. App ID / Secret are saved as you type.",
+                              "Kai apps: ek app mein takreeban 50 IDs (testers). '+ Nayi app' se App 2, App 3... daalein — jab ek app "
+                              "bhar jaye, CONNECT khud agli app use karega. App ID / Secret type karte hi save ho jate hain."),
+                  style="Muted.TLabel", wraplength=1200, justify="left").pack(anchor="w", padx=8)
         ttk.Label(con, text=T("Tick IDs in Accounts (✔), then press CONNECT. For each ID the bot: adds it as Tester in your app → "
                               "accepts the invite → presses Continue/Allow → saves a 60-day token → brings its pages here.\n"
                               "App ID + App Secret: developers.facebook.com → My Apps → DK Uploader → App settings → Basic.",
@@ -6737,6 +6981,76 @@ class ApiPagesMixin:
             log(T("[API] POST NOW finished.", "[API] ABHI POST mukammal."))
         threading.Thread(target=run_all, daemon=True).start()
 
+    # ---------- kai apps ----------
+    def _api_app_list(self):
+        d = api_load(); apps = d.get("apps", [])
+        if not apps:
+            apps = [{"id": "", "secret": ""}]
+        vals = []
+        for i, a in enumerate(apps, 1):
+            n = len(api_app_users(a.get("id"))) if a.get("id") else 0
+            full = " FULL" if (a.get("full") or n >= APP_TESTER_LIMIT) else ""
+            vals.append(f"App {i} · {(a.get('id') or 'empty')[:10]} ({n}/50){full}")
+        self.api_app_cb.config(values=vals)
+        self.api_app_idx = min(self.api_app_idx, len(vals) - 1)
+        self.api_app_cb.current(self.api_app_idx)
+
+    def _api_app_select(self, i):
+        d = api_load(); apps = d.get("apps", [])
+        if i < 0 or i >= len(apps):
+            return
+        self.api_app_idx = i
+        self._api_app_loading = True
+        self.api_appid.set(apps[i].get("id", "")); self.api_secret.set(apps[i].get("secret", ""))
+        self._api_app_loading = False
+
+    def _api_app_autosave(self):
+        """App ID / Secret type karte hi save (restart / update ke baad bhi rahe)."""
+        if self._api_app_loading:
+            return
+        with _API_LOCK:
+            d = api_load(); apps = d.setdefault("apps", [])
+            while len(apps) <= self.api_app_idx:
+                apps.append({"id": "", "secret": ""})
+            apps[self.api_app_idx]["id"] = self.api_appid.get().strip()
+            apps[self.api_app_idx]["secret"] = self.api_secret.get().strip()
+            apps[self.api_app_idx].pop("full", None)
+            if apps:                        # purani jagah (pehli app) bhi bhari rahe
+                d["app_id"], d["app_secret"] = apps[0].get("id", ""), apps[0].get("secret", "")
+            api_save(d)
+        try:
+            self.after_idle(self._api_app_list)
+        except Exception:
+            pass
+
+    def _api_app_new(self):
+        with _API_LOCK:
+            d = api_load(); apps = d.setdefault("apps", [])
+            if apps and not (apps[-1].get("id") and apps[-1].get("secret")):
+                self.api_app_idx = len(apps) - 1
+            else:
+                apps.append({"id": "", "secret": ""}); self.api_app_idx = len(apps) - 1
+            api_save(d)
+        self._api_app_list(); self._api_app_select(self.api_app_idx)
+        messagebox.showinfo("API", T(f"App {self.api_app_idx + 1}: paste its App ID and App Secret (saved automatically).",
+                                     f"App {self.api_app_idx + 1}: is ka App ID aur App Secret daalein (khud save hoga)."))
+
+    def _api_app_del(self):
+        d = api_load(); apps = d.get("apps", [])
+        if not apps:
+            return
+        i = self.api_app_idx
+        if not messagebox.askyesno("API", T(f"Remove App {i + 1} from the list?", f"App {i + 1} list se hatayein?")):
+            return
+        with _API_LOCK:
+            d = api_load(); apps = d.get("apps", [])
+            if i < len(apps):
+                apps.pop(i)
+            d["app_id"], d["app_secret"] = (apps[0].get("id", ""), apps[0].get("secret", "")) if apps else ("", "")
+            api_save(d)
+        self.api_app_idx = 0
+        self._api_app_list(); self._api_app_select(0)
+
     def _api_export_app(self):
         """Sirf App ID + App Secret ek file mein (doosre PC ke liye). Token / pages NAHI."""
         app_id = self.api_appid.get().strip(); secret = self.api_secret.get().strip()
@@ -6748,7 +7062,8 @@ class ApiPagesMixin:
         if not p:
             return
         with open(p, "w", encoding="utf-8") as f:
-            json.dump({"dk_app": 1, "app_id": app_id, "app_secret": secret}, f)
+            json.dump({"dk_app": 1, "app_id": app_id, "app_secret": secret,
+                       "apps": [{"id": a["id"], "secret": a["secret"]} for a in api_apps()]}, f)
         messagebox.showinfo("API", T("Saved. Only App ID + Secret are in this file (no token, no pages).\n"
                                      "Keep it private — it is like a password.",
                                      "Save ho gaya. Is file mein sirf App ID + Secret hain (token / pages nahi).\n"
@@ -6760,17 +7075,25 @@ class ApiPagesMixin:
             return
         try:
             j = json.load(open(p, encoding="utf-8"))
-            self.api_appid.set(j.get("app_id", "")); self.api_secret.set(j.get("app_secret", ""))
+            apps_in = j.get("apps") or [{"id": j.get("app_id", ""), "secret": j.get("app_secret", "")}]
             with _API_LOCK:
-                d = api_load(); d["app_id"], d["app_secret"] = j.get("app_id", ""), j.get("app_secret", ""); api_save(d)
+                d = api_load(); have = {a.get("id") for a in d.get("apps", [])}
+                d["apps"] = [a for a in d.get("apps", []) if a.get("id")]
+                for a in apps_in:
+                    if a.get("id") and a["id"] not in have:
+                        d["apps"].append({"id": a["id"], "secret": a.get("secret", "")})
+                if d["apps"]:
+                    d["app_id"], d["app_secret"] = d["apps"][0]["id"], d["apps"][0]["secret"]
+                api_save(d)
+            self.api_app_idx = 0; self._api_app_list(); self._api_app_select(0)
             messagebox.showinfo("API", T("App ID + Secret loaded. Now tick IDs in Accounts and press CONNECT.",
                                          "App ID + Secret lag gaye. Ab Accounts mein IDs tick kar ke CONNECT dabayein."))
         except Exception as e:
             messagebox.showerror("API", str(e))
 
     def _api_connect_ids(self, accs=None, silent=False):
-        app_id = self.api_appid.get().strip(); secret = self.api_secret.get().strip()
-        if not app_id or not secret:
+        self._api_app_autosave() if hasattr(self, "api_app_cb") else None
+        if not api_apps():
             if not silent:
                 messagebox.showwarning("API", T("Enter App ID and App Secret first.", "Pehle App ID aur App Secret daalein."))
             return
@@ -6780,13 +7103,21 @@ class ApiPagesMixin:
             if not silent:
                 messagebox.showwarning("API", T("Tick IDs (✔) in Accounts first.", "Pehle Accounts mein IDs ✔ karein."))
             return
-        with _API_LOCK:
-            d = api_load(); d["app_id"], d["app_secret"] = app_id, secret; api_save(d)
         log = lambda m: self.log_q.put(m)
+        _pick_lock = threading.Lock()
         log(T(f"[API] CONNECT: {len(accs)} ID(s)...", f"[API] CONNECT: {len(accs)} ID..."))
         self.stop_flag.clear()
 
         def one(acc):
+            with _pick_lock:
+                app = api_pick_app(get_account(acc["id"]) or acc)
+                if not app:
+                    log(T(f"[API] {acc['name']}: all apps are full (50 IDs each) — add a new app (+ New app) and press CONNECT again.",
+                          f"[API] {acc['name']}: saari apps bhar gayin (50-50 IDs) — '+ Nayi app' se nayi app daal kar dobara CONNECT."))
+                    return
+                update_account(acc["id"], api_app=app["id"])      # jagah pakki (doosra thread isi ko na le)
+            app_id, secret = app["id"], app["secret"]
+            log(T(f"[API] {acc['name']}: using app {app_id}", f"[API] {acc['name']}: app {app_id} use ho rahi hai"))
             bot = Automation(log=log, headless=False, browser_cfg=load_settings())
             try:
                 bot.start(acc)
@@ -6798,7 +7129,32 @@ class ApiPagesMixin:
                         api_add_tester(app_id, secret, uid)
                         log(T(f"[API] {acc['name']}: added as Tester.", f"[API] {acc['name']}: Tester ban gayi."))
                     except Exception as e:
+                        em = str(e).lower()
                         log(f"[API] {acc['name']}: tester: {str(e)[:120]}")
+                        if "limit" in em or "maximum" in em or "too many" in em:
+                            # ye app bhar gayi — agli app par
+                            with _API_LOCK:
+                                d3 = api_load()
+                                for a3 in d3.get("apps", []):
+                                    if a3.get("id") == app_id:
+                                        a3["full"] = True
+                                api_save(d3)
+                            update_account(acc["id"], api_app="")
+                            with _pick_lock:
+                                app2 = api_pick_app(get_account(acc["id"]) or acc)
+                                if app2:
+                                    update_account(acc["id"], api_app=app2["id"])
+                            if not app2:
+                                log(T(f"[API] {acc['name']}: all apps full — add a new app.",
+                                      f"[API] {acc['name']}: saari apps bhar gayin — nayi app daalein."))
+                                return
+                            app_id, secret = app2["id"], app2["secret"]
+                            log(T(f"[API] {acc['name']}: app full → next app {app_id}",
+                                  f"[API] {acc['name']}: app bhar gayi → agli app {app_id}"))
+                            try:
+                                api_add_tester(app_id, secret, uid)
+                            except Exception as e2:
+                                log(f"[API] {acc['name']}: tester: {str(e2)[:120]}")
                 short = bot.api_connect_flow(app_id)
                 if not short:
                     log(T(f"[API] {acc['name']}: token NOT received (see browser).",
@@ -6811,6 +7167,7 @@ class ApiPagesMixin:
                     for t_ in d2["tokens"]:
                         if t_.get("token") == tok:
                             t_["expires"] = time.time() + 59 * 86400
+                            t_["app_id"] = app_id
                     # isi ID ke purane tokens hata do
                     d2["tokens"] = [t_ for t_ in d2["tokens"] if t_.get("owner") != acc["id"] or t_.get("token") == tok]
                     api_save(d2)
@@ -6818,6 +7175,7 @@ class ApiPagesMixin:
                 log(T(f"[API] {acc['name']}: connected ✔ — {len(pages)} page(s).",
                       f"[API] {acc['name']}: jur gayi ✔ — {len(pages)} page."))
                 self.after(0, self._api_refresh)
+                self.after(0, self._api_app_list)
             except Exception as e:
                 log(f"[API] {acc['name']}: {str(e)[:160]}")
             finally:
@@ -7357,15 +7715,19 @@ class ProUIMixin:
         ttk.Button(tb, text=T("Refresh", "Refresh"), command=self._logs_refresh).pack(side="left", padx=4)
         ttk.Button(tb, text=T("Clear log", "Log saaf"), command=self._logs_clear).pack(side="left", padx=4)
         ttk.Button(tb, text="Pages", style="Green.TButton", command=self._page_manager).pack(side="right")
-        cols = (("no", "No.", 50), ("t", "Time", 150), ("acc", "ID", 50), ("page", "Page", 200), ("ip", "IP", 110),
-                ("st", "✔/✘", 50), ("posted", "Posted", 70), ("files", "Files", 60), ("mon", "Monetization", 140),
-                ("reach", "Reach", 90), ("fol", "Followers", 90), ("pst", "Page status", 190), ("err", "Error", 260))
+        cols = (("no", "No.", 4), ("t", "Time", 10), ("acc", "ID", 4), ("page", "Page", 13), ("ip", "IP", 7),
+                ("st", "✔ / ✘", 6), ("posted", "Posted", 5), ("files", "Files", 5), ("mon", "Monetization", 9),
+                ("reach", "Reach", 6), ("fol", "Followers", 6), ("pst", "Page status", 11), ("err", "Error", 14))
         tf = ttk.Frame(lv); tf.pack(fill="both", expand=True, padx=4)
         self.lg_posts = ttk.Treeview(tf, columns=[c for c, _, _ in cols], show="headings")
         for c, t, w in cols:
             self.lg_posts.heading(c, text=t)
-            self.lg_posts.column(c, width=w, minwidth=40, anchor=("center" if c in ("no", "acc", "st", "posted", "files") else "w"),
-                                 stretch=c in ("page", "err"))
+            self.lg_posts.column(c, width=w * 12, minwidth=36,
+                                 anchor=("center" if c in ("no", "acc", "st", "posted", "files", "reach", "fol", "ip") else "w"),
+                                 stretch=False)
+        fit_tree_columns(self.lg_posts, {c: w for c, _, w in cols},
+                         {"no": 3, "t": 18, "acc": 3, "page": 16, "ip": 8, "st": 7, "posted": 4, "files": 4,
+                          "mon": 10, "reach": 5, "fol": 5, "pst": 10, "err": 16})
         ys = ttk.Scrollbar(tf, orient="vertical", command=self.lg_posts.yview)
         xs = ttk.Scrollbar(tf, orient="horizontal", command=self.lg_posts.xview)
         self.lg_posts.configure(yscrollcommand=ys.set, xscrollcommand=xs.set)
@@ -7373,7 +7735,8 @@ class ProUIMixin:
         tf.grid_rowconfigure(0, weight=1); tf.grid_columnconfigure(0, weight=1)
         self.lg_posts.tag_configure("mon", background="#0f7a3a", foreground="white")
         self.lg_posts.tag_configure("issue", background="#7a6a00", foreground="white")
-        self.lg_posts.tag_configure("fail", foreground="#ff8080")
+        self.lg_posts.tag_configure("fail", foreground="#ff6b6b")
+        self.lg_posts.tag_configure("ok", foreground="#3ee07a")
         self.lg_posts.bind("<Double-1>", lambda e: self._page_detail(self.lg_posts.set(self.lg_posts.identify_row(e.y), "page"))
                            if self.lg_posts.identify_row(e.y) else None)
         self.lg_act = tk.Text(nb, font=("Consolas", 10), relief="flat")
@@ -7404,7 +7767,7 @@ class ProUIMixin:
             if day not in ("", "All days") and not e["t"].startswith(day):
                 continue
             ps = stats.get(e.get("page", ""), {})
-            vals = [e["t"], e.get("acc", ""), e.get("page", ""), e.get("ip", ""), "✔" if e.get("ok") else "✘",
+            vals = [e["t"], e.get("acc", ""), e.get("page", ""), e.get("ip", ""), "✔  OK" if e.get("ok") else "✘  FAIL",
                     e.get("posted", ""), e.get("files", ""), ps.get("monetization", ""),
                     short_num(ps["reach"]) if ps.get("reach") not in (None, "") else "",
                     short_num(ps["followers"]) if ps.get("followers") not in (None, "") else "",
@@ -7418,7 +7781,7 @@ class ProUIMixin:
             rows.sort(key=lambda r: 1 if (not r[0].get("ok") or (r[1].get("status") not in (None, "", "Good"))) else 0)
         self.lg_posts.delete(*self.lg_posts.get_children())
         for i, (e, ps, vals) in enumerate(rows[:1500], 1):
-            tag = ()
+            tag = ("ok",)
             if not e.get("ok"):
                 tag = ("fail",)
             elif ps.get("status") and ps.get("status") not in ("Good", "Unknown"):
@@ -7475,15 +7838,18 @@ class ProUIMixin:
         ttk.Combobox(tb, textvariable=grp_v, state="readonly", width=16, values=["All Groups"] + groups).pack(side="left", padx=6)
         ttk.Entry(tb, textvariable=q_v, width=24).pack(side="left", padx=6)
         ttk.Label(tb, text="← search").pack(side="left")
-        cols = (("no", "ID", 50), ("name", "Page Name", 230), ("pid", "Page ID", 160), ("fol", "Followers", 90),
-                ("mon", "Monetization", 150), ("reach", "Reach", 100), ("st", "Status", 200), ("upd", "Last Update", 110),
-                ("grp", "Group", 110), ("posts", "Posts", 70))
+        cols = (("no", "ID", 4), ("name", "Page Name", 16), ("pid", "Page ID", 11), ("fol", "Followers", 6),
+                ("mon", "Monetization", 10), ("reach", "Reach", 6), ("st", "Status", 13), ("upd", "Last Update", 9),
+                ("grp", "Group", 8), ("posts", "Posts", 5))
         tf = ttk.Frame(w); tf.pack(fill="both", expand=True, padx=8, pady=4)
         tv = ttk.Treeview(tf, columns=[c for c, _, _ in cols], show="headings", selectmode="extended")
         for c, t, wd in cols:
             tv.heading(c, text=t)
-            tv.column(c, width=wd, minwidth=40, anchor=("center" if c in ("no", "fol", "reach", "posts", "upd") else "w"),
-                      stretch=c in ("name", "st"))
+            tv.column(c, width=wd * 12, minwidth=36, anchor=("center" if c in ("no", "fol", "reach", "posts", "upd") else "w"),
+                      stretch=False)
+        fit_tree_columns(tv, {c: wd for c, _, wd in cols},
+                         {"no": 3, "name": 18, "pid": 15, "fol": 5, "mon": 10, "reach": 5, "st": 12, "upd": 10,
+                          "grp": 6, "posts": 4})
         ys = ttk.Scrollbar(tf, orient="vertical", command=tv.yview); tv.configure(yscrollcommand=ys.set)
         tv.pack(side="left", fill="both", expand=True); ys.pack(side="right", fill="y")
         tv.tag_configure("mon", background="#0f7a3a", foreground="white")
@@ -7846,14 +8212,17 @@ def fetch_tiktok(src, log=print, stop=None):
 
     # kitni list chahiye: done + max se thora zyada (purani jagah tak pohanchne ke liye)
     limit = max(30, len(done_set) + max_n * 2)
-    cut_id = _tt_id(src.get("last_link", "")) if src.get("last_link") and not src.get("cut_applied") else ""
+    pending_cut = src.get("last_link") and not src.get("cut_applied")
+    cut_id = _tt_id(src.get("last_link", "")) if pending_cut else ""          # aakhri (sab se purani) lagi hui
+    first_id = _tt_id(src.get("first_link", "")) if pending_cut else ""       # pehli (sab se nayi) lagi hui
     ids = []
     try:
         ids = list_ids(limit)
-        if cut_id and cut_id not in [i for i, _ in ids]:
-            for lim in (200, 600, 1500):              # cutoff wali video tak list barhao
+        need = [x for x in (cut_id, first_id) if x]
+        if need and not all(x in [i for i, _ in ids] for x in need):
+            for lim in (200, 600, 1500):              # dono videos tak list barhao
                 ids = list_ids(lim)
-                if cut_id in [i for i, _ in ids] or len(ids) < lim:
+                if all(x in [i for i, _ in ids] for x in need) or len(ids) < lim:
                     break
     except Exception as e:
         log(f"[Source] {page}: list error: {e}")
@@ -7864,12 +8233,32 @@ def fetch_tiktok(src, log=print, stop=None):
     if cut_id:
         lst_ids = [i for i, _ in ids]
         if cut_id in lst_ids:
-            for i in lst_ids[:lst_ids.index(cut_id) + 1]:     # upar se cutoff tak = ho chuki
+            ci = lst_ids.index(cut_id)
+            if first_id and first_id in lst_ids and lst_ids.index(first_id) <= ci:
+                fi = lst_ids.index(first_id)
+                rng = lst_ids[fi:ci + 1]                # First se Last tak = lag chuki (beech wali)
+                n_above = fi
+                log(T(f"[Source] {page}: First→Last = {len(rng)} video(s) already uploaded (skipped). "
+                      f"{n_above} newer video(s) above First will go first, then older ones below Last.",
+                      f"[Source] {page}: First→Last = {len(rng)} video(s) pehle lag chuki (skip). "
+                      f"First se upar {n_above} nayi pehle jayengi, phir Last se neeche wali purani."))
+            else:
+                if first_id:
+                    log(T(f"[Source] {page}: 'First' video not found in the list — using only 'Last'.",
+                          f"[Source] {page}: 'First' video list mein nahi mili — sirf 'Last' use."))
+                rng = lst_ids[:ci + 1]                  # upar se cutoff tak = ho chuki (purana tareeqa)
+                log(T(f"[Source] {page}: marked {len(rng)} already-uploaded video(s) as done.",
+                      f"[Source] {page}: {len(rng)} pehle se lagi videos 'done' kar di."))
+            for i in rng:
                 if i not in done_set:
                     done.append(i); done_set.add(i)
             src["cut_applied"] = True
-            log(T(f"[Source] {page}: marked {lst_ids.index(cut_id) + 1} already-uploaded video(s) as done.",
-                  f"[Source] {page}: {lst_ids.index(cut_id) + 1} pehle se lagi videos 'done' kar di."))
+            # Last se neeche purani videos tak pohanchne ke liye list kaafi lambi ho
+            if len(ids) >= limit and len(ids) < ci + 1 + max_n:
+                try:
+                    ids = list_ids(ci + 1 + max_n * 2)
+                except Exception:
+                    pass
         else:
             log(T(f"[Source] {page}: 'last uploaded' video not found in the list — starting from newest.",
                   f"[Source] {page}: 'last uploaded' video list mein nahi mili — sab se nayi se shuru."))
@@ -7961,10 +8350,12 @@ class SourcesMixin:
         ttk.Button(r, text="...", width=3, command=self._src_pick_root).pack(side="left")
         ttk.Button(r, text=T("Match folders to pages", "Folders pages se milao"), style="Accent.TButton",
                    command=self._src_match).pack(side="left", padx=4)
-        self.src_map = ttk.Treeview(top, columns=("page", "folder", "files"), show="headings", height=4)
-        for c, t_, w in (("page", "Page", 260), ("folder", "Folder (auto)", 520), ("files", "Videos", 90)):
+        self.src_map = ttk.Treeview(top, columns=("page", "id", "folder", "files"), show="headings", height=4)
+        for c, t_, w in (("page", "Page", 260), ("id", "ID (No · Name)", 200), ("folder", "Folder (auto)", 460),
+                         ("files", "Videos", 80)):
             self.src_map.heading(c, text=t_, anchor="w"); self.src_map.column(c, width=w, anchor="w")
         self.src_map.pack(fill="x", padx=6, pady=4)
+        self.src_map.bind("<<TreeviewSelect>>", lambda e: self._src_map_pick(), add="+")
         mb = ttk.Frame(top); mb.pack(fill="x", padx=6, pady=(0, 4))
         ttk.Button(mb, text=T("Set folder for selected page", "Selected page ka folder chuno"),
                    command=self._src_set_folder).pack(side="left")
@@ -7981,31 +8372,45 @@ class SourcesMixin:
         self.src_page_cb.pack(side="left", padx=4)
         ttk.Label(a, text=T("TikTok link:", "TikTok link:")).pack(side="left")
         self.src_url = tk.StringVar()
-        ttk.Entry(a, textvariable=self.src_url, width=40).pack(side="left", padx=4, fill="x", expand=True)
+        self.src_url_e = ttk.Entry(a, textvariable=self.src_url, width=40)
+        self.src_url_e.pack(side="left", padx=4, fill="x", expand=True)
         ttk.Label(a, text=T("Max/fetch:", "Max/fetch:")).pack(side="left")
         self.src_max = tk.StringVar(value="10")
         tk.Spinbox(a, from_=1, to=100, textvariable=self.src_max, width=4).pack(side="left", padx=3)
         ttk.Button(a, text=T("Add", "Add"), command=self._src_add).pack(side="left", padx=4)
         a2 = ttk.Frame(tk_); a2.pack(fill="x", padx=6, pady=(0, 4))
-        ttk.Label(a2, text=T("Last uploaded video link (optional):", "Aakhri lagi hui video ka link (optional):")).pack(side="left")
+        ttk.Label(a2, text=T("First uploaded video link:", "Pehli lagi hui video ka link:")).pack(side="left")
+        self.src_first = tk.StringVar()
+        ttk.Entry(a2, textvariable=self.src_first, width=34).pack(side="left", padx=4, fill="x", expand=True)
+        ttk.Label(a2, text=T("Last uploaded video link:", "Aakhri lagi hui video ka link:")).pack(side="left")
         self.src_last = tk.StringVar()
-        ttk.Entry(a2, textvariable=self.src_last, width=50).pack(side="left", padx=4, fill="x", expand=True)
-        ttk.Button(a2, text=T("Set for selected row", "Selected row par lagao"), command=self._src_set_last).pack(side="left", padx=4)
-        ttk.Label(tk_, text=T("Order: newest videos first → then older ones from where it stopped. A video is never used twice. "
-                              "If you were uploading this creator manually, paste the link of the last video you uploaded — "
-                              "that video and the ones above it are treated as done.",
-                              "Tarteeb: pehle sab se nayi videos → phir purani wahin se jahan ruke the. Koi video do dafa nahi. "
-                              "Agar ye creator pehle manually lagate the to aakhri lagi hui video ka link do — "
-                              "woh aur us se upar wali 'done' maan li jayengi."),
+        ttk.Entry(a2, textvariable=self.src_last, width=34).pack(side="left", padx=4, fill="x", expand=True)
+        ttk.Button(a2, text=T("Set for ticked rows", "Tick wali rows par lagao"), command=self._src_set_last).pack(side="left", padx=4)
+        ttk.Label(tk_, text=T("Example: you uploaded videos 1→50 (newest→oldest) on the 20th. First = link of video 1, Last = link of video 50. "
+                              "Videos 1–50 are skipped. Videos the creator posted AFTER video 1 download first; when there are no new ones, "
+                              "it continues with older videos after 50 (51, 52...). A video is never used twice. "
+                              "Only Last given = that video and everything above it is treated as done.",
+                              "Misal: 20 tareekh ko video 1→50 (nayi→purani) laga di. First = video 1 ka link, Last = video 50 ka link. "
+                              "1–50 skip hongi. Video 1 ke BAAD creator ki nayi videos pehle download hongi; nayi na hon to 50 ke aage "
+                              "purani (51, 52...) se jaari. Koi video do dafa nahi. Sirf Last diya = woh aur us se upar sab 'done'."),
                   style="Muted.TLabel", wraplength=1100, justify="left").pack(anchor="w", padx=8)
-        self.src_tree = ttk.Treeview(tk_, columns=("page", "url", "max", "done", "last", "new"), show="headings", height=3)
-        for c, t_, w in (("page", "Page", 220), ("url", "TikTok link", 380), ("max", "Max", 60),
-                         ("done", "Done", 70), ("last", "Last fetch", 150), ("new", "New", 60)):
-            self.src_tree.heading(c, text=t_, anchor="w"); self.src_tree.column(c, width=w, anchor="w")
+        self.src_tree = ttk.Treeview(tk_, columns=("tick", "page", "id", "url", "max", "done", "last", "new"),
+                                     show="headings", height=6, selectmode="extended")
+        for c, t_, w in (("tick", "☐", 44), ("page", "Page", 220), ("id", "ID", 170), ("url", "TikTok link", 340),
+                         ("max", "Max", 55), ("done", "Done", 65), ("last", "Last fetch", 140), ("new", "New", 55)):
+            self.src_tree.heading(c, text=t_, anchor="center" if c == "tick" else "w")
+            self.src_tree.column(c, width=w, anchor="center" if c == "tick" else "w", stretch=(c != "tick"))
+        self.src_tree.heading("tick", text="☐", command=self._src_tick_all)
+        self.src_tree.tag_configure("ticked", foreground="#3ee07a")
+        self.src_tree.bind("<Button-1>", self._src_tree_click, add="+")
+        self._src_ticked = set()
         self.src_tree.pack(fill="both", expand=True, padx=6, pady=4)
         b = ttk.Frame(tk_); b.pack(fill="x", padx=6, pady=4)
-        ttk.Button(b, text=T("Fetch selected now", "Selected abhi lao"), command=lambda: self._src_fetch(True)).pack(side="left")
-        ttk.Button(b, text=T("Fetch all now", "Sab abhi lao"), command=lambda: self._src_fetch(False)).pack(side="left", padx=4)
+        ttk.Button(b, text=T("Tick all", "Sab tick"), command=self._src_tick_all).pack(side="left", padx=(0, 4))
+        ttk.Button(b, text=T("Fetch ticked now", "Tick wali abhi lao"), style="Accent.TButton",
+                   command=lambda: self._src_fetch(True)).pack(side="left")
+        ttk.Button(b, text=T("Fetch all now (new first)", "Sab abhi lao (nayi pehle)"),
+                   command=lambda: self._src_fetch(False)).pack(side="left", padx=4)
         ttk.Button(b, text=T("Remove", "Hatao"), command=self._src_remove).pack(side="left")
         ttk.Label(b, text=T("   Auto fetch every", "   Har")).pack(side="left")
         self.src_every = tk.StringVar(value=str(load_settings().get("sources_every_h", 0)))
@@ -8047,19 +8452,141 @@ class SourcesMixin:
                 names.append(p["name"])
         return names
 
+    def _page_owner_map(self):
+        """Page naam -> '15 · Kashif Iqbal' (kis ID mein page para hai)."""
+        out = {}
+        try:
+            accs = load_accounts()
+            nums = {a["id"]: i for i, a in enumerate(accs, 1)}
+            for a in accs:
+                nm = (a.get("name") or "").strip()
+                if len(nm) > 18:
+                    nm = nm[:17] + "…"
+                lab = f"{nums[a['id']]} · {nm}" if nm else str(nums[a["id"]])
+                for p in a.get("pages") or []:
+                    if p.get("name"):
+                        out.setdefault(p["name"], [])
+                        if lab not in out[p["name"]]:
+                            out[p["name"]].append(lab)
+                if a.get("page_name"):
+                    out.setdefault(a["page_name"], [])
+                    if lab not in out[a["page_name"]]:
+                        out[a["page_name"]].append(lab)
+            for p in api_load().get("pages", {}).values():
+                ow = p.get("owner")
+                if ow in nums and p.get("name"):
+                    a = next((x for x in accs if x["id"] == ow), {})
+                    nm = (a.get("name") or "").strip()
+                    if len(nm) > 18:
+                        nm = nm[:17] + "…"
+                    lab = f"{nums[ow]} · {nm}" if nm else str(nums[ow])
+                    out.setdefault(p["name"], [])
+                    if lab not in out[p["name"]]:
+                        out[p["name"]].append(lab)
+        except Exception:
+            pass
+        return {k: ", ".join(v) for k, v in out.items()}
+
     def _src_refresh(self):
         names = self._all_page_names()
+        owners = self._page_owner_map()
         self.src_page_cb.config(values=names)
         self.src_map.delete(*self.src_map.get_children())
+        jobs = []
         for i, n in enumerate(names):
             fo = page_media_folder(n)
-            cnt = len(list_media_in_folder(fo, "video")) if fo else 0
-            self.src_map.insert("", "end", iid=f"p{i}", values=(n, fo or "—", cnt))
+            self.src_map.insert("", "end", iid=f"p{i}", values=(n, owners.get(n, "—"), fo or "—", "…" if fo else 0))
+            if fo:
+                jobs.append((f"p{i}", fo))
+        tok = object(); self._src_count_tok = tok
+
+        def count():           # folders ki ginti peeche (page foran khule, atke nahi)
+            for iid, fo in jobs:
+                if getattr(self, "_src_count_tok", None) is not tok:
+                    return
+                try:
+                    c = len(list_media_in_folder(fo, "video"))
+                except Exception:
+                    c = "?"
+                self.after(0, lambda iid=iid, c=c: self.src_map.exists(iid) and self.src_map.set(iid, "files", c))
+        if jobs:
+            threading.Thread(target=count, daemon=True).start()
         self.src_tree.delete(*self.src_tree.get_children())
-        for i, s_ in enumerate(sources_list()):
-            self.src_tree.insert("", "end", iid=str(i), values=(s_.get("page"), s_.get("url"), s_.get("max", 10),
-                                                                len(s_.get("done") or []),
-                                                                s_.get("last", "-"), s_.get("last_new", "-")))
+        lst = sources_list()
+        self._src_ticked = {t for t in getattr(self, "_src_ticked", set()) if t.isdigit() and int(t) < len(lst)}
+        for i, s_ in enumerate(lst):
+            on = str(i) in self._src_ticked
+            self.src_tree.insert("", "end", iid=str(i), tags=("ticked",) if on else (),
+                                 values=("☑" if on else "☐", s_.get("page"), owners.get(s_.get("page"), "—"),
+                                         s_.get("url"), s_.get("max", 10), len(s_.get("done") or []),
+                                         s_.get("last", "-"), s_.get("last_new", "-")))
+        self._src_tick_head()
+
+    def _src_map_pick(self):
+        """Upar page chuna -> neeche TikTok wale hisse mein wahi page + us ka link (agar laga ho)."""
+        sel = self.src_map.selection()
+        if not sel:
+            return
+        page = self.src_map.set(sel[0], "page")
+        self.src_page.set(page)
+        lst = sources_list()
+        mine = [str(i) for i, s_ in enumerate(lst) if s_.get("page") == page]
+        if mine:
+            s0 = lst[int(mine[0])]
+            self.src_url.set(s0.get("url", ""))
+            try:
+                self.src_tree.selection_set(mine); self.src_tree.see(mine[0])
+            except Exception:
+                pass
+            self.log_q.put(T(f"[Source] {page}: link already set → {s0.get('url', '')}",
+                             f"[Source] {page}: link pehle se laga hai → {s0.get('url', '')}"))
+        else:
+            self.src_url.set("")
+            try:
+                self.src_tree.selection_remove(self.src_tree.selection())
+                self.src_url_e.focus_set()
+            except Exception:
+                pass
+            self.log_q.put(T(f"[Source] {page}: no TikTok link yet — paste the link and press Add.",
+                             f"[Source] {page}: abhi TikTok link nahi laga — link paste kar ke Add dabayein."))
+
+    def _src_tick_head(self):
+        try:
+            n = len(self.src_tree.get_children())
+            self.src_tree.heading("tick", text="☑" if n and len(self._src_ticked) == n else "☐")
+        except Exception:
+            pass
+
+    def _src_set_tick(self, iid, on):
+        if on:
+            self._src_ticked.add(iid)
+        else:
+            self._src_ticked.discard(iid)
+        self.src_tree.set(iid, "tick", "☑" if on else "☐")
+        self.src_tree.item(iid, tags=("ticked",) if on else ())
+
+    def _src_tree_click(self, ev):
+        if self.src_tree.identify_region(ev.x, ev.y) != "cell":
+            return
+        iid = self.src_tree.identify_row(ev.y)
+        if not iid:
+            return
+        if self.src_tree.identify_column(ev.x) == "#1":       # tick wala khaana
+            self._src_set_tick(iid, iid not in self._src_ticked)
+            self._src_tick_head()
+            return "break"
+
+    def _src_tick_all(self):
+        kids = list(self.src_tree.get_children())
+        on = len(self._src_ticked) != len(kids)
+        for iid in kids:
+            self._src_set_tick(iid, on)
+        self._src_tick_head()
+
+    def _src_chosen(self):
+        """Tick wali rows (na hon to click/select ki hui)."""
+        ids = sorted({int(i) for i in self._src_ticked} | {int(i) for i in self.src_tree.selection()})
+        return ids
 
     def _src_pick_root(self):
         d = filedialog.askdirectory()
@@ -8096,30 +8623,43 @@ class SourcesMixin:
             messagebox.showwarning("Source", T("Choose a page and paste a TikTok link.", "Page chuno aur TikTok link daalo."))
             return
         lst = sources_list()
+        for i, s_ in enumerate(lst):
+            if s_.get("page") == page and s_.get("url") == url:
+                messagebox.showinfo("Source", T("This page already has this link.", "Is page par ye link pehle se laga hai."))
+                return
         lst.append({"page": page, "url": url, "max": self._iv(self.src_max.get()) or 10, "max_tags": 4,
-                    "last_link": self.src_last.get().strip()})
-        sources_save(lst); self.src_url.set(""); self.src_last.set(""); self._src_refresh()
+                    "last_link": self.src_last.get().strip(), "first_link": self.src_first.get().strip(),
+                    "added_ts": time.time()})
+        sources_save(lst); self.src_url.set(""); self.src_last.set(""); self.src_first.set("")
+        self._src_ticked.add(str(len(lst) - 1))           # naya link khud tick
+        self._src_refresh()
         self.log_q.put(T(f"[Source] Added: {page} ← {url}. Select the row and press 'Fetch selected now'.",
                          f"[Source] Add ho gaya: {page} ← {url}. Row select kar ke 'Fetch selected now' dabayein."))
 
     def _src_set_last(self):
-        sel = self.src_tree.selection()
+        sel = self._src_chosen()
         link = self.src_last.get().strip()
+        first = self.src_first.get().strip()
         if not sel or not link:
-            messagebox.showwarning("Source", T("Select a row and paste the last uploaded video link.",
-                                               "Row select karein aur aakhri lagi hui video ka link daalein."))
+            messagebox.showwarning("Source", T("Tick a row and paste the Last uploaded video link (First is optional).",
+                                               "Row tick karein aur Aakhri lagi hui video ka link daalein (Pehli optional)."))
             return
         lst = sources_list()
         for i in sel:
-            lst[int(i)]["last_link"] = link
-            lst[int(i)]["cut_applied"] = False
-        sources_save(lst); self.src_last.set(""); self._src_refresh()
+            if i < len(lst):
+                lst[i]["last_link"] = link
+                lst[i]["first_link"] = first
+                lst[i]["cut_applied"] = False
+        sources_save(lst); self.src_last.set(""); self.src_first.set(""); self._src_refresh()
         self.log_q.put(T("[Source] Last uploaded link saved — applied on next fetch.",
                          "[Source] Aakhri link save — agli fetch par lagega."))
 
     def _src_remove(self):
-        sel = {int(i) for i in self.src_tree.selection()}
-        sources_save([s_ for i, s_ in enumerate(sources_list()) if i not in sel]); self._src_refresh()
+        sel = set(self._src_chosen())
+        if not sel:
+            return
+        sources_save([s_ for i, s_ in enumerate(sources_list()) if i not in sel])
+        self._src_ticked = set(); self._src_refresh()
 
     def _src_fetch(self, only_sel):
         lst = sources_list()
@@ -8127,15 +8667,18 @@ class SourcesMixin:
             messagebox.showinfo("Source", T("Add a TikTok link first.", "Pehle TikTok link add karein."))
             return
         if only_sel:
-            idx = [int(i) for i in self.src_tree.selection()]
+            idx = self._src_chosen()
             if not idx and len(lst) == 1:
                 idx = [0]
             if not idx:
-                messagebox.showinfo("Source", T("Click a row in the TikTok table first, then 'Fetch selected now'.",
-                                                "Pehle TikTok table mein row par click karein, phir 'Fetch selected now'."))
+                messagebox.showinfo("Source", T("Tick the rows (box before the page name) first, then 'Fetch ticked now'.",
+                                                "Pehle rows tick karein (page ke naam se pehle wala dabba), phir 'Fetch ticked now'."))
                 return
         else:
             idx = list(range(len(lst)))
+        # naye add kiye (kabhi fetch nahi hue) pehle, phir baaqi
+        idx.sort(key=lambda i: (1 if lst[i].get("last_ts") or lst[i].get("last") not in (None, "", "-") else 0,
+                                -(lst[i].get("added_ts") or 0)))
         if _FETCH_LOCK.locked():
             self.log_q.put(T("[Source] A fetch is already running — please wait.", "[Source] Fetch pehle se chal raha hai — intezaar karein."))
             return
@@ -8152,7 +8695,102 @@ class SourcesMixin:
         threading.Thread(target=work, daemon=True).start()
 
 
-class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
+def fit_tree_columns(tv, weights, min_chars=None):
+    """Columns poori chaurai mein phailao: pehle har column ko us ke likhe hue jitni zaroori jagah,
+    phir bachi hui jagah weights ke hisaab se — window chhoti/bari ho to bhi."""
+    tot = float(sum(weights.values())) or 1.0
+    min_chars = min_chars or {}
+
+    def on_size(ev=None):
+        try:
+            import tkinter.font as _tf
+            try:
+                hf = _tf.nametofont("TkHeadingFont")
+            except Exception:
+                hf = None
+            try:
+                cf = _tf.nametofont("TkDefaultFont")
+                zero = cf.measure("0")
+            except Exception:
+                zero = 9
+            W = max(300, tv.winfo_width() - 4)
+            needs = {}
+            for c in weights:
+                hn = (hf.measure(str(tv.heading(c, "text"))) + 18) if hf else 36
+                needs[c] = max(hn, int(min_chars.get(c, 0) * zero) + 14)
+            extra = W - sum(needs.values())
+            for c, w in weights.items():
+                add = int(extra * w / tot) if extra > 0 else 0
+                tv.column(c, width=needs[c] + add, stretch=False)
+        except Exception:
+            pass
+    tv.bind("<Configure>", on_size, add="+")
+    tv.after(200, on_size)
+
+
+class EditMenuMixin:
+    def _install_edit_menu(self):
+        """Har khaane mein right-click: Cut / Copy / Paste / Select all (Ctrl+V ki zaroorat nahi)."""
+        m = tk.Menu(self, tearoff=0, bg="#16213a", fg="#e6edf7", activebackground="#22c3e6",
+                    activeforeground="#0b1220", font=("Segoe UI", 11))
+        self._edit_menu = m
+        self._edit_target = None
+
+        def do(ev_name):
+            w = self._edit_target
+            if not w:
+                return
+            try:
+                w.focus_set()
+                if ev_name == "selectall":
+                    if isinstance(w, tk.Text):
+                        w.tag_add("sel", "1.0", "end-1c")
+                    else:
+                        w.selection_range(0, "end"); w.icursor("end")
+                elif ev_name == "<<Paste>>":
+                    try:      # pehle select hua text hatao (Windows jaisa)
+                        if isinstance(w, tk.Text):
+                            w.delete("sel.first", "sel.last")
+                        elif w.selection_present():
+                            w.delete("sel.first", "sel.last")
+                    except Exception:
+                        pass
+                    w.event_generate("<<Paste>>")
+                else:
+                    w.event_generate(ev_name)
+            except Exception:
+                pass
+        m.add_command(label="✂  Cut", command=lambda: do("<<Cut>>"))
+        m.add_command(label="⧉  Copy", command=lambda: do("<<Copy>>"))
+        m.add_command(label="📋  Paste", command=lambda: do("<<Paste>>"))
+        m.add_separator()
+        m.add_command(label="Select all", command=lambda: do("selectall"))
+
+        def popup(ev):
+            self._edit_target = ev.widget
+            try:
+                st = str(ev.widget.cget("state"))
+            except Exception:
+                st = "normal"
+            ro = st in ("disabled", "readonly")
+            for i, lab in ((0, "cut"), (2, "paste")):
+                try:
+                    m.entryconfig(i, state="disabled" if ro else "normal")
+                except Exception:
+                    pass
+            try:
+                m.tk_popup(ev.x_root, ev.y_root)
+            finally:
+                m.grab_release()
+            return "break"
+        for cls in ("Entry", "TEntry", "Text", "TCombobox", "Spinbox", "TSpinbox"):
+            try:
+                self.bind_class(cls, "<Button-3>", popup, add="+")
+            except Exception:
+                pass
+
+
+class App(EditMenuMixin, SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("DK Facebook Uploader")
@@ -8176,6 +8814,7 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         apply_dark_theme(self, style)
 
         self.log_q = queue.Queue()
+        self._install_edit_menu()
         migrate_page_names()
         migrate_profile_names()
         self.resume_events = {}
@@ -8510,8 +9149,27 @@ class App(SourcesMixin, ProUIMixin, ApiPagesMixin, tk.Tk):
         else:
             cv.pack(side="left", fill="y", expand=False)
         def _wheel(e):
+            step = int(-e.delta / 120) or (-1 if e.delta > 0 else 1)
+            # mouse kisi table / text / list ke upar hai aur us mein scroll ki jagah hai -> sirf wahi scroll
             try:
-                cv.yview_scroll(int(-e.delta / 120) or (-1 if e.delta > 0 else 1), "units")
+                w = self.winfo_containing(e.x_root, e.y_root)
+            except Exception:
+                w = None
+            while w is not None and w is not cv:
+                if isinstance(w, (ttk.Treeview, tk.Text, tk.Listbox)):
+                    try:
+                        a, b = w.yview()
+                        if a > 0.0 or b < 1.0:
+                            return "break"          # table khud scroll karti hai (Tk), page nahi
+                    except Exception:
+                        pass
+                    break
+                try:
+                    w = w.master
+                except Exception:
+                    break
+            try:
+                cv.yview_scroll(step, "units")
             except Exception:
                 pass
         cv.bind("<Enter>", lambda e: cv.bind_all("<MouseWheel>", _wheel))
