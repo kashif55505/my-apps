@@ -83,8 +83,6 @@ func looksLikeErrorPage(resp *http.Response, filename string) bool {
 	return ext != ".html" && ext != ".htm" && ext != ".php" && ext != ".asp" && ext != ".aspx" && ext != ""
 }
 
-var errBadInstaller = errors.New("not a valid installer")
-
 var errWebPage = errors.New("the website sent a web page instead of the file (the link may have expired or need you to be signed in). Please start the download again from the website")
 
 type Seg struct {
@@ -108,11 +106,12 @@ type Task struct {
 	Resumable bool              `json:"resumable"`
 	Segs      []*Seg            `json:"segs"`
 	Added     int64             `json:"added"`
-	Done      int64             `json:"done,omitempty"`      // for video
-	Format    string            `json:"format,omitempty"`    // video quality: "", "1080", "audio"...
-	Validator string            `json:"validator,omitempty"` // ETag / Last-Modified: detects a file that changed on the server
-	Encoding  string            `json:"encoding,omitempty"`  // gzip etc. when the server compresses the download
-	Update    bool              `json:"update,omitempty"`    // TezDM's own update: run the installer when done
+	Done      int64             `json:"done,omitempty"`       // for video
+	Format    string            `json:"format,omitempty"`     // video quality: "", "1080", "audio"...
+	Validator string            `json:"validator,omitempty"`  // ETag / Last-Modified: detects a file that changed on the server
+	Encoding  string            `json:"encoding,omitempty"`   // gzip etc. when the server compresses the download
+	Update    bool              `json:"update,omitempty"`     // TezDM's own update: run the installer when done
+	UpdateSHA string            `json:"update_sha,omitempty"` // expected SHA-256 of the update installer
 	LastTry   int64             `json:"last_try,omitempty"`
 
 	mu        sync.Mutex
@@ -352,7 +351,7 @@ func (t *Task) run(ctx context.Context, m *Manager) {
 	default:
 		t.Status = "completed"
 		if t.Update && t.Filename != "" {
-			go installUpdate(filepath.Join(t.Dir, t.Filename))
+			go installUpdate(filepath.Join(t.Dir, t.Filename), t.UpdateSHA)
 		}
 	}
 	if t.Update && t.Status == "error" {

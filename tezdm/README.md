@@ -26,9 +26,11 @@ No Python required. The installer installs directly on any 64-bit Windows 10/11 
 - Closing the main window keeps TezDM running in the background. Reopen it from the desktop icon, the Start menu, or the extension popup's "Open TezDM" button. Use **Exit** to close it completely
 
 ## Updates
-Click **Update** in TezDM's toolbar, then **Download and install**. TezDM downloads the newest installer through Chrome (you must be signed in to GitHub in Chrome, because the repository is private), installs it silently and starts again. The toolbar shows **Update!** with a red dot when a newer version exists (the extension checks the release page every few hours while Chrome is open).
+TezDM checks for new versions by itself every few hours. Click **Update** in the toolbar (or **Check for updates** in Options), then **Download and install**: TezDM downloads the installer, checks its SHA-256 checksum, installs it silently and starts again. No browser and no GitHub sign-in needed, so this works on anyone's PC.
 
-The first time, install version 2.5.0 or newer by hand; from then on updates come through the button.
+How it works: the code stays in this private repository, but every release is also published to the public download repository [kashif55505/tezdm](https://github.com/kashif55505/tezdm), which holds only `TezDM_Setup.exe` and `version.json` (version, link, SHA-256). After a new release is built here, run `tezdm/publish_public.sh <clone of kashif55505/tezdm> "notes"` to publish it there.
+
+Public download link for new users: https://github.com/kashif55505/tezdm/raw/main/TezDM_Setup.exe
 
 ## Video tools on first run
 On first run TezDM downloads **yt-dlp** (the unpacked build, which starts about 1 second faster per lookup than the single exe; TezDM updates it daily), **ffmpeg** and **Deno** (about 200 MB, one time only; Deno is the JavaScript runtime yt-dlp needs for YouTube). They are required for video downloads. yt-dlp updates itself daily so downloads keep working when YouTube changes.

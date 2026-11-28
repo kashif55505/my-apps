@@ -127,8 +127,9 @@
       <div>Latest version</div><div id="uLatest">-</div>
     </div>
     <p id="uMsg" style="margin:12px 0 0"></p>
-    <p style="color:var(--muted);margin:8px 0 0">TezDM downloads the update through Chrome, so you must be signed in to GitHub in Chrome
-      (the downloads are private). The update installs by itself and TezDM starts again.</p>
+    <p id="uNotes" style="margin:8px 0 0;white-space:pre-wrap"></p>
+    <p style="color:var(--muted);margin:8px 0 0">TezDM downloads the update by itself, checks it, installs it and starts again.
+      No browser or sign-in needed. TezDM also checks for new versions every few hours.</p>
     <div class="actions">
       <button class="btn" id="uCheck">Check now</button>
       <button class="btn" id="uPage">Release page</button>
@@ -151,6 +152,11 @@
     <label class="chk"><input type="checkbox" id="sConfirm"> Show the "Download File Info" window before each download</label>
     <label class="chk"><input type="checkbox" id="sProg"> Show the progress window when a download starts</label>
     <label class="chk"><input type="checkbox" id="sAuto"> Start TezDM when Windows starts</label>
+    <label>Updates</label>
+    <div class="row" style="align-items:center">
+      <span id="sUpdInfo" style="flex:1">-</span>
+      <button class="btn" id="sUpdBtn">Check for updates</button>
+    </div>
     <div class="actions">
       <button class="btn primary" id="sSave">Save</button>
       <button class="btn" id="sCancel">Cancel</button>

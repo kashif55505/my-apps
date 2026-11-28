@@ -75,12 +75,7 @@ func (s *Server) routes() http.Handler {
 			return
 		}
 		s.extSeen(r)
-		upd.mu.Lock()
-		check := upd.checkWanted
-		upd.checkWanted = false
-		upd.mu.Unlock()
-		writeJSON(w, 200, map[string]any{"app": "TezDM", "version": Version, "ext_version": extVersion(),
-			"check_update": check, "release_page": ReleasePage})
+		writeJSON(w, 200, map[string]any{"app": "TezDM", "version": Version, "ext_version": extVersion()})
 	})
 
 	mux.HandleFunc("/formats", func(w http.ResponseWriter, r *http.Request) {
@@ -135,9 +130,7 @@ func (s *Server) routes() http.Handler {
 		if p.Kind == "" {
 			p.Kind = "file"
 		}
-		if upd.matches(&p) {
-			s.startUpdateDownload(&p)
-		} else if p.Format != "" {
+		if p.Format != "" {
 			// quality was already chosen on the video button: start right away
 			s.addPending(&p, "", "", true)
 		} else if s.m.Settings().Confirm {
@@ -149,21 +142,8 @@ func (s *Server) routes() http.Handler {
 	})
 
 	// The extension reports the newest version it found on the release page
+	// (older extensions report versions here; TezDM now checks by itself)
 	mux.HandleFunc("/update-info", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" || !extOK(r) {
-			writeJSON(w, 403, map[string]string{"error": "forbidden"})
-			return
-		}
-		s.extSeen(r)
-		var q struct {
-			Latest string `json:"latest"`
-		}
-		json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&q)
-		if v := strings.TrimSpace(q.Latest); v != "" && len(v) < 20 {
-			upd.mu.Lock()
-			upd.latest = v
-			upd.mu.Unlock()
-		}
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 
@@ -194,11 +174,16 @@ func (s *Server) routes() http.Handler {
 			pend = append(pend, id)
 		}
 		s.m.mu.Unlock()
+		latest, avail := upd.Latest()
 		upd.mu.Lock()
-		latest, ust, udetail := upd.latest, upd.status, upd.detail
+		ust, udetail, cerr := upd.status, upd.detail, upd.checkErr
+		var notes string
+		if upd.info != nil {
+			notes = upd.info.Notes
+		}
 		upd.mu.Unlock()
 		writeJSON(w, 200, map[string]any{"pending": pend,
-			"latest": latest, "updateAvailable": latest != "" && newerVersion(latest, Version),
+			"latest": latest, "updateAvailable": avail, "updateNotes": notes, "updateCheckError": cerr,
 			"updateStatus": ust, "updateDetail": udetail, "releasePage": ReleasePage,
 			"tasks": views, "settings": s.m.Settings(), "autostart": getAutostart(),
 			"tools": ts, "toolsDetail": td, "ext": extConnected, "extSeen": s.m.Settings().ExtSeen, "extPath": extDir(),
@@ -419,20 +404,19 @@ func (s *Server) routes() http.Handler {
 	})
 
 	// Update: ask Chrome (signed in to GitHub) to download the latest installer
+	// Update: download the newest installer from the public repository and install it
 	api("/api/update/start", func(w http.ResponseWriter, r *http.Request) {
-		upd.mu.Lock()
-		upd.requested = time.Now()
-		upd.status, upd.detail = "downloading", "Waiting for Chrome to start the download..."
-		upd.mu.Unlock()
-		go openInChrome(UpdateURL)
-		writeJSON(w, 200, map[string]string{"url": UpdateURL})
+		if err := s.StartUpdate(r.Context()); err != nil {
+			writeJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 
 	api("/api/update/check", func(w http.ResponseWriter, r *http.Request) {
-		upd.mu.Lock()
-		upd.checkWanted = true
-		upd.mu.Unlock()
-		writeJSON(w, 200, map[string]bool{"ok": true})
+		upd.Check(r.Context())
+		latest, avail := upd.Latest()
+		writeJSON(w, 200, map[string]any{"latest": latest, "updateAvailable": avail})
 	})
 
 	api("/api/exit", func(w http.ResponseWriter, r *http.Request) {
@@ -496,14 +480,4 @@ func userPlaces() []place {
 		out = append([]place{{"TezDM downloads", def}}, out...)
 	}
 	return append(out, place{"Home", home})
-}
-
-func (s *Server) startUpdateDownload(p *Pending) {
-	upd.set("downloading", "Downloading the update...")
-	t := s.m.Add(p.URL, "", p.headers(), "file", updatesDir(), "", false)
-	t.mu.Lock()
-	t.Update = true
-	t.Status = "queued"
-	t.mu.Unlock()
-	go s.openProgress(t.ID)
 }

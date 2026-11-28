@@ -222,35 +222,50 @@ function renderUpdate() {
     $("#updOk").onclick = () => { try { sessionStorage.removeItem("tezdmUpdatedTo"); } catch (e) {} u.classList.add("hidden"); };
   }
   $("#sVer").textContent = state.version ? "TezDM " + state.version : "";
+  renderOptionsUpdate();
   $("#updDot").style.display = state.updateAvailable ? "" : "none";
   $("#updLbl").textContent = state.updateAvailable ? "Update!" : "Update";
   $("#bUpdate").classList.toggle("warn", !!state.updateAvailable);
   if (!$("#dUpd").open) return;
   $("#uCur").textContent = state.version || "-";
   $("#uLatest").textContent = state.latest ? state.latest + (state.updateAvailable ? "  (new!)" : "  (you have it)") : "Not checked yet";
+  $("#uNotes").textContent = state.updateAvailable && state.updateNotes ? "What's new: " + state.updateNotes : "";
   const msg = {
+    checking: "Checking for updates...",
     downloading: state.updateDetail || "Downloading the update...",
     installing: state.updateDetail,
     error: state.updateDetail,
-  }[state.updateStatus] || (state.updateAvailable ? "A new version is available." : (state.latest ? "TezDM is up to date." : ""));
+  }[state.updateStatus] || state.updateCheckError || (state.updateAvailable ? "A new version is available." : (state.latest ? "TezDM is up to date." : ""));
   const m = $("#uMsg");
   m.textContent = msg;
-  m.className = state.updateStatus === "error" ? "bad" : (state.updateAvailable || state.updateStatus ? "" : "ok");
-  $("#uGo").disabled = state.updateStatus === "downloading" || state.updateStatus === "installing";
+  m.className = state.updateStatus === "error" || (state.updateCheckError && !state.updateStatus) ? "bad" : (state.updateAvailable || state.updateStatus ? "" : "ok");
+  $("#uGo").disabled = !state.updateAvailable || state.updateStatus === "downloading" || state.updateStatus === "installing";
 }
-function openUpdate() { $("#dUpd").showModal(); renderUpdate(); api("/api/update/check", {}).catch(() => {}); }
+function openUpdate() {
+  $("#dUpd").showModal(); renderUpdate();
+  api("/api/update/check", {}).then(refresh).catch(() => {});
+}
 $("#bUpdate").onclick = openUpdate;
 $("#mUpd").onclick = openUpdate;
 $("#uClose").onclick = () => $("#dUpd").close();
 $("#uCheck").onclick = async () => {
+  $("#uMsg").textContent = "Checking for updates..."; $("#uMsg").className = "";
   await api("/api/update/check", {}).catch(e => alert(e.message));
-  $("#uMsg").textContent = "Checking... (takes up to a minute; needs Chrome open and signed in to GitHub)";
-  $("#uMsg").className = "";
+  await refresh();
 };
 $("#uPage").onclick = () => window.open(state.releasePage, "_blank");
 $("#uGo").onclick = async () => {
-  try { await api("/api/update/start", {}); renderUpdate(); } catch (e) { alert(e.message); }
+  try { await api("/api/update/start", {}); await refresh(); } catch (e) { alert(e.message); }
 };
+// Options: update row
+function renderOptionsUpdate() {
+  const el = $("#sUpdInfo"); if (!el) return;
+  el.textContent = "Installed: " + (state.version || "-") +
+    (state.updateAvailable ? "   ·   New version " + state.latest + " is available" : (state.latest ? "   ·   Up to date" : ""));
+  el.className = state.updateAvailable ? "" : (state.latest ? "ok" : "");
+  $("#sUpdBtn").textContent = state.updateAvailable ? "Update now" : "Check for updates";
+}
+$("#sUpdBtn").onclick = () => { $("#dSet").close(); openUpdate(); };
 
 // ----- extension & exit -----
 async function extSetup() { await api("/api/ext-setup", {}); }

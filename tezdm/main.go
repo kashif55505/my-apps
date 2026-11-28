@@ -102,6 +102,7 @@ func main() {
 	writeExtension()
 	m := NewManager(dataDir())
 	go EnsureTools()
+	go upd.AutoCheck()
 
 	srv := &Server{m: m}
 	go func() {
