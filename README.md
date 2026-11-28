@@ -12,7 +12,7 @@ All my apps in one place. Each app lives in its own folder and has its own autom
 
 | App | Folder | Download the latest version |
 |---|---|---|
-| TezDM – fast download manager with a Chrome extension (multi-connection downloads, pause/resume, video downloads with quality selection) | [`tezdm/`](tezdm/) | [**TezDM_Setup.exe**](../../releases/download/tezdm-latest/TezDM_Setup.exe) · [release page](../../releases/tag/tezdm-latest) |
+| TezDM – fast download manager with a Chrome extension (multi-connection downloads, pause/resume, video downloads with quality selection) | [`tezdm/`](tezdm/) | [**TezDM_Setup.exe**](https://github.com/kashif55505/tezdm/raw/main/TezDM_Setup.exe) (public, no sign-in) · [private release](../../releases/tag/tezdm-latest) |
 
 ## Windows / Mac / Linux tools (Python)
 
