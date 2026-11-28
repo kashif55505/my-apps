@@ -22,6 +22,7 @@ PATH = "danish-downloader/licenses.json"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}/contents/{PATH}"
 RAW = f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/{PATH}"
 OFFLINE_GRACE_DAYS = 3
+PUBLIC_KEY = "yi3nDte8v3AqBAY5l8E944bXk1g26z05HTIDMD8XyZ0="   # owner ka public key (sirf check ke liye)
 UA = {"User-Agent": "DanishDownloader", "Accept": "application/vnd.github+json"}
 
 
@@ -38,6 +39,78 @@ def machine_id():
         raw = str(uuid.getnode())
     h = hashlib.sha256(("danish-dl:" + raw).encode()).hexdigest().upper()
     return f"DD-{h[0:4]}-{h[4:8]}-{h[8:12]}"
+
+
+# ----------------------------------------------------------------- license keys (signed)
+import ed25519_min as _ed
+
+
+def _b64u(b):
+    return base64.urlsafe_b64encode(b).decode().rstrip("=")
+
+
+def _ub64u(s):
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def parse_owner_secret(text):
+    t = (text or "").strip()
+    if not t.startswith("DDOWNER-"):
+        return None
+    try:
+        seed = _ub64u(t[8:])
+    except Exception:
+        return None
+    if len(seed) != 32 or _ed.public_key(seed) != base64.b64decode(PUBLIC_KEY):
+        return None
+    return seed
+
+
+def make_key(secret_text, mid, name, days):
+    """Student ke liye key. days=0 -> lifetime."""
+    seed = parse_owner_secret(secret_text)
+    if not seed:
+        raise ValueError("Owner Secret is missing or wrong.")
+    mid = mid.strip().upper()
+    exp = (datetime.date.today() + datetime.timedelta(days=int(days))).isoformat() if int(days) > 0 else "0"
+    payload = f"{mid}|{exp}|{name.strip().replace('|', ' ')[:40]}".encode("utf-8")
+    key = "DDK-" + _b64u(payload + _ed.sign(seed, payload))
+    return key, key_id(key), ("" if exp == "0" else exp)
+
+
+def key_id(key):
+    return hashlib.sha256((key or "").strip().encode()).hexdigest()[:12].upper()
+
+
+def parse_key(key):
+    """(info dict ya None, wajah)."""
+    k = re.sub(r"\s+", "", key or "")
+    if not k.startswith("DDK-"):
+        return None, "This is not a Danish Downloader license key."
+    try:
+        raw = _ub64u(k[4:])
+    except Exception:
+        return None, "Key is broken (copy it again)."
+    payload, sig = raw[:-64], raw[-64:]
+    if not _ed.verify(base64.b64decode(PUBLIC_KEY), payload, sig):
+        return None, "Key is not valid (copy it again)."
+    try:
+        mid, exp, name = payload.decode("utf-8").split("|", 2)
+    except ValueError:
+        return None, "Key is broken."
+    return {"mid": mid, "expires": "" if exp == "0" else exp, "name": name, "id": key_id(k), "key": k}, ""
+
+
+def key_state(info, today, revoked):
+    if info["id"] in (revoked or []):
+        return "cancelled"
+    if info["expires"]:
+        try:
+            if today > datetime.date.fromisoformat(info["expires"]):
+                return "expired"
+        except ValueError:
+            pass
+    return "ok"
 
 
 # ----------------------------------------------------------------- server time + list
@@ -125,6 +198,11 @@ def check(settings):
     mid = machine_id()
     if settings.get("owner_token") and settings.get("owner_machine") == mid:
         return True, "Owner", {"owner": True, "mid": mid}
+    kinfo = None
+    if settings.get("license_key"):
+        kinfo, _ = parse_key(settings["license_key"])
+        if kinfo and kinfo["mid"] != mid:
+            kinfo = None
     try:
         data, _, today = fetch_list()
     except Exception as e:
@@ -139,6 +217,17 @@ def check(settings):
     if mid in (data.get("owners") or []):
         settings["lic_ok_until"] = (today + datetime.timedelta(days=30)).isoformat()
         return True, "Owner", {"owner": True, "mid": mid}
+    if kinfo:
+        ks = key_state(kinfo, today, data.get("revoked"))
+        if ks == "ok":
+            grace = today + datetime.timedelta(days=OFFLINE_GRACE_DAYS)
+            if kinfo["expires"]:
+                grace = min(grace, datetime.date.fromisoformat(kinfo["expires"]))
+            settings["lic_ok_until"] = grace.isoformat()
+            return True, f"Licensed to {kinfo['name']}" + (f" (until {kinfo['expires']})" if kinfo["expires"]
+                                                          else " (lifetime)"), {"mid": mid, **kinfo}
+        settings["lic_ok_until"] = ""
+        return False, ("License cancelled." if ks == "cancelled" else f"License expired on {kinfo['expires']}."), {"mid": mid}
     entry = (data.get("machines") or {}).get(mid)
     st = entry_state(entry, today)
     if st == "ok":
@@ -156,7 +245,7 @@ def check(settings):
         return False, f"License expired on {entry.get('expires')}.", {"mid": mid}
     if entry:
         return False, "License cancelled.", {"mid": mid}
-    return False, "This PC is not activated yet.", {"mid": mid}
+    return False, "This PC is not activated yet. Paste your license key below.", {"mid": mid}
 
 
 def valid_mid(s):

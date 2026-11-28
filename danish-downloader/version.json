@@ -1,5 +1,5 @@
 {
-  "version": "1.17",
-  "files": ["danish_license.py", "danish.ico", "danish_ai.py", "danish_core.py", "danish_downloader.py"],
-  "notes": "Claude AI for names; owner PCs by Machine ID (no token needed)."
+  "version": "1.18",
+  "files": ["ed25519_min.py", "danish_license.py", "danish.ico", "danish_ai.py", "danish_core.py", "danish_downloader.py"],
+  "notes": "License keys: Make License Key, Copy, Cancel/Reactivate, student Activate."
 }

@@ -364,7 +364,7 @@ class LockWindow(ctk.CTkToplevel):
         super().__init__(app)
         self.app = app
         self.title("Activate Danish Downloader")
-        self.geometry("560x470")
+        self.geometry("600x520")
         self.resizable(False, False)
         self.configure(fg_color=PANEL)
         self.protocol("WM_DELETE_WINDOW", app.destroy)
@@ -383,13 +383,38 @@ class LockWindow(ctk.CTkToplevel):
         row.pack(fill="x", pady=(6, 4))
         ctk.CTkLabel(row, text=self.mid, font=("Consolas", 24, "bold"), text_color=SEC_TEXT).pack(side="left", padx=16, pady=14)
         btn(row, "Copy", self.copy, width=80).pack(side="right", padx=12)
-        ctk.CTkLabel(f, text="After your teacher activates it, this window unlocks by itself (checks every 90 seconds).",
-                     font=(FONT, 11), text_color=MUTED, anchor="w", justify="left", wraplength=500).pack(fill="x", pady=(4, 14))
+        ctk.CTkLabel(f, text="Your teacher will send you a License Key. Paste it here:", font=(FONT, 13),
+                     text_color=MUTED, anchor="w").pack(fill="x", pady=(14, 0))
+        krow = ctk.CTkFrame(f, fg_color="transparent")
+        krow.pack(fill="x", pady=(6, 14))
+        self.e_key = ctk.CTkEntry(krow, height=38, fg_color=PANEL2, border_color=BORDER, placeholder_text="DDK-...")
+        self.e_key.pack(side="left", fill="x", expand=True)
+        btn(krow, "Paste", self.paste, color=SEC, hover=SEC_H, width=70).pack(side="left", padx=6)
+        btn(krow, "Activate", self.activate, color=GREEN, hover=GREEN_H, width=100).pack(side="left")
         bar = ctk.CTkFrame(f, fg_color="transparent")
         bar.pack(fill="x")
         btn(bar, "⟳  Check now", self.check_now, color=GREEN, hover=GREEN_H, width=140).pack(side="left")
         btn(bar, "Owner login", self.owner, color=SEC, hover=SEC_H, width=120).pack(side="right")
         self.after(90000, self.auto)
+
+    def paste(self):
+        try:
+            self.e_key.delete(0, "end")
+            self.e_key.insert(0, self.clipboard_get().strip())
+        except Exception:
+            pass
+
+    def activate(self):
+        key = self.e_key.get().strip()
+        info, why = lic.parse_key(key)
+        if not info:
+            return self.l_msg.configure(text=why, text_color=RED)
+        if info["mid"] != self.mid:
+            return self.l_msg.configure(text="This key was made for another PC. Send your Machine ID to your teacher again.",
+                                        text_color=RED)
+        self.app.store.settings["license_key"] = info["key"]
+        self.app.store.save()
+        self.check_now()
 
     def copy(self):
         self.clipboard_clear()
@@ -420,146 +445,213 @@ class LockWindow(ctk.CTkToplevel):
 
 
 class LicensesDialog(ctk.CTkToplevel):
-    """Owner panel: students add / cancel / extend."""
-    DURS = ["1 month", "3 months", "6 months", "1 year", "Never expires"]
-
+    """Owner panel: license key banao, copy karo, cancel / reactivate."""
     def __init__(self, app):
         super().__init__(app)
         self.app = app
-        self.tok = app.store.settings.get("owner_token", "")
-        self.title("Licenses (students)")
-        self.geometry("900x560")
+        self.st = app.store.settings
+        self.title("Licenses")
+        self.geometry("1000x760")
         self.configure(fg_color=PANEL)
         self.transient(app)
         self.after(100, self.grab_set)
-        add = ctk.CTkFrame(self, fg_color=BG, corner_radius=12)
-        add.pack(fill="x", padx=16, pady=(16, 8))
-        ctk.CTkLabel(add, text="Add student:", font=(FONT, 13, "bold"), text_color=TEXT).pack(side="left", padx=(12, 8), pady=12)
-        self.e_name = ctk.CTkEntry(add, width=170, placeholder_text="Student name", fg_color=PANEL, border_color=BORDER)
-        self.e_name.pack(side="left")
-        self.e_mid = ctk.CTkEntry(add, width=210, placeholder_text="DD-XXXX-XXXX-XXXX", fg_color=PANEL, border_color=BORDER)
-        self.e_mid.pack(side="left", padx=8)
-        self.o_dur = ctk.CTkOptionMenu(add, values=self.DURS, width=140, fg_color=SEC, button_color=ACCENT,
-                                       button_hover_color=ACCENT_H, text_color=SEC_TEXT)
-        self.o_dur.set("1 month")
-        self.o_dur.pack(side="left")
-        btn(add, "+ Activate", self.add, color=GREEN, hover=GREEN_H, width=110).pack(side="left", padx=10)
 
+        # owner secret (ek dafa)
+        self.fs = ctk.CTkFrame(self, fg_color="#FEF3C7", corner_radius=12)
+        if not lic.parse_owner_secret(self.st.get("owner_secret", "")):
+            self.fs.pack(fill="x", padx=16, pady=(14, 0))
+            ctk.CTkLabel(self.fs, text="One-time setup: paste your Owner Secret (DDOWNER-...)", font=(FONT, 12, "bold"),
+                         text_color="#92400E").pack(side="left", padx=12, pady=10)
+            self.e_sec = ctk.CTkEntry(self.fs, width=380, fg_color=PANEL, border_color=BORDER, show="•")
+            self.e_sec.pack(side="left")
+            btn(self.fs, "Save", self.save_secret, color=GREEN, hover=GREEN_H, width=80).pack(side="left", padx=8)
+
+        mk = ctk.CTkFrame(self, fg_color=BG, corner_radius=12)
+        mk.pack(fill="x", padx=16, pady=(14, 8))
+        ctk.CTkLabel(mk, text="Make License Key", font=(FONT, 15, "bold"), text_color=TEXT).grid(
+            row=0, column=0, columnspan=6, sticky="w", padx=14, pady=(12, 6))
+        for i, t in enumerate(["Student Name", "Machine ID", "Days (0 = lifetime)"]):
+            ctk.CTkLabel(mk, text=t, font=(FONT, 12), text_color=MUTED).grid(row=1, column=i, sticky="w", padx=(14, 4))
+        self.e_name = ctk.CTkEntry(mk, width=200, fg_color=PANEL, border_color=BORDER, placeholder_text="Ali Khan")
+        self.e_name.grid(row=2, column=0, padx=(14, 6), pady=(2, 10))
+        self.e_mid = ctk.CTkEntry(mk, width=220, fg_color=PANEL, border_color=BORDER, placeholder_text="DD-XXXX-XXXX-XXXX")
+        self.e_mid.grid(row=2, column=1, padx=6, pady=(2, 10))
+        self.e_days = ctk.CTkEntry(mk, width=120, fg_color=PANEL, border_color=BORDER)
+        self.e_days.insert(0, "30")
+        self.e_days.grid(row=2, column=2, padx=6, pady=(2, 10))
+        btn(mk, "🔑 Make License Key", self.make, color=GREEN, hover=GREEN_H, width=170).grid(row=2, column=3, padx=6, pady=(2, 10))
+        self.t_key = ctk.CTkTextbox(mk, height=58, fg_color=PANEL, border_color=BORDER, border_width=1,
+                                    font=("Consolas", 12), wrap="char")
+        self.t_key.grid(row=3, column=0, columnspan=4, sticky="we", padx=14, pady=(0, 12))
+        btn(mk, "📋 Copy Key", self.copy_new, color=PINK, hover=PINK_H, width=130).grid(row=3, column=4, padx=(0, 14), pady=(0, 12))
+
+        ctk.CTkLabel(self, text="Issued Licenses", font=(FONT, 14, "bold"), text_color=TEXT).pack(anchor="w", padx=18)
         tf = ctk.CTkFrame(self, fg_color=PANEL)
-        tf.pack(fill="both", expand=True, padx=16)
-        cols = ("name", "mid", "expires", "status", "added")
-        self.tree = ttk.Treeview(tf, columns=cols, show="headings", style="D.Treeview")
-        for c, t, w in (("name", "Student", 180), ("mid", "Machine ID", 200), ("expires", "Expires", 120),
-                        ("status", "Status", 110), ("added", "Added", 120)):
+        tf.pack(fill="both", expand=True, padx=16, pady=(4, 0))
+        cols = ("name", "mid", "expires", "status", "issued", "kid")
+        self.tree = ttk.Treeview(tf, columns=cols, show="headings", style="D.Treeview", height=8)
+        for c, t, w in (("name", "Student", 180), ("mid", "Machine ID", 190), ("expires", "Expires", 110),
+                        ("status", "Status", 100), ("issued", "Issued", 110), ("kid", "Key ID", 130)):
             self.tree.heading(c, text=t)
             self.tree.column(c, width=w, anchor="w" if c == "name" else "center")
         self.tree.tag_configure("bad", foreground=RED)
         self.tree.pack(fill="both", expand=True)
 
         bar = ctk.CTkFrame(self, fg_color="transparent")
-        bar.pack(fill="x", padx=16, pady=12)
-        btn(bar, "+1 Month", lambda: self.change("extend"), width=110).pack(side="left")
-        btn(bar, "Enable", lambda: self.change("enable"), color=GREEN, hover=GREEN_H, width=100).pack(side="left", padx=6)
-        btn(bar, "Cancel License", lambda: self.change("disable"), color=RED, hover=RED_H, width=140).pack(side="left")
-        btn(bar, "Delete", lambda: self.change("delete"), color=SEC, hover=SEC_H, width=90).pack(side="left", padx=6)
-        btn(bar, "⟳ Refresh", self.load, color=SEC, hover=SEC_H, width=100).pack(side="right")
-        self.l = ctk.CTkLabel(self, text="", font=(FONT, 12), text_color=MUTED)
-        self.l.pack(anchor="w", padx=18, pady=(0, 10))
-        self.load()
+        bar.pack(fill="x", padx=16, pady=8)
+        btn(bar, "📋 Copy Key", self.copy_sel, color=SEC, hover=SEC_H, width=120).pack(side="left")
+        btn(bar, "⛔ Cancel Selected", lambda: self.revoke(True), color=RED, hover=RED_H, width=160).pack(side="left", padx=6)
+        btn(bar, "✓ Reactivate Selected", lambda: self.revoke(False), color=GREEN, hover=GREEN_H, width=180).pack(side="left")
+        btn(bar, "Remove from list", self.remove, color=SEC, hover=SEC_H, width=140).pack(side="left", padx=6)
+        btn(bar, "⟳ Refresh", self.refresh, color=SEC, hover=SEC_H, width=100).pack(side="right")
 
-    def _bg(self, fn, done_msg):
-        self.l.configure(text="Working...", text_color=ACCENT)
+        tk_row = ctk.CTkFrame(self, fg_color=BG, corner_radius=12)
+        tk_row.pack(fill="x", padx=16, pady=(0, 6))
+        ctk.CTkLabel(tk_row, text="GitHub token (only needed to publish Cancel / Reactivate):", font=(FONT, 12),
+                     text_color=MUTED).pack(side="left", padx=12, pady=8)
+        self.e_tok = ctk.CTkEntry(tk_row, width=330, fg_color=PANEL, border_color=BORDER, show="•")
+        self.e_tok.insert(0, self.st.get("owner_token", ""))
+        self.e_tok.pack(side="left")
+        btn(tk_row, "Save", self.save_token, color=SEC, hover=SEC_H, width=70).pack(side="left", padx=8)
 
-        def work():
-            try:
-                fn()
-                msg, col = done_msg, GREEN_H
-            except Exception as e:
-                msg, col = f"✗ {e}", RED
-            self.after(0, lambda: (self.l.configure(text=msg, text_color=col), self.load(quiet=True)))
-        threading.Thread(target=work, daemon=True).start()
+        self.t_log = ctk.CTkTextbox(self, height=90, fg_color="#F7FCF9", text_color=ACCENT_H, font=("Consolas", 11),
+                                    border_width=1, border_color=BORDER)
+        self.t_log.pack(fill="x", padx=16, pady=(0, 14))
+        self.revoked = []
+        self.refresh()
 
-    def load(self, quiet=False):
-        def work():
-            try:
-                data, _, today = lic.fetch_list(self.tok)
-                rows = []
-                for mid, e in sorted((data.get("machines") or {}).items(), key=lambda x: x[1].get("name", "")):
-                    st = lic.entry_state(e, today)
-                    rows.append((mid, (e.get("name", ""), mid, e.get("expires") or "never",
-                                       {"ok": "Active", "expired": "Expired", "disabled": "Cancelled"}[st],
-                                       e.get("added", "")), st != "ok"))
-                self.after(0, lambda: self._fill(rows, quiet))
-            except Exception as e:
-                self.after(0, lambda: self.l.configure(text=f"✗ {e}", text_color=RED))
-        threading.Thread(target=work, daemon=True).start()
+    # --- helpers
+    def L(self, msg):
+        stamp = datetime.datetime.now().strftime("%H:%M:%S")
+        self.t_log.insert("end", f"[{stamp}] {msg}\n")
+        self.t_log.see("end")
 
-    def _fill(self, rows, quiet):
-        self.tree.delete(*self.tree.get_children())
-        for mid, vals, bad in rows:
-            self.tree.insert("", "end", iid=mid, values=vals, tags=("bad",) if bad else ())
-        if not quiet:
-            self.l.configure(text=f"{len(rows)} students. Changes reach the student's PC within a few minutes.",
-                             text_color=MUTED)
+    def issued(self):
+        return self.st.setdefault("issued", [])
 
-    @staticmethod
-    def _until(dur, start=None):
-        start = start or datetime.date.today()
-        months = {"1 month": 1, "3 months": 3, "6 months": 6, "1 year": 12}.get(dur)
-        if not months:
-            return ""
-        y, m = start.year + (start.month - 1 + months) // 12, (start.month - 1 + months) % 12 + 1
-        import calendar
-        return datetime.date(y, m, min(start.day, calendar.monthrange(y, m)[1])).isoformat()
+    def save_secret(self):
+        t = self.e_sec.get().strip()
+        if not lic.parse_owner_secret(t):
+            return self.L("✗ That Owner Secret is not correct.")
+        self.st["owner_secret"] = t
+        self.app.store.save()
+        self.fs.pack_forget()
+        self.L("✓ Owner Secret saved. You can make keys now.")
 
-    def add(self):
+    def save_token(self):
+        tok = self.e_tok.get().strip()
+        if tok:
+            ok, why = lic.check_owner_token(tok)
+            if not ok:
+                return self.L("✗ " + why)
+        self.st["owner_token"] = tok
+        self.app.store.save()
+        self.L("✓ GitHub token saved." if tok else "Token removed.")
+
+    def make(self):
         name = self.e_name.get().strip()
         mid = self.e_mid.get().strip().upper()
-        if not name or not lic.valid_mid(mid):
-            return self.l.configure(text="Enter a name and a Machine ID like DD-1A2B-3C4D-5E6F.", text_color=RED)
-        exp = self._until(self.o_dur.get())
-
-        def fn():
-            data, sha, _ = lic.fetch_list(self.tok)
-            data.setdefault("machines", {})[mid] = {"name": name, "expires": exp, "active": True,
-                                                    "added": datetime.date.today().isoformat()}
-            lic.save_list(self.tok, data, sha, f"License: add {name}")
+        try:
+            days = int(self.e_days.get().strip() or "0")
+            assert days >= 0
+        except Exception:
+            return self.L("✗ Days must be a number (0 = lifetime).")
+        if not name:
+            return self.L("✗ Enter the student name.")
+        if not lic.valid_mid(mid):
+            return self.L("✗ Machine ID looks wrong. It should look like DD-1A2B-3C4D-5E6F.")
+        try:
+            key, kid, exp = lic.make_key(self.st.get("owner_secret", ""), mid, name, days)
+        except Exception as e:
+            return self.L(f"✗ {e}")
+        self.issued().append({"name": name, "mid": mid, "expires": exp, "id": kid, "key": key,
+                              "issued": datetime.date.today().isoformat()})
+        self.app.store.save()
+        self.t_key.delete("1.0", "end")
+        self.t_key.insert("1.0", key)
+        self.copy_text(key)
+        self.L(f"✓ Key made for {name} ({mid}) — " + (f"until {exp}" if exp else "lifetime") + ". Copied — send it on WhatsApp.")
         self.e_name.delete(0, "end")
         self.e_mid.delete(0, "end")
-        self._bg(fn, f"✓ {name} activated" + (f" until {exp}" if exp else " (never expires)"))
+        self.fill()
 
-    def change(self, what):
+    def copy_text(self, t):
+        self.clipboard_clear()
+        self.clipboard_append(t)
+
+    def copy_new(self):
+        t = self.t_key.get("1.0", "end").strip()
+        if t:
+            self.copy_text(t)
+            self.L("📋 Key copied.")
+
+    def copy_sel(self):
+        sel = self.tree.selection()
+        for e in self.issued():
+            if sel and e["id"] == sel[0]:
+                self.copy_text(e["key"])
+                return self.L(f"📋 Key of {e['name']} copied.")
+        self.L("Select a license first.")
+
+    def fill(self):
+        self.tree.delete(*self.tree.get_children())
+        today = datetime.date.today()
+        for e in reversed(self.issued()):
+            info = {"id": e["id"], "expires": e.get("expires", "")}
+            st = lic.key_state(info, today, self.revoked)
+            self.tree.insert("", "end", iid=e["id"], tags=("bad",) if st != "ok" else (), values=(
+                e["name"], e["mid"], e.get("expires") or "lifetime",
+                {"ok": "Active", "cancelled": "Cancelled", "expired": "Expired"}[st], e.get("issued", ""), e["id"]))
+
+    def refresh(self):
+        def work():
+            try:
+                data, _, _ = lic.fetch_list(self.st.get("owner_token") or None)
+                rv = data.get("revoked") or []
+                self.after(0, lambda: (setattr(self, "revoked", rv), self.fill(),
+                                       self.L(f"⟳ {len(self.issued())} licenses, {len(rv)} cancelled on GitHub.")))
+            except Exception as e:
+                self.after(0, lambda: (self.fill(), self.L(f"⚠ Could not read GitHub: {e}")))
+        threading.Thread(target=work, daemon=True).start()
+
+    def revoke(self, cancel):
         sel = list(self.tree.selection())
         if not sel:
-            return self.l.configure(text="Select a student first.", text_color=RED)
-        if what == "delete" and not messagebox.askyesno(core.APP_NAME, f"Delete {len(sel)} license(s)?", parent=self):
-            return
+            return self.L("Select a license first.")
+        tok = self.st.get("owner_token", "")
+        if not tok:
+            return self.L("✗ To cancel/reactivate, save your GitHub token below first (one time).")
+        names = [e["name"] for e in self.issued() if e["id"] in sel]
+        self.L(("Cancelling " if cancel else "Reactivating ") + ", ".join(names) + " ...")
 
-        def fn():
-            data, sha, today = lic.fetch_list(self.tok)
-            ms = data.setdefault("machines", {})
-            for mid in sel:
-                e = ms.get(mid)
-                if not e:
-                    continue
-                if what == "delete":
-                    ms.pop(mid)
-                elif what == "disable":
-                    e["active"] = False
-                elif what == "enable":
-                    e["active"] = True
-                elif what == "extend":
-                    base = today
-                    try:
-                        if e.get("expires"):
-                            base = max(today, datetime.date.fromisoformat(e["expires"]))
-                    except ValueError:
-                        pass
-                    e["expires"] = self._until("1 month", base)
-                    e["active"] = True
-            lic.save_list(self.tok, data, sha, f"License: {what} {len(sel)}")
-        self._bg(fn, {"delete": "✓ Deleted", "disable": "✓ License cancelled", "enable": "✓ Enabled",
-                      "extend": "✓ Extended by 1 month"}[what])
+        def work():
+            try:
+                data, sha, _ = lic.fetch_list(tok)
+                rv = data.setdefault("revoked", [])
+                for kid in sel:
+                    if cancel and kid not in rv:
+                        rv.append(kid)
+                    if not cancel and kid in rv:
+                        rv.remove(kid)
+                lic.save_list(tok, data, sha, ("License cancel: " if cancel else "License reactivate: ") + ", ".join(names))
+                self.after(0, lambda: (setattr(self, "revoked", rv), self.fill(),
+                                       self.L(("⛔ Cancelled. " if cancel else "✓ Reactivated. ") +
+                                              "The student's PC will update within an hour (or on restart).")))
+            except Exception as e:
+                self.after(0, lambda: self.L(f"✗ GitHub error: {e}"))
+        threading.Thread(target=work, daemon=True).start()
+
+    def remove(self):
+        sel = set(self.tree.selection())
+        if not sel:
+            return self.L("Select a license first.")
+        if not messagebox.askyesno(core.APP_NAME, "Remove from this list? (Does NOT cancel the key — use Cancel for that.)",
+                                   parent=self):
+            return
+        self.st["issued"] = [e for e in self.issued() if e["id"] not in sel]
+        self.app.store.save()
+        self.fill()
+        self.L("Removed from list.")
 
 
 class App(ctk.CTk):
@@ -611,6 +703,7 @@ class App(ctk.CTk):
                      font=(FONT, 12), text_color=MUTED).pack(anchor="w")
         btn(head, "⬆  Check for Updates", self.do_update, color=SEC, hover=SEC_H, width=170).pack(side="right", padx=(0, 22))
         self.b_lic = btn(head, "🔑  Licenses", lambda: LicensesDialog(self), color=PINK, hover=PINK_H, width=130)
+        # (sirf owner PC par nazar aata hai)
         self.v_autoupd = tk.BooleanVar(value=self.store.settings.get("auto_update", True))
         ctk.CTkSwitch(head, text="Auto Update", variable=self.v_autoupd, progress_color=GREEN,
                       font=(FONT, 12, "bold"), command=self.save_settings).pack(side="right", padx=12)
@@ -744,7 +837,7 @@ class App(ctk.CTk):
             self.lock_win.grab_release()
             self.lock_win.destroy()
         self.lock_win = None
-        if msg == "Owner" and self.store.settings.get("owner_token"):
+        if msg == "Owner":
             self.b_lic.pack(side="right", padx=(0, 10))
         if was:
             self.log(f"🔓 {msg}")
