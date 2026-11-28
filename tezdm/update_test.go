@@ -69,6 +69,9 @@ func TestPublicUpdateFlow(t *testing.T) {
 	startInstaller = func(path string, args ...string) error { started <- path + " " + strings.Join(args, " "); return nil }
 	defer func() { startInstaller = startDetached }()
 	info := &releaseInfo{Version: "99.0.0", URL: srv.URL + "/TezDM_Setup.exe", SHA256: good}
+	oldOpen := openWindow
+	openWindow = func(string, int, int) {} // no browser windows in tests
+	defer func() { openWindow = oldOpen }()
 	oldVersion := Version
 	Version = "2.6.3"
 	defer func() { Version = oldVersion }()

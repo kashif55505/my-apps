@@ -48,13 +48,16 @@ func (s *Server) extSeen(r *http.Request) {
 	}
 }
 
-func (s *Server) openMain() { openAppWindow(baseURL()+"/", 920, 540) }
+// openWindow opens a TezDM window (replaced in tests so no browser is started)
+var openWindow = openAppWindow
+
+func (s *Server) openMain() { openWindow(baseURL()+"/", 920, 540) }
 
 func (s *Server) setupExtension() {
 	setClipboard(extDir())
 	openInChrome("chrome://extensions/")
 	time.Sleep(700 * time.Millisecond)
-	openAppWindow(baseURL()+"/guide.html", 760, 820)
+	openWindow(baseURL()+"/guide.html", 760, 820)
 }
 
 func (s *Server) routes() http.Handler {
@@ -440,11 +443,11 @@ func (s *Server) askUser(p *Pending) {
 	if p.Kind == "video" {
 		h = 560
 	}
-	go openAppWindow(baseURL()+"/confirm.html?id="+p.ID, 640, h)
+	go openWindow(baseURL()+"/confirm.html?id="+p.ID, 640, h)
 }
 
 func (s *Server) openProgress(id string) {
-	openAppWindow(baseURL()+"/progress.html?id="+id, 600, 580)
+	openWindow(baseURL()+"/progress.html?id="+id, 600, 580)
 }
 
 func (s *Server) addPending(p *Pending, filename, dir string, start bool) *Task {
